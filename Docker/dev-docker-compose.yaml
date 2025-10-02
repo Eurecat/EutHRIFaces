@@ -1,0 +1,45 @@
+name: coghri_faces
+
+services:
+  eut_faces:
+    container_name: "eut_faces"
+    network_mode: host 
+    ipc: host
+    shm_size: 1gb
+    # runtime: nvidia
+    # user: "coghri"
+    image: ${BUILT_IMAGE}
+    privileged: true
+    # user: "coghri"  # User will be created in the entrypoint script
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ~/.xauth_docker/share/:/tmp/xauth/
+      - ./.vscode:/workspace/.vscode
+      # Add face detection packages here when they exist
+      # - ../face_detection:/workspace/src/face_detection
+      # - ../face_recognition:/workspace/src/face_recognition
+
+    tty: true
+    stdin_open: true
+    environment:
+      # - USER_ID=${USER_ID}
+      # - GROUP_ID=${GROUP_ID}
+      # - USERNAME=${USERNAME}
+      # - NVIDIA_VISIBLE_DEVICES=all 
+      - DISPLAY=$DISPLAY
+      - QT_X11_NO_MITSHM=1
+      - XAUTHORITY=/tmp/xauth/.docker.xauth     
+      # - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}  
+      # - PULSE_SERVER=unix:/run/user/${USER_ID}/pulse/native
+      # - PULSE_COOKIE=/home/coghri/.config/pulse/cookie
+      # - ALSA_CARD=${ALSA_CARD}  # Set to the card number for your speaker
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/snd:/dev/snd
+    # cap_add:
+    #   - NET_RAW
+    #   - NET_ADMIN
+    # security_opt:
+    #   - seccomp:unconfined
+    command: bash -c "source /workspace/install/setup.bash && /bin/bash"
+    entrypoint: ["/entrypoint.sh"]

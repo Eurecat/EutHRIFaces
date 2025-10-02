@@ -1,0 +1,43 @@
+# Base-----------------------------------
+matplotlib>=3.8          
+opencv-python>=4.8.0
+Pillow>=10.0.0
+PyYAML>=6.0
+requests>=2.31.0
+scipy>=1.12                       
+tqdm>=4.66.0
+pandas>=2.1              
+gradio==3.35.2
+
+# ONNX Runtime for face detection-----------------------------------
+# Use GPU version by default (falls back to CPU automatically if no GPU)
+onnxruntime-gpu>=1.12.0
+
+# MediaPipe for advanced face processing-----------------------------------
+mediapipe>=0.10.7
+
+# Face embedding extraction-----------------------------------
+facenet-pytorch>=2.5.2  # FaceNet embeddings
+insightface>=0.7.3       # InsightFace/ArcFace embeddings (optional)
+
+# Other-----------------------------------
+clip
+pytubefix
+
+# Tracking & utilities --------------------
+boxmot>=13.0.0
+lapx>=0.5   
+
+# Ultralytics-----------------------------------
+ultralytics
+
+# Numpy -----------------------------------
+# Core numeric stack (py3.12 compatible) --
+numpy>=1.26,<2
+
+# 3D + STL  -------------------------------
+trimesh>=4.6.6
+open3d>=0.19.0
+
+#GPU and resources monitoring
+pynvml>=12.0.0
