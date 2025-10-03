@@ -109,6 +109,11 @@ class FaceDetectorNode(Node):
         self.declare_parameter('enable_debug_output', False)  # Disable debug by default
         self.declare_parameter('face_id_prefix', 'face_')
         
+        # BOXMOT tracking parameters
+        self.declare_parameter('use_boxmot', False)
+        self.declare_parameter('boxmot_tracker_type', 'bytetrack')
+        self.declare_parameter('boxmot_reid_model', '')
+        
         # Image visualization parameters
         self.declare_parameter('enable_image_output', True)
         self.declare_parameter('face_bbox_thickness', 2)
@@ -157,6 +162,11 @@ class FaceDetectorNode(Node):
         
         self.face_id_prefix = self.get_parameter('face_id_prefix').get_parameter_value().string_value
         
+        # BOXMOT parameters
+        self.use_boxmot = self.get_parameter('use_boxmot').get_parameter_value().bool_value
+        self.boxmot_tracker_type = self.get_parameter('boxmot_tracker_type').get_parameter_value().string_value
+        self.boxmot_reid_model = self.get_parameter('boxmot_reid_model').get_parameter_value().string_value
+        
         # Image visualization parameters
         self.enable_image_output = self.get_parameter('enable_image_output').get_parameter_value().bool_value
         self.face_bbox_thickness = self.get_parameter('face_bbox_thickness').get_parameter_value().integer_value
@@ -172,7 +182,10 @@ class FaceDetectorNode(Node):
                 conf_threshold=self.confidence_threshold,
                 iou_threshold=self.iou_threshold,
                 device=self.device,
-                debug=self.enable_debug_output
+                debug=self.enable_debug_output,
+                use_boxmot=self.use_boxmot,
+                boxmot_tracker_type=self.boxmot_tracker_type,
+                boxmot_reid_model=self.boxmot_reid_model
             )
             
             if self.detector.initialize():
@@ -300,13 +313,14 @@ class FaceDetectorNode(Node):
         faces = detection_results.get('faces', [])
         confidences = detection_results.get('confidences', [])
         landmarks = detection_results.get('landmarks', [])
+        track_ids = detection_results.get('track_ids', list(range(len(faces))))  # Use track IDs if available, fallback to indices
         
-        for i, (face_bbox, confidence, face_landmarks) in enumerate(zip(faces, confidences, landmarks)):
+        for i, (face_bbox, confidence, face_landmarks, track_id) in enumerate(zip(faces, confidences, landmarks, track_ids)):
             try:
                 # Create FacialLandmarks message
                 facial_landmarks_msg = FacialLandmarks()
                 facial_landmarks_msg.header = original_header
-                facial_landmarks_msg.face_id = f"{self.face_id_prefix}{i}"
+                facial_landmarks_msg.face_id = f"{self.face_id_prefix}{track_id}"
                 
                 # Set image dimensions
                 facial_landmarks_msg.height = height
@@ -455,10 +469,11 @@ class FaceDetectorNode(Node):
             faces = detection_results.get('faces', [])
             confidences = detection_results.get('confidences', [])
             landmarks = detection_results.get('landmarks', [])
+            track_ids = detection_results.get('track_ids', list(range(len(faces))))  # Fallback to enumeration
             
             # Draw faces
-            for i, (face_bbox, confidence, face_landmarks) in enumerate(zip(faces, confidences, landmarks)):
-                self._draw_face_on_image(annotated_image, face_bbox, face_landmarks, confidence, i)
+            for i, (face_bbox, confidence, face_landmarks, track_id) in enumerate(zip(faces, confidences, landmarks, track_ids)):
+                self._draw_face_on_image(annotated_image, face_bbox, face_landmarks, confidence, track_id)
             
             # Convert back to ROS Image and publish
             annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
@@ -512,7 +527,7 @@ class FaceDetectorNode(Node):
                    (x + label_padding//2, y - label_padding), 
                    cv2.FONT_HERSHEY_SIMPLEX, 
                    adaptive_font_scale, 
-                   (255, 255, 255), 
+                   (0, 0, 0), 
                    adaptive_font_thickness)
         
         # Draw landmarks if available

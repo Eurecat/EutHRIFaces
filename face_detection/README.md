@@ -5,6 +5,7 @@ This ROS2 package provides face detection capabilities using YOLO face detection
 ## Features
 
 - **YOLO Face Detection**: Uses YOLOv8-based face detection model with 5 key facial landmarks
+- **BOXMOT Tracking**: Optional face tracking using BOXMOT for consistent face IDs across frames
 - **ROS4HRI Compatibility**: Publishes `hri_msgs/FacialLandmarks` messages following ros4hri standard  
 - **Auto Model Download**: Automatically downloads the YOLO face model if not present
 - **Configurable Parameters**: Adjustable confidence thresholds, device selection (CPU/GPU), etc.
@@ -86,6 +87,9 @@ The package can be configured via:
 - `iou_threshold`: IoU threshold for NMS (default: 0.4)
 - `device`: Inference device - `cpu` or `cuda` (default: `cpu`)
 - `enable_image_output`: Enable visualization output (default: `true`)
+- `use_boxmot`: Enable BOXMOT tracking for consistent face IDs (default: `false`)
+- `boxmot_tracker_type`: Type of BOXMOT tracker - `bytetrack`, `botsort`, `strongsort`, etc. (default: `bytetrack`)
+- `boxmot_reid_model`: Path to ReID model for improved tracking (optional)
 
 ## Model
 
@@ -97,6 +101,34 @@ The package uses YOLOv8n-face model which provides:
 The model is automatically downloaded from:
 https://raw.githubusercontent.com/hpc203/yolov8-face-landmarks-opencv-dnn/main/weights/yolov8n-face.onnx
 
+## BOXMOT Tracking
+
+The package supports optional face tracking using BOXMOT for consistent face IDs across video frames.
+
+### Benefits of Tracking
+- **Consistent Face IDs**: Same person gets the same face ID across frames
+- **Temporal Consistency**: Reduces ID flickering in video sequences  
+- **Improved Performance**: Better handling of occlusions and temporary face disappearances
+
+### Enabling Tracking
+Set `use_boxmot: true` in the configuration file or launch parameters:
+
+```bash
+ros2 launch face_detection face_detection.launch.py use_boxmot:=true
+```
+
+### Available Trackers
+- `bytetrack` (default): Fast and efficient tracker
+- `botsort`: ByteTrack with ReID features
+- `strongsort`: Strong tracker with deep features
+- `deepocsort`: DeepOCSORT tracker
+
+### ReID Models (Optional)
+For improved tracking across occlusions, you can specify a ReID model:
+```yaml
+boxmot_reid_model: "path/to/reid_model.pt"
+```
+
 ## Dependencies
 
 - ROS2 (tested on Humble/Iron)
@@ -107,6 +139,7 @@ https://raw.githubusercontent.com/hpc203/yolov8-face-landmarks-opencv-dnn/main/w
 - cv_bridge
 - sensor_msgs
 - std_msgs
+- **BOXMOT** (`boxmot>=13.0.0`) - Optional for tracking features
 
 ## GPU Support
 

@@ -16,6 +16,11 @@ face_detection_node:
     enable_debug_output: true
     face_id_prefix: "face_"
     
+    # BOXMOT tracking parameters
+    use_boxmot: false
+    boxmot_tracker_type: "bytetrack"  # Options: bytetrack, botsort, strongsort, deepocsort, etc.
+    boxmot_reid_model: ""  # Path to ReID model for better tracking (optional)
+    
     # Image visualization parameters
     enable_image_output: true
     face_bbox_thickness: 2

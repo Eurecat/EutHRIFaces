@@ -74,6 +74,25 @@ def generate_launch_description():
         description='Prefix for face IDs'
     )
     
+    # BOXMOT tracking parameters
+    use_boxmot_arg = DeclareLaunchArgument(
+        'use_boxmot',
+        default_value='true',
+        description='Enable BOXMOT tracking for face detection'
+    )
+    
+    boxmot_tracker_type_arg = DeclareLaunchArgument(
+        'boxmot_tracker_type',
+        default_value='bytetrack',
+        description='Type of BOXMOT tracker (bytetrack, botsort, strongsort, etc.)'
+    )
+    
+    boxmot_reid_model_arg = DeclareLaunchArgument(
+        'boxmot_reid_model',
+        default_value='',
+        description='Path to ReID model for BOXMOT tracking'
+    )
+    
     # Image visualization parameters  
     output_image_topic_arg = DeclareLaunchArgument(
         'output_image_topic',
@@ -133,6 +152,9 @@ def generate_launch_description():
                 'face_landmark_radius': LaunchConfiguration('face_landmark_radius'),
                 'face_bbox_color': LaunchConfiguration('face_bbox_color'),
                 'face_landmark_color': LaunchConfiguration('face_landmark_color'),
+                'use_boxmot': LaunchConfiguration('use_boxmot'),
+                'boxmot_tracker_type': LaunchConfiguration('boxmot_tracker_type'),
+                'boxmot_reid_model': LaunchConfiguration('boxmot_reid_model'),
             }
         ],
         output='screen',
@@ -155,5 +177,8 @@ def generate_launch_description():
         face_landmark_radius_arg,
         face_bbox_color_arg,
         face_landmark_color_arg,
+        use_boxmot_arg,
+        boxmot_tracker_type_arg,
+        boxmot_reid_model_arg,
         face_detection_node,
     ])
