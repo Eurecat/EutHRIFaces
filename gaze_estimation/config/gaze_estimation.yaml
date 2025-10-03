@@ -1,0 +1,38 @@
+# Gaze Estimation Configuration
+gaze_estimation_node:
+  ros__parameters:
+    # Input/Output topics
+    input_topic: "/face_detection/facial_landmarks"
+    output_topic: "/gaze_estimation/gaze"
+    
+    # Camera parameters for pinhole camera model
+    # Note: image_width and image_height are taken from FacialLandmarks message
+    focal_length: 640.0  # Focal length (will be updated based on message image width if not specified)
+    center_x_ratio: 0.5  # Camera center X as ratio of image width (0.5 = center)
+    center_y_ratio: 0.5  # Camera center Y as ratio of image height (0.5 = center)
+    
+    # Gaze computation parameters
+    max_angle_threshold: 80.0  # Maximum angle for "fully looking away" in degrees
+    confidence_threshold: 0.1  # Minimum confidence for facial landmarks
+    
+    # 3D face model parameters (generic face model points in mm)
+    # Nose tip at origin, other points relative to nose
+    model_points:
+      nose_tip: [0.0, 0.0, 0.0]
+      right_eye: [20.0, -30.0, -20.0]
+      left_eye: [-20.0, -30.0, -20.0]
+      right_lip: [20.0, 30.0, -20.0]
+      left_lip: [-20.0, 30.0, -20.0]
+      mouth_center: [0.0, 30.0, -20.0]
+    
+    # Output parameters
+    receiver_id: "pin_hole_cam_model"  # Static receiver ID for gaze messages
+    
+    # Debug parameters
+    enable_debug_output: true
+    publish_rate: 30.0  # Max publishing rate in Hz
+    
+    # Image visualization parameters
+    enable_image_output: true
+    image_input_topic: "/camera/color/image_rect_raw"
+    image_output_topic: "/gaze_estimation/image_with_gaze"

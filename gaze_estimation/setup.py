@@ -10,6 +10,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/config', ['config/gaze_estimation.yaml']),
+        ('share/' + package_name + '/launch', ['launch/gaze_estimation.launch.py']),
     ],
     install_requires=[
         'setuptools',
@@ -24,7 +26,7 @@ setup(
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
-            # TODO: Add entry points when implemented
+            'gaze_estimation_node = gaze_estimation.gaze_estimation_node:main',
         ],
     },
 )

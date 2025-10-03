@@ -122,6 +122,9 @@ class FaceDetectorNode(Node):
         self.output_topic = self.get_parameter('output_topic').get_parameter_value().string_value
         self.output_image_topic = self.get_parameter('output_image_topic').get_parameter_value().string_value
         
+        # Get debug parameter first since it's used in path resolution
+        self.enable_debug_output = self.get_parameter('enable_debug_output').get_parameter_value().bool_value
+        
         # YOLO parameters
         model_path_param = self.get_parameter('model_path').get_parameter_value().string_value
         
@@ -152,8 +155,6 @@ class FaceDetectorNode(Node):
         self.iou_threshold = self.get_parameter('iou_threshold').get_parameter_value().double_value
         self.device = self.get_parameter('device').get_parameter_value().string_value
         
-        # General parameters
-        self.enable_debug_output = self.get_parameter('enable_debug_output').get_parameter_value().bool_value
         self.face_id_prefix = self.get_parameter('face_id_prefix').get_parameter_value().string_value
         
         # Image visualization parameters
@@ -552,8 +553,7 @@ class FaceDetectorNode(Node):
                 nose = (int(face_landmarks[4]), int(face_landmarks[5]))
                 cv2.line(image, nose, left_eye, landmark_color, max(1, adaptive_line_thickness - 1), cv2.LINE_AA)
                 cv2.line(image, nose, right_eye, landmark_color, max(1, adaptive_line_thickness - 1), cv2.LINE_AA)
-
-
+        
 def main(args=None):
     """Main function to run the face detector node."""
     rclpy.init(args=args)
