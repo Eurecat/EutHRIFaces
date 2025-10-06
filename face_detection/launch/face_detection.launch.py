@@ -3,11 +3,66 @@
 Launch file for face detection node.
 """
 import os
+import subprocess
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, LogInfo, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+
+VENV_PATH = os.environ.get("AI_VENV", "/opt/ros_python_env")  # set AI_VENV or uses default
+
+def _venv_site_packages(venv_path: str) -> str:
+    py = os.path.join(venv_path, "bin", "python")
+    return subprocess.check_output(
+        [py, "-c", "import site; print(site.getsitepackages()[0])"],
+        text=True
+    ).strip()
+
+
+def _setup_face_detection(context, *args, **kwargs):
+    """Setup face detection node with virtual environment."""
+    site_pkgs = _venv_site_packages(VENV_PATH)
+    existing = os.environ.get("PYTHONPATH", "")
+    new_py_path = site_pkgs if not existing else f"{site_pkgs}{os.pathsep}{existing}"
+
+    # Face detection node
+    face_detection_node = Node(
+        package='face_detection',
+        executable='face_detector',
+        name='face_detector',
+        parameters=[
+            LaunchConfiguration('config_file'),
+            {
+                'input_topic': LaunchConfiguration('input_topic'),
+                'output_topic': LaunchConfiguration('output_topic'),
+                'output_image_topic': LaunchConfiguration('output_image_topic'),
+                'device': LaunchConfiguration('device'),
+                'model_path': LaunchConfiguration('model_path'),
+                'confidence_threshold': LaunchConfiguration('confidence_threshold'),
+                'iou_threshold': LaunchConfiguration('iou_threshold'),
+                'enable_debug_output': LaunchConfiguration('enable_debug_output'),
+                'face_id_prefix': LaunchConfiguration('face_id_prefix'),
+                'enable_image_output': LaunchConfiguration('enable_image_output'),
+                'face_bbox_thickness': LaunchConfiguration('face_bbox_thickness'),
+                'face_landmark_radius': LaunchConfiguration('face_landmark_radius'),
+                'face_bbox_color': LaunchConfiguration('face_bbox_color'),
+                'face_landmark_color': LaunchConfiguration('face_landmark_color'),
+                'use_boxmot': LaunchConfiguration('use_boxmot'),
+                'boxmot_tracker_type': LaunchConfiguration('boxmot_tracker_type'),
+                'boxmot_reid_model': LaunchConfiguration('boxmot_reid_model'),
+            }
+        ],
+        output='screen',
+        emulate_tty=True,
+    )
+
+    return [
+        LogInfo(msg=f"[face_detection] Using AI venv: {VENV_PATH}"),
+        LogInfo(msg=f"[face_detection] Injecting site-packages: {site_pkgs}"),
+        SetEnvironmentVariable("PYTHONPATH", new_py_path),
+        face_detection_node,
+    ]
 
 
 def generate_launch_description():
@@ -130,37 +185,6 @@ def generate_launch_description():
         description='Color of facial landmarks (BGR format)'
     )
     
-    # Face detection node
-    face_detection_node = Node(
-        package='face_detection',
-        executable='face_detector',
-        name='face_detector',
-        parameters=[
-            LaunchConfiguration('config_file'),
-            {
-                'input_topic': LaunchConfiguration('input_topic'),
-                'output_topic': LaunchConfiguration('output_topic'),
-                'output_image_topic': LaunchConfiguration('output_image_topic'),
-                'device': LaunchConfiguration('device'),
-                'model_path': LaunchConfiguration('model_path'),
-                'confidence_threshold': LaunchConfiguration('confidence_threshold'),
-                'iou_threshold': LaunchConfiguration('iou_threshold'),
-                'enable_debug_output': LaunchConfiguration('enable_debug_output'),
-                'face_id_prefix': LaunchConfiguration('face_id_prefix'),
-                'enable_image_output': LaunchConfiguration('enable_image_output'),
-                'face_bbox_thickness': LaunchConfiguration('face_bbox_thickness'),
-                'face_landmark_radius': LaunchConfiguration('face_landmark_radius'),
-                'face_bbox_color': LaunchConfiguration('face_bbox_color'),
-                'face_landmark_color': LaunchConfiguration('face_landmark_color'),
-                'use_boxmot': LaunchConfiguration('use_boxmot'),
-                'boxmot_tracker_type': LaunchConfiguration('boxmot_tracker_type'),
-                'boxmot_reid_model': LaunchConfiguration('boxmot_reid_model'),
-            }
-        ],
-        output='screen',
-        emulate_tty=True,
-    )
-    
     return LaunchDescription([
         config_file_arg,
         input_topic_arg,
@@ -180,5 +204,5 @@ def generate_launch_description():
         use_boxmot_arg,
         boxmot_tracker_type_arg,
         boxmot_reid_model_arg,
-        face_detection_node,
+        OpaqueFunction(function=_setup_face_detection),
     ])

@@ -82,6 +82,79 @@ ros2 launch face_detection face_detection.launch.py
 ros2 launch face_detection face_detection.launch.py input_topic:=/your/camera/topic
 ```
 
+#### Face Recognition
+```bash
+# Launch face recognition node
+ros2 launch face_recognition face_recognition.launch.py
+```
+
+#### Gaze Estimation
+```bash
+# Launch gaze estimation node
+ros2 launch gaze_estimation gaze_estimation.launch.py
+```
+
+## Installation & Setup
+
+#### 0. Build Base Image
+
+First, build the desired base Docker image from [EutRobAIDockers](https://github.com/Eurecat/EutRobAIDockers)
+
+#### 1. Clone This Repository
+
+```bash
+git clone git@github.com:Eurecat/EutHRIFaces.git
+cd EutHRIFaces
+```
+
+#### 2. Build the application image
+
+   ```bash
+   cd Docker && ./build_container.sh
+   ```
+   Please note that:
+    * your default ssh keys will be used to build the image
+    * you might need to be within Eurecat VPN to pull dependencies from our private gitlab through vcs. 
+   
+   You can use `--clean-rebuild` to force a clean rebuild from scratch (i.e. no cached layers).
+
+## Launch
+
+### Option A: Deployment
+
+As simple as...
+   ```bash
+   docker compose up
+   ```
+... within `Docker/` folder
+
+Will start all face processing modules (face detection, face recognition, and gaze estimation).
+
+If you want to run only specific modules, you can scale down the services you don't need:
+
+   ```bash
+   # Run only face detection
+   docker compose up --scale eut_face_detection=0
+   
+   # Run only face detection and gaze estimation
+   docker compose up --scale eut_face_detection=0 --scale eut_gaze_estimation=0
+   
+   # Run only face detection and face recognition
+   docker compose up --scale eut_face_detection=0 --scale eut_face_recognition=0
+
+   ```
+
+### Option B: DevContainer (Development)
+
+Within VS Code editor, make sure you have installed extension DevContainer, press `ctrl+shit+P` (command option) and search for "_Dev Containers: Open Folder in Container..._". From there you can select the folder Docker/DevContainer and the stack will launch in development mode (no node will be automatically started).
+
+### Notes
+Please note that launching the stack might involve launch of GUI application from docker, therefore make sure in the current active session in the host you have given at least once the following command to make sure permissions are given.
+
+```bash
+xhost +local:docker
+```
+
 ## Docker Support
 
 The repository includes Docker support in the `Docker/` directory for easy deployment and development.

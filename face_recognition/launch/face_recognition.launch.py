@@ -6,11 +6,66 @@ This launch file starts the face recognition node with configurable parameters
 for face embedding extraction and identity management based on the EUT YOLO approach.
 """
 
+import os
+import subprocess
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, LogInfo, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+
+VENV_PATH = os.environ.get("AI_VENV", "/opt/ros_python_env")  # set AI_VENV or uses default
+
+def _venv_site_packages(venv_path: str) -> str:
+    py = os.path.join(venv_path, "bin", "python")
+    return subprocess.check_output(
+        [py, "-c", "import site; print(site.getsitepackages()[0])"],
+        text=True
+    ).strip()
+
+
+def _setup_face_recognition(context, *args, **kwargs):
+    """Setup face recognition node with virtual environment."""
+    site_pkgs = _venv_site_packages(VENV_PATH)
+    existing = os.environ.get("PYTHONPATH", "")
+    new_py_path = site_pkgs if not existing else f"{site_pkgs}{os.pathsep}{existing}"
+
+    # Face recognition node
+    face_recognition_node = Node(
+        package='face_recognition',
+        executable='face_recognition_node',
+        name='face_recognition_node',
+        parameters=[
+            LaunchConfiguration('config_file'),
+            {
+                'input_topic': LaunchConfiguration('input_topic'),
+                'output_topic': LaunchConfiguration('output_topic'),
+                'image_input_topic': LaunchConfiguration('image_input_topic'),
+                'device': LaunchConfiguration('device'),
+                'face_embedding_model': LaunchConfiguration('face_embedding_model'),
+                'weights_path': LaunchConfiguration('weights_path'),
+                'face_embedding_weights_name': LaunchConfiguration('face_embedding_weights_name'),
+                'similarity_threshold': LaunchConfiguration('similarity_threshold'),
+                'clustering_threshold': LaunchConfiguration('clustering_threshold'),
+                'max_embeddings_per_identity': LaunchConfiguration('max_embeddings_per_identity'),
+                'identity_timeout': LaunchConfiguration('identity_timeout'),
+                'identity_database_path': LaunchConfiguration('identity_database_path'),
+                'enable_debug_prints': LaunchConfiguration('enable_debug_prints'),
+                'batch_processing_enabled': LaunchConfiguration('batch_processing_enabled'),
+                'max_batch_size': LaunchConfiguration('max_batch_size'),
+                'receiver_id': LaunchConfiguration('receiver_id'),
+            }
+        ],
+        output='screen',
+        emulate_tty=True,
+    )
+
+    return [
+        LogInfo(msg=f"[face_recognition] Using AI venv: {VENV_PATH}"),
+        LogInfo(msg=f"[face_recognition] Injecting site-packages: {site_pkgs}"),
+        SetEnvironmentVariable("PYTHONPATH", new_py_path),
+        face_recognition_node,
+    ]
 
 
 def generate_launch_description():
@@ -126,36 +181,6 @@ def generate_launch_description():
         description='Receiver ID for hri_msgs'
     )
     
-    # Face recognition node
-    face_recognition_node = Node(
-        package='face_recognition',
-        executable='face_recognition_node',
-        name='face_recognition_node',
-        parameters=[
-            LaunchConfiguration('config_file'),
-            {
-                'input_topic': LaunchConfiguration('input_topic'),
-                'output_topic': LaunchConfiguration('output_topic'),
-                'image_input_topic': LaunchConfiguration('image_input_topic'),
-                'device': LaunchConfiguration('device'),
-                'face_embedding_model': LaunchConfiguration('face_embedding_model'),
-                'weights_path': LaunchConfiguration('weights_path'),
-                'face_embedding_weights_name': LaunchConfiguration('face_embedding_weights_name'),
-                'similarity_threshold': LaunchConfiguration('similarity_threshold'),
-                'clustering_threshold': LaunchConfiguration('clustering_threshold'),
-                'max_embeddings_per_identity': LaunchConfiguration('max_embeddings_per_identity'),
-                'identity_timeout': LaunchConfiguration('identity_timeout'),
-                'identity_database_path': LaunchConfiguration('identity_database_path'),
-                'enable_debug_prints': LaunchConfiguration('enable_debug_prints'),
-                'batch_processing_enabled': LaunchConfiguration('batch_processing_enabled'),
-                'max_batch_size': LaunchConfiguration('max_batch_size'),
-                'receiver_id': LaunchConfiguration('receiver_id'),
-            }
-        ],
-        output='screen',
-        emulate_tty=True,
-    )
-    
     return LaunchDescription([
         # Launch arguments
         config_file_arg,
@@ -176,6 +201,6 @@ def generate_launch_description():
         max_batch_size_arg,
         receiver_id_arg,
         
-        # Node
-        face_recognition_node,
+        # Node with virtual environment setup
+        OpaqueFunction(function=_setup_face_recognition),
     ])

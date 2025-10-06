@@ -24,9 +24,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /workspace
 
-# Copy requirements.txt and install Python dependencies using uv
+# Create a virtual environment for Python packages
+RUN python3 -m venv /opt/ros_python_env
+
+# Copy requirements.txt and install Python dependencies in the virtual environment
 COPY requirements.txt /workspace/requirements.txt
-RUN uv pip install --system --no-cache --break-system-packages -r requirements.txt
+RUN /bin/bash -c "source /opt/ros_python_env/bin/activate && uv pip install --no-cache -r requirements.txt"
 
 # ------------------------------------------------------------
 # Setup rosdep

@@ -1,12 +1,59 @@
 #!/usr/bin/env python3
 
+import os
+import subprocess
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, LogInfo, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
-import os
+
+VENV_PATH = os.environ.get("AI_VENV", "/opt/ros_python_env")  # set AI_VENV or uses default
+
+def _venv_site_packages(venv_path: str) -> str:
+    py = os.path.join(venv_path, "bin", "python")
+    return subprocess.check_output(
+        [py, "-c", "import site; print(site.getsitepackages()[0])"],
+        text=True
+    ).strip()
+
+
+def _setup_gaze_estimation(context, *args, **kwargs):
+    """Setup gaze estimation node with virtual environment."""
+    site_pkgs = _venv_site_packages(VENV_PATH)
+    existing = os.environ.get("PYTHONPATH", "")
+    new_py_path = site_pkgs if not existing else f"{site_pkgs}{os.pathsep}{existing}"
+
+    # Gaze estimation node
+    gaze_estimation_node = Node(
+        package='gaze_estimation',
+        executable='gaze_estimation_node',
+        name='gaze_estimation_node',
+        parameters=[
+            LaunchConfiguration('config_file'),
+            {
+                'input_topic': LaunchConfiguration('input_topic'),
+                'output_topic': LaunchConfiguration('output_topic'),
+                'focal_length': LaunchConfiguration('focal_length'),
+                'center_x_ratio': LaunchConfiguration('center_x_ratio'),
+                'center_y_ratio': LaunchConfiguration('center_y_ratio'),
+                'receiver_id': LaunchConfiguration('receiver_id'),
+                'enable_image_output': LaunchConfiguration('enable_image_output'),
+                'image_input_topic': LaunchConfiguration('image_input_topic'),
+                'image_output_topic': LaunchConfiguration('image_output_topic'),
+            }
+        ],
+        output='screen',
+        emulate_tty=True,
+    )
+
+    return [
+        LogInfo(msg=f"[gaze_estimation] Using AI venv: {VENV_PATH}"),
+        LogInfo(msg=f"[gaze_estimation] Injecting site-packages: {site_pkgs}"),
+        SetEnvironmentVariable("PYTHONPATH", new_py_path),
+        gaze_estimation_node,
+    ]
 
 
 def generate_launch_description():
@@ -80,29 +127,6 @@ def generate_launch_description():
         description='Output image topic with gaze visualization'
     )
     
-    # Gaze estimation node
-    gaze_estimation_node = Node(
-        package='gaze_estimation',
-        executable='gaze_estimation_node',
-        name='gaze_estimation_node',
-        parameters=[
-            LaunchConfiguration('config_file'),
-            {
-                'input_topic': LaunchConfiguration('input_topic'),
-                'output_topic': LaunchConfiguration('output_topic'),
-                'focal_length': LaunchConfiguration('focal_length'),
-                'center_x_ratio': LaunchConfiguration('center_x_ratio'),
-                'center_y_ratio': LaunchConfiguration('center_y_ratio'),
-                'receiver_id': LaunchConfiguration('receiver_id'),
-                'enable_image_output': LaunchConfiguration('enable_image_output'),
-                'image_input_topic': LaunchConfiguration('image_input_topic'),
-                'image_output_topic': LaunchConfiguration('image_output_topic'),
-            }
-        ],
-        output='screen',
-        emulate_tty=True,
-    )
-    
     return LaunchDescription([
         config_file_arg,
         input_topic_arg,
@@ -114,5 +138,5 @@ def generate_launch_description():
         enable_image_output_arg,
         image_input_topic_arg,
         image_output_topic_arg,
-        gaze_estimation_node,
+        OpaqueFunction(function=_setup_gaze_estimation),
     ])

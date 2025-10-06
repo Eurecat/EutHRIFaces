@@ -46,14 +46,14 @@ if $REBUILD; then
     rm -rf $DEPS_DIR/*
 fi
 
-# # Import/update dependencies repository using VCS tools (currently empty)
-# echo "Importing/updating dependencies repository using VCS..."
-# if [ -s deps.repos ]; then
-#     vcs import ${DEPS_DIR} < deps.repos
-#     vcs pull ${DEPS_DIR}
-# else
-#     echo "No external dependencies defined in deps.repos"
-# fi
+# Import/update dependencies repository using VCS tools (currently empty)
+echo "Importing/updating dependencies repository using VCS..."
+if [ -s deps.repos ]; then
+    vcs import ${DEPS_DIR} < deps.repos
+    vcs pull ${DEPS_DIR}
+else
+    echo "No external dependencies defined in deps.repos"
+fi
 
 # Display build configuration
 if [[ "${BASE_IMAGE}" == *"vulcanexus"* ]]; then
@@ -83,9 +83,9 @@ fi
 
 # Set or Update BUILT_IMAGE 
 if grep -q -E "^BUILT_IMAGE=" "$ENV_FILE"; then
-    sed -i "s/^BUILT_IMAGE=.*/BUILT_IMAGE=$IMAGE_NAME/" "$ENV_FILE"
+    sed -i "s/^BUILT_IMAGE=.*/BUILT_IMAGE=${IMAGE_NAME}/" "$ENV_FILE"
 else
-    echo "BUILT_IMAGE=$IMAGE_NAME" >> "$ENV_FILE"
+    echo "BUILT_IMAGE=${IMAGE_NAME}" >> "$ENV_FILE"
 fi
 
 echo "Application Docker image built successfully!"
