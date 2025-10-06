@@ -18,7 +18,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import Image
-from hri_msgs.msg import FacialLandmarks, NormalizedPointOfInterest2D
+from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, NormalizedPointOfInterest2D
 from std_msgs.msg import Header
 from cv_bridge import CvBridge
 from typing import Dict, List, Optional, Tuple, Any
@@ -71,9 +71,9 @@ class FaceDetectorNode(Node):
         # Add a counter for received images
         self.image_count = 0
         
-        # Create publisher
+        # Create publisher for FacialLandmarksArray (all faces in one message)
         self.facial_landmarks_publisher = self.create_publisher(
-            FacialLandmarks,
+            FacialLandmarksArray,
             self.output_topic,
             10)
         
@@ -96,8 +96,8 @@ class FaceDetectorNode(Node):
     def _declare_parameters(self):
         """Declare ROS2 parameters with default values."""
         self.declare_parameter('input_topic', '/camera/color/image_rect_raw')
-        self.declare_parameter('output_topic', '/face_detection/facial_landmarks')
-        self.declare_parameter('output_image_topic', '/face_detection/image_with_faces')
+        self.declare_parameter('output_topic', '/people/faces/detected')
+        self.declare_parameter('output_image_topic', '/people/faces/detected/image_with_faces')
         
         # YOLO Face Detection Parameters
         self.declare_parameter('model_path', 'weights/yolov8n-face.onnx')
@@ -270,11 +270,15 @@ class FaceDetectorNode(Node):
             if self.enable_debug_output and num_faces > 0:
                 self.get_logger().info(f"[DEBUG] Converted {len(facial_landmarks_msgs)} faces to ROS messages")
             
-            # Publish each face as a separate message
-            for facial_landmarks_msg in facial_landmarks_msgs:
-                self.facial_landmarks_publisher.publish(facial_landmarks_msg)
+            # Publish all faces in one FacialLandmarksArray message
+            if facial_landmarks_msgs:
+                facial_landmarks_array = FacialLandmarksArray()
+                facial_landmarks_array.header = msg.header
+                facial_landmarks_array.ids = facial_landmarks_msgs
+                
+                self.facial_landmarks_publisher.publish(facial_landmarks_array)
                 if self.enable_debug_output:
-                    self.get_logger().info(f"[ROS PUBLISH] Published facial landmarks for {facial_landmarks_msg.face_id}")
+                    self.get_logger().info(f"[ROS PUBLISH] Published FacialLandmarksArray with {len(facial_landmarks_msgs)} faces")
             
             # Error logging (always log errors)
             if len(facial_landmarks_msgs) == 0 and num_faces > 0:

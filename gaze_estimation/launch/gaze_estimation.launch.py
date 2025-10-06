@@ -26,13 +26,13 @@ def generate_launch_description():
     
     input_topic_arg = DeclareLaunchArgument(
         'input_topic',
-        default_value='/face_detection/facial_landmarks',
+        default_value='/people/faces/detected',
         description='Input topic for facial landmarks'
     )
     
     output_topic_arg = DeclareLaunchArgument(
         'output_topic', 
-        default_value='/gaze_estimation/gaze',
+        default_value='/people/faces/gaze',
         description='Output topic for gaze messages'
     )
     
@@ -76,7 +76,7 @@ def generate_launch_description():
     
     image_output_topic_arg = DeclareLaunchArgument(
         'image_output_topic',
-        default_value='/gaze_estimation/image_with_gaze',
+        default_value='/people/faces/gaze/image_with_gaze',
         description='Output image topic with gaze visualization'
     )
     

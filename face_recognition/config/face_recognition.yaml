@@ -1,0 +1,41 @@
+# Face Recognition Node Configuration
+# Based on EUT YOLO identity management approach
+
+face_recognition_node:
+  ros__parameters:
+    # Input/Output Topics
+    input_topic: '/people/faces/detected'
+    output_topic: '/people/faces/recognized'
+    image_input_topic: '/camera/color/image_rect_raw'
+    
+    # Image Output Parameters
+    enable_image_output: true
+    image_output_topic: '/people/faces/recognized/image_with_recognition'
+
+    # Face Embedding Parameters
+    face_embedding_model: 'vggface2'  # Options: 'vggface2', 'casia-webface'
+    device: 'cpu'  # Options: 'cpu', 'cuda'
+    weights_path: 'weights'  # Path to weights directory (relative to package root)
+    face_embedding_weights_name: '20180402-114759-vggface2.pt'  # Specific weights filename for vggface2 model
+
+    # Identity Management Parameters (from EUT YOLO)
+    max_embeddings_per_identity: 50
+    similarity_threshold: 0.6  # Minimum similarity for identity assignment
+    track_identity_stickiness_margin: 0.4  # Margin for track identity persistence
+    clustering_threshold: 0.7  # Threshold for clustering embeddings
+    embedding_inclusion_threshold: 0.6  # Threshold for including embeddings in cluster
+    identity_timeout: 60.0  # Seconds after which inactive identity is removed
+    min_detections_for_stable_identity: 5  # Minimum detections for stable identity
+    enable_debug_prints: true  # Enable detailed debug output
+    identity_database_path: ''  # Path to persistent identity database (optional)
+    use_ewma_for_mean: false  # Use exponentially weighted moving average for mean embeddings
+    ewma_alpha: 0.6  # Learning rate for EWMA (0 < alpha < 1)
+
+    # Processing Parameters
+    gaze_identity_exclusion_threshold: 0.5  # Exclude poor gaze faces from identity processing
+    batch_processing_enabled: true  # Enable batch processing for better performance
+    max_batch_size: 10  # Maximum number of faces to process in one batch
+    batch_timeout_ms: 50  # Maximum time to wait for batching (milliseconds)
+
+    # HRI Messages Parameters
+    receiver_id: 'face_recognition'  # Receiver ID for hri_msgs

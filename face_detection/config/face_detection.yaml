@@ -3,8 +3,8 @@ face_detection_node:
   ros__parameters:
     # Input/Output topics
     input_topic: "/camera/color/image_rect_raw"
-    output_topic: "/face_detection/facial_landmarks"
-    output_image_topic: "/face_detection/image_with_faces"
+    output_topic: "/people/faces/detected"
+    output_image_topic: "/people/faces/detected/image_with_faces"
     
     # YOLO Face Detection Parameters
     model_path: "weights/yolov8n-face.onnx"

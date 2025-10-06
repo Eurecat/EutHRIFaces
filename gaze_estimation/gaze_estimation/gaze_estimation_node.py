@@ -18,11 +18,12 @@ import numpy as np
 import cv2
 
 try:
-    from hri_msgs.msg import FacialLandmarks, Gaze
+    from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, Gaze
 except ImportError:
     # Fallback in case hri_msgs is not available
     print("Warning: hri_msgs not found. Please install hri_msgs package.")
     FacialLandmarks = None
+    FacialLandmarksArray = None
     Gaze = None
 from geometry_msgs.msg import Vector3
 from std_msgs.msg import Header
@@ -68,9 +69,9 @@ class GazeEstimationNode(Node):
         
         # Create subscriber and publisher
         self.facial_landmarks_sub = self.create_subscription(
-            FacialLandmarks,
+            FacialLandmarksArray,
             self.input_topic,
-            self.facial_landmarks_callback,
+            self.facial_landmarks_array_callback,
             qos_profile
         )
         
@@ -129,8 +130,8 @@ class GazeEstimationNode(Node):
     def declare_and_get_parameters(self):
         """Declare and get all ROS2 parameters."""
         # Declare and get topic parameters
-        self.declare_parameter('input_topic', '/face_detection/facial_landmarks')
-        self.declare_parameter('output_topic', '/gaze_estimation/gaze')
+        self.declare_parameter('input_topic', '/people/faces/detected')
+        self.declare_parameter('output_topic', '/people/faces/gaze')
         self.input_topic = self.get_parameter('input_topic').get_parameter_value().string_value
         self.output_topic = self.get_parameter('output_topic').get_parameter_value().string_value
         
@@ -174,7 +175,7 @@ class GazeEstimationNode(Node):
         # Declare and get image visualization parameters
         self.declare_parameter('enable_image_output', True)
         self.declare_parameter('image_input_topic', '/camera/color/image_rect_raw')
-        self.declare_parameter('image_output_topic', '/gaze_estimation/image_with_gaze')
+        self.declare_parameter('image_output_topic', '/people/faces/gaze/image_with_gaze')
         self.enable_debug_output = self.get_parameter('enable_debug_output').get_parameter_value().bool_value
         self.publish_rate = self.get_parameter('publish_rate').get_parameter_value().double_value
         self.enable_image_output = self.get_parameter('enable_image_output').get_parameter_value().bool_value
@@ -216,9 +217,31 @@ class GazeEstimationNode(Node):
         if hasattr(self, 'gaze_computer'):
             self.gaze_computer.set_face_model(model_points)
     
-    def facial_landmarks_callback(self, msg):
+    def facial_landmarks_array_callback(self, msg):
         """
-        Callback for processing facial landmarks and computing gaze.
+        Callback for processing array of facial landmarks and computing gaze for all faces.
+        
+        Args:
+            msg: FacialLandmarksArray message containing multiple face landmarks
+        """
+        if not msg.ids:
+            if self.enable_debug_output:
+                self.get_logger().debug('Received empty FacialLandmarksArray')
+            return
+        
+        if self.enable_debug_output:
+            self.get_logger().debug(f'Processing FacialLandmarksArray with {len(msg.ids)} faces')
+        
+        # Process each face in the array
+        for facial_landmarks_msg in msg.ids:
+            try:
+                self.process_single_face_landmarks(facial_landmarks_msg)
+            except Exception as e:
+                self.get_logger().error(f'Error processing face {facial_landmarks_msg.face_id}: {str(e)}')
+    
+    def process_single_face_landmarks(self, msg):
+        """
+        Process a single facial landmarks message (extracted from the original callback).
         
         Args:
             msg: FacialLandmarks message containing face landmarks
@@ -226,7 +249,7 @@ class GazeEstimationNode(Node):
         # Update image dimensions and camera parameters from message
         self.update_camera_parameters_from_message(msg)
         
-        # Rate limiting
+        # Rate limiting per face (optional - you might want to remove this for batch processing)
         current_time = self.get_clock().now()
         time_diff = (current_time - self.last_publish_time).nanoseconds / 1e9
         if time_diff < self.min_publish_interval:
@@ -265,7 +288,7 @@ class GazeEstimationNode(Node):
             
         except Exception as e:
             self.get_logger().error(f'Error processing facial landmarks: {str(e)}')
-    
+
     def image_callback(self, msg: Image):
         """
         Callback for receiving RGB images for gaze visualization.

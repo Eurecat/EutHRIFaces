@@ -224,7 +224,6 @@ class YoloFaceDetector:
             
             # Apply tracking if BOXMOT is enabled
             track_ids = []
-            print(self.use_boxmot)
             if self.use_boxmot and self.boxmot_tracker is not None:
                 track_ids = self._apply_boxmot_tracking(face_boxes, face_scores, face_classids, image)
             else:

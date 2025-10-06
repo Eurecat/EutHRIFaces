@@ -2,8 +2,8 @@
 gaze_estimation_node:
   ros__parameters:
     # Input/Output topics
-    input_topic: "/face_detection/facial_landmarks"
-    output_topic: "/gaze_estimation/gaze"
+    input_topic: "/people/faces/detected"
+    output_topic: "/people/faces/gaze"
     
     # Camera parameters for pinhole camera model
     # Note: image_width and image_height are taken from FacialLandmarks message
@@ -35,4 +35,4 @@ gaze_estimation_node:
     # Image visualization parameters
     enable_image_output: true
     image_input_topic: "/camera/color/image_rect_raw"
-    image_output_topic: "/gaze_estimation/image_with_gaze"
+    image_output_topic: "/people/faces/gaze/image_with_gaze"
