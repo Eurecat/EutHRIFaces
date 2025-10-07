@@ -28,13 +28,13 @@ The package follows the EUT YOLO identity management approach with these key com
 
 ### Face Recognition Node
 - Main ROS2 node that orchestrates the recognition pipeline
-- Subscribes to `FacialLandmarks` messages from face detection
+- Subscribes to `FacialLandmarksArray` messages from face detection
 - Publishes `FacialRecognition` messages with persistent identity assignments
 
 ## Input/Output
 
 ### Input Topics
-- `/people/faces/detected` (hri_msgs/FacialLandmarks): Face detection results with bounding boxes and landmarks
+- `/people/faces/detected` (hri_msgs/FacialLandmarksArray): Face detection results with bounding boxes and landmarks
 - `/camera/color/image_rect_raw` (sensor_msgs/Image): RGB camera images for face cropping
 
 ### Output Topics
@@ -160,7 +160,7 @@ The package includes several optimizations from the EUT YOLO implementation:
 
 This package is designed to work seamlessly with the EutHRIFaces pipeline:
 
-1. **Face Detection** → Detects faces and publishes `FacialLandmarks`
+1. **Face Detection** → Detects faces and publishes `FacialLandmarksArray`
 2. **Gaze Estimation** → Estimates gaze and publishes `Gaze` messages  
 3. **Face Recognition** → Assigns persistent identities and publishes `FacialRecognition`
 

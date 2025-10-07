@@ -81,7 +81,7 @@ services:
     # security_opt:
     #   - seccomp:unconfined
     command: bash -c "source /workspace/install/setup.bash && ros2 launch face_recognition face_recognition.launch.py"
-    entrypoint: ["/entrypoint.sh"]
+    # entrypoint: ["/entrypoint.sh"]
 
   eut_gaze_estimation:
     container_name: "eut_gaze_estimation"
@@ -122,5 +122,5 @@ services:
     # security_opt:
     #   - seccomp:unconfined
     command: bash -c "source /workspace/install/setup.bash && ros2 launch gaze_estimation gaze_estimation.launch.py"
-    entrypoint: ["/entrypoint.sh"]
+    # entrypoint: ["/entrypoint.sh"]
 

@@ -57,11 +57,14 @@ RUN rosdep install --from-paths src --ignore-src -r -y
 # ------------------------------------------------------------
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash; \
                   cd /workspace; \
-                  colcon build --event-handlers console_direct+"
+                  colcon build --event-handlers console_direct+ --symlink-install"
+
+# Copy and set up the entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Set the entrypoint
-COPY entrypoint.sh /
-RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
 
 # Default command
 CMD ["/bin/bash"]

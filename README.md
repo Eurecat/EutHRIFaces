@@ -12,7 +12,7 @@ This repository contains three main packages:
 YOLO-based face detection with 5 key facial landmarks.
 
 - **Input**: RGB camera images
-- **Output**: `hri_msgs/FacialLandmarks` (ros4hri compatible)
+- **Output**: `hri_msgs/FacialLandmarksArray` (ros4hri compatible)
 - **Features**: 
   - Auto-download YOLO face model
   - CPU/GPU support

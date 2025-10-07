@@ -24,10 +24,7 @@ fi
 echo "Building ros2 packages of this repo..."
 cd /workspace
 # rm -rf build/ install/
-colcon build --event-handlers console_direct+ 
-
-# TODO: MAKE IT WORK SYMLINK WITHOUT NEEDING TO DELETE ALL AGAIN...
-# colcon build --event-handlers console_direct+ --symlink-install
+colcon build --event-handlers console_direct+ --symlink-install 
 
 # Source the updated workspace after building
 if [ -f "/workspace/install/setup.bash" ]; then

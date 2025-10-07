@@ -2,7 +2,7 @@
 """
 Gaze Estimation Node for HRI Applications
 
-This node subscribes to FacialLandmarks messages from face detection,
+This node subscribes to FacialLandmarksArray messages from face detection,
 computes gaze direction and score using a pinhole camera model, and
 publishes Gaze messages following the ros4hri standard.
 
@@ -42,7 +42,7 @@ class GazeEstimationNode(Node):
     """
     ROS2 node for gaze estimation from facial landmarks.
     
-    Subscribes to FacialLandmarks messages and publishes Gaze messages
+    Subscribes to FacialLandmarksArray messages and publishes Gaze messages
     with computed gaze direction and confidence score.
     """
     

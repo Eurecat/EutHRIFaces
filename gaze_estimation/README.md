@@ -5,7 +5,7 @@ This ROS2 package provides gaze estimation capabilities for Human-Robot Interact
 ## Overview
 
 The gaze estimation node:
-- Subscribes to `FacialLandmarks` messages from face detection
+- Subscribes to `FacialLandmarksArray` messages from face detection
 - Extracts 5 key facial landmarks (eyes, nose, mouth corners)
 - Uses OpenCV's solvePnP algorithm with a 3D face model to estimate head pose
 - Computes gaze direction vector and confidence score
@@ -88,7 +88,7 @@ ros2 launch gaze_estimation gaze_estimation.launch.py \
 The node accepts the following parameters:
 
 #### Topics
-- `input_topic` (string): Input topic for FacialLandmarks messages
+- `input_topic` (string): Input topic for FacialLandmarksArray messages
   - Default: `/people/faces/detected`
 - `output_topic` (string): Output topic for Gaze messages  
   - Default: `/people/faces/gaze`
@@ -194,7 +194,7 @@ geometry_msgs/Vector3 gaze_direction  # 3D gaze vector
 ## Troubleshooting
 
 ### No Gaze Messages Published
-- Check that input topic has FacialLandmarks messages: `ros2 topic echo /people/faces/detected`
+- Check that input topic has FacialLandmarksArray messages: `ros2 topic echo /people/faces/detected`
 - Verify required landmarks are present in the messages
 - Check debug output for error messages
 

@@ -2,7 +2,7 @@
 """
 Face Recognition Node for HRI Applications
 
-This node subscribes to FacialLandmarks messages from face detection,
+This node subscribes to FacialLandmarksArray messages from face detection,
 extracts face embeddings, performs identity clustering and temporal tracking,
 and publishes FacialRecognition messages following the ros4hri standard.
 
@@ -40,7 +40,7 @@ class FaceRecognitionNode(Node):
     """
     ROS2 node for face recognition using embedding-based identity management.
     
-    Subscribes to FacialLandmarks messages and publishes FacialRecognition messages
+    Subscribes to FacialLandmarksArray messages and publishes FacialRecognition messages
     with persistent identity tracking based on face embeddings and clustering.
     """
     

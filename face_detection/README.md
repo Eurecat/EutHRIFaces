@@ -6,7 +6,7 @@ This ROS2 package provides face detection capabilities using YOLO face detection
 
 - **YOLO Face Detection**: Uses YOLOv8-based face detection model with 5 key facial landmarks
 - **BOXMOT Tracking**: Optional face tracking using BOXMOT for consistent face IDs across frames
-- **ROS4HRI Compatibility**: Publishes `hri_msgs/FacialLandmarks` messages following ros4hri standard  
+- **ROS4HRI Compatibility**: Publishes `hri_msgs/FacialLandmarksArray` messages following ros4hri standard  
 - **Auto Model Download**: Automatically downloads the YOLO face model if not present
 - **Configurable Parameters**: Adjustable confidence thresholds, device selection (CPU/GPU), etc.
 - **Visualization Output**: Optional annotated image output for debugging and visualization
@@ -19,7 +19,7 @@ This ROS2 package provides face detection capabilities using YOLO face detection
 
 ### Output
 - **Topic**: `/people/faces/detected` (configurable)  
-- **Type**: `hri_msgs/FacialLandmarks`
+- **Type**: `hri_msgs/FacialLandmarksArray`
 - **Optional Visualization**: `/face_detection/image_with_faces` (annotated image)
 
 ## Landmarks Mapping

@@ -15,9 +15,10 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.xauth_docker/share/:/tmp/xauth/
       - ./.vscode:/workspace/.vscode
-      # Add face detection packages here when they exist
-      # - ../face_detection:/workspace/src/face_detection
-      # - ../face_recognition:/workspace/src/face_recognition
+      #MAP DEPS if needed
+      - ../face_detection:/workspace/src/face_detection
+      - ../face_recognition:/workspace/src/face_recognition
+      - ../gaze_estimation:/workspace/src/gaze_estimation
 
     tty: true
     stdin_open: true
@@ -42,4 +43,4 @@ services:
     # security_opt:
     #   - seccomp:unconfined
     command: bash -c "source /workspace/install/setup.bash && /bin/bash"
-    entrypoint: ["/entrypoint.sh"]
+    # entrypoint: ["/entrypoint.sh"]
