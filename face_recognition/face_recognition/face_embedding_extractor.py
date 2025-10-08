@@ -17,7 +17,9 @@ from pathlib import Path
 try:
     import torch
     from PIL import Image
-    from torchvision import transforms
+    # from torchvision import transforms
+    from torchvision.transforms import v2 as transforms
+
     _TORCH_AVAILABLE = True
 except ImportError:
     _TORCH_AVAILABLE = False
@@ -63,7 +65,7 @@ class FaceEmbeddingExtractor:
             self.device = "cuda" if torch.cuda.is_available() and _TORCH_AVAILABLE else "cpu"
         else:
             self.device = device
-            
+        print(f"[INFO] Using device: {self.device}")
         # Model components
         self.model = None
         self.transform = None
@@ -84,7 +86,7 @@ class FaceEmbeddingExtractor:
             self._ensure_weights_available()
             
             # Initialize the model
-            self.model = InceptionResnetV1(pretrained=self.model_name, device=self.device)
+            self.model = InceptionResnetV1(pretrained=self.model_name).eval().to(self.device)
             self.model.eval()
             
             print(f"[INFO] Face embedding model loaded successfully on {self.device}")
@@ -112,8 +114,8 @@ class FaceEmbeddingExtractor:
             # If no weights_path is provided, just download normally
             if not self.weights_path:
                 print(f"[INFO] No local weights path provided, will download {self.model_name} model if needed")
-                temp_device = "cpu"  # Use CPU for initial weight loading
-                temp_model = InceptionResnetV1(pretrained=self.model_name, device=temp_device)
+                # temp_device = "cuda"  # Use CPU for initial weight loading
+                temp_model = InceptionResnetV1(pretrained=self.model_name, device=self.device)
                 del temp_model  # Clean up temporary model
                 return True
             
@@ -242,9 +244,10 @@ class FaceEmbeddingExtractor:
         """Setup image preprocessing transforms."""
         try:
             self.transform = transforms.Compose([
-                transforms.Resize(self.input_size),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+                transforms.ToImage(),  # Converts PIL or numpy to tensor
+                transforms.Resize(self.input_size, antialias=True),
+                transforms.ToDtype(torch.float32, scale=True),
+                transforms.Normalize(mean=[0.5]*3, std=[0.5]*3),
             ])
             print("[INFO] Face embedding transforms initialized")
         except Exception as e:
@@ -299,34 +302,23 @@ class FaceEmbeddingExtractor:
         except Exception as e:
             print(f"Error cropping face from image: {e}")
             return None
-    
-    def preprocess_face_image(self, face_image: np.ndarray) -> Optional[torch.Tensor]:
-        """
-        Preprocess face image for embedding extraction.
-        
-        Args:
-            face_image: Face image as numpy array (BGR format)
             
-        Returns:
-            Preprocessed tensor ready for model inference or None if preprocessing fails
-        """
+    def preprocess_face_image(self, face_image: np.ndarray) -> Optional[torch.Tensor]:
         if face_image is None or face_image.size == 0:
             return None
-            
         try:
-            # Convert BGR to RGB and then to PIL Image
+            # Convert BGR to RGB (still CPU, but minimal cost)
             rgb_image = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(np.uint8(rgb_image)).convert('RGB')
+            tensor = torch.from_numpy(rgb_image).permute(2, 0, 1).float() / 255.0  # Convert to CHW float
+            tensor = tensor.unsqueeze(0).to(self.device)
 
-            # Apply transforms
-            tensor_image = self.transform(pil_image).unsqueeze(0)
-            
-            return tensor_image.to(self.device)
-            
+            # Apply transforms on GPU
+            tensor = self.transform(tensor)
+            return tensor
         except Exception as e:
             print(f"Error preprocessing face image: {e}")
             return None
-    
+
     def extract_embedding(self, face_image: np.ndarray) -> Optional[np.ndarray]:
         """
         Extract face embedding from a face image.

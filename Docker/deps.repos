@@ -2,8 +2,8 @@ repositories:
   eut_yolo:
     type: git
     url: git@gitlab.local.eurecat.org:robotics-automation/eut_yolo.git
+    #url: https://ice.eurecat.org/gitlab/robotics-automation/eut_yolo.git
     version: jazzy-devel
-
   hri_msgs:
     type: git
     url: https://github.com/Eurecat/hri_msgs.git

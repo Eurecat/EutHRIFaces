@@ -16,6 +16,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPo
 
 import numpy as np
 import cv2
+import time
 
 try:
     from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, Gaze
@@ -48,6 +49,12 @@ class GazeEstimationNode(Node):
     
     def __init__(self):
         super().__init__('gaze_estimation_node')
+        
+        # Timing statistics
+        self.frame_count = 0
+        self.total_processing_time = 0.0
+        self.max_processing_time = 0.0
+        self.min_processing_time = float('inf')
         
         # Declare and get parameters
         self.declare_and_get_parameters()
@@ -224,20 +231,49 @@ class GazeEstimationNode(Node):
         Args:
             msg: FacialLandmarksArray message containing multiple face landmarks
         """
+        # Start timing
+        start_time = time.time()
+        
         if not msg.ids:
             if self.enable_debug_output:
                 self.get_logger().debug('Received empty FacialLandmarksArray')
             return
-        
+
         if self.enable_debug_output:
             self.get_logger().debug(f'Processing FacialLandmarksArray with {len(msg.ids)} faces')
         
-        # Process each face in the array
-        for facial_landmarks_msg in msg.ids:
-            try:
-                self.process_single_face_landmarks(facial_landmarks_msg)
-            except Exception as e:
-                self.get_logger().error(f'Error processing face {facial_landmarks_msg.face_id}: {str(e)}')
+        try:
+            # Process each face in the array
+            for facial_landmarks_msg in msg.ids:
+                try:
+                    self.process_single_face_landmarks(facial_landmarks_msg)
+                except Exception as e:
+                    self.get_logger().error(f'Error processing face {facial_landmarks_msg.face_id}: {str(e)}')
+        
+        except Exception as e:
+            self.get_logger().error(f'Error in facial landmarks array callback: {e}')
+        
+        finally:
+            # Calculate and log timing information
+            processing_time = (time.time() - start_time) * 1000  # Convert to milliseconds
+            self.frame_count += 1
+            
+            # Update timing statistics
+            self.total_processing_time += processing_time
+            self.max_processing_time = max(self.max_processing_time, processing_time)
+            self.min_processing_time = min(self.min_processing_time, processing_time)
+            
+            # Log timing every 30 frames or when debug is enabled
+            if self.frame_count % 30 == 0 or self.enable_debug_output:
+                avg_time = self.total_processing_time / self.frame_count
+                self.get_logger().info(
+                    f"[TIMING] Gaze Estimation - Frame #{self.frame_count}: "
+                    f"Current: {processing_time:.2f}ms, "
+                    f"Avg: {avg_time:.2f}ms, "
+                    f"Min: {self.min_processing_time:.2f}ms, "
+                    f"Max: {self.max_processing_time:.2f}ms, "
+                    f"Faces: {len(msg.ids)}"
+                )
     
     def process_single_face_landmarks(self, msg):
         """

@@ -6,7 +6,7 @@ services:
     network_mode: host 
     ipc: host
     shm_size: 1gb
-    # runtime: nvidia
+    runtime: nvidia
     # user: "coghri"
     image: ${BUILT_IMAGE}
     privileged: true
@@ -26,7 +26,7 @@ services:
       # - USER_ID=${USER_ID}
       # - GROUP_ID=${GROUP_ID}
       # - USERNAME=${USERNAME}
-      # - NVIDIA_VISIBLE_DEVICES=all 
+      - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
       - XAUTHORITY=/tmp/xauth/.docker.xauth     

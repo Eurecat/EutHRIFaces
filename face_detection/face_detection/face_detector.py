@@ -14,6 +14,7 @@ The node supports:
 - Optional image visualization output
 """
 import os
+import time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
@@ -42,6 +43,12 @@ class FaceDetectorNode(Node):
         
         # Initialize CV bridge
         self.bridge = CvBridge()
+        
+        # Timing statistics
+        self.frame_count = 0
+        self.total_processing_time = 0.0
+        self.max_processing_time = 0.0
+        self.min_processing_time = float('inf')
         
         # Declare parameters
         self._declare_parameters()
@@ -205,6 +212,9 @@ class FaceDetectorNode(Node):
         Args:
             msg: sensor_msgs/Image message
         """
+        # Start timing
+        start_time = time.time()
+        
         if self.detector is None:
             self.get_logger().warn("Face detector not initialized, skipping image")
             return
@@ -212,6 +222,7 @@ class FaceDetectorNode(Node):
         try:
             # Increment image counter
             self.image_count += 1
+            self.frame_count += 1
             
             # Log every 30 images (about once per second at 30fps)
             if self.image_count % 30 == 1:
@@ -296,6 +307,25 @@ class FaceDetectorNode(Node):
             self.get_logger().error(f"Error processing image: {e}")
             if self.enable_debug_output:
                 self.get_logger().error(f"Traceback: {traceback.format_exc()}")
+        finally:
+            # Calculate and log timing information
+            processing_time = (time.time() - start_time) * 1000  # Convert to milliseconds
+            
+            # Update timing statistics
+            self.total_processing_time += processing_time
+            self.max_processing_time = max(self.max_processing_time, processing_time)
+            self.min_processing_time = min(self.min_processing_time, processing_time)
+            
+            # Log timing every 30 frames or when debug is enabled
+            if self.frame_count % 30 == 0 or self.enable_debug_output:
+                avg_time = self.total_processing_time / self.frame_count
+                self.get_logger().info(
+                    f"[TIMING] Face Detection - Frame #{self.frame_count}: "
+                    f"Current: {processing_time:.2f}ms, "
+                    f"Avg: {avg_time:.2f}ms, "
+                    f"Min: {self.min_processing_time:.2f}ms, "
+                    f"Max: {self.max_processing_time:.2f}ms"
+                )
     
     def _convert_to_facial_landmarks_msgs(self, detection_results: Dict[str, Any], 
                                         original_header: Header, 

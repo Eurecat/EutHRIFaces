@@ -290,6 +290,9 @@ class FaceRecognitionNode(Node):
         Args:
             msg: FacialLandmarksArray message containing multiple face landmarks
         """
+        # Start timing
+        start_time = time.time()
+        
         if not self.face_embedding_extractor or not self.identity_manager:
             self.get_logger().warning("Face recognition components not initialized")
             return
@@ -306,8 +309,6 @@ class FaceRecognitionNode(Node):
         if self.enable_debug_prints:
             self.get_logger().debug(f'Processing FacialLandmarksArray with {len(msg.ids)} faces')
         
-        start_time = time.time()
-        
         try:
             # Process all faces in batch mode
             self._process_landmarks_array_batch(msg)
@@ -315,14 +316,31 @@ class FaceRecognitionNode(Node):
         except Exception as e:
             self.get_logger().error(f"Error in landmarks array callback: {e}")
         
-        # Log processing time
-        processing_time = (time.time() - start_time) * 1000
-        self.total_processing_time += processing_time
-        self.processed_messages += 1
-        
-        if self.processed_messages % 50 == 0:
-            avg_time = self.total_processing_time / self.processed_messages
-            self.get_logger().info(f"Average processing time: {avg_time:.2f}ms")
+        finally:
+            # Calculate and log timing information
+            processing_time = (time.time() - start_time) * 1000  # Convert to milliseconds
+            self.total_processing_time += processing_time
+            self.processed_messages += 1
+            
+            # Update timing statistics
+            if not hasattr(self, 'max_processing_time'):
+                self.max_processing_time = processing_time
+                self.min_processing_time = processing_time
+            else:
+                self.max_processing_time = max(self.max_processing_time, processing_time)
+                self.min_processing_time = min(self.min_processing_time, processing_time)
+            
+            # Log timing every 30 messages or when debug is enabled
+            if self.processed_messages % 30 == 0 or self.enable_debug_prints:
+                avg_time = self.total_processing_time / self.processed_messages
+                self.get_logger().info(
+                    f"[TIMING] Face Recognition - Frame #{self.processed_messages}: "
+                    f"Current: {processing_time:.2f}ms, "
+                    f"Avg: {avg_time:.2f}ms, "
+                    f"Min: {self.min_processing_time:.2f}ms, "
+                    f"Max: {self.max_processing_time:.2f}ms, "
+                    f"Faces: {len(msg.ids)}"
+                )
     
 
     
