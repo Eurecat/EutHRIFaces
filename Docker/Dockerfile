@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /workspace
 
 # Create a virtual environment for Python packages
-RUN python3 -m venv /opt/ros_python_env
+RUN uv venv /opt/ros_python_env --python 3.12.3
 
 # Copy requirements.txt and install Python dependencies in the virtual environment
 COPY requirements.txt /workspace/requirements.txt
