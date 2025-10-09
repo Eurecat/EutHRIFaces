@@ -6,7 +6,7 @@ services:
     network_mode: host 
     ipc: host
     shm_size: 1gb
-    runtime: nvidia
+    runtime: ${DOCKER_RUNTIME:-runc}
     # user: "coghri"
     image: ${BUILT_IMAGE}
     privileged: true
