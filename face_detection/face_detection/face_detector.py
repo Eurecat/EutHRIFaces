@@ -59,21 +59,27 @@ class FaceDetectorNode(Node):
         # Initialize detector backend
         self.detector = None
         self._initialize_detector()
+
+        # Initialize image storage variables (copied from perception node)
+        self.latest_color_image_msg = None
+        self.color_image_processed = False
+        self.latest_color_image_timestamp = None
         
-        # Setup QoS profiles
-        qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+        # Setup QoS profiles (copied from perception node)
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1,
-            durability=DurabilityPolicy.VOLATILE
+            depth=1
         )
         
-        # Create subscriber
-        self.image_subscription = self.create_subscription(
-            Image,
-            self.input_topic,
-            self.image_callback,
-            qos_profile)
+        # Create RGB-only subscriber (copied from perception node RGB-only pattern)
+        self.get_logger().info("Setting up RGB-only processing")
+        self.color_sub = self.create_subscription(
+            Image, 
+            self.input_topic, 
+            self._store_latest_rgb, 
+            sensor_qos
+        )
         
         # Add a counter for received images
         self.image_count = 0
@@ -90,7 +96,14 @@ class FaceDetectorNode(Node):
             self.image_publisher = self.create_publisher(
                 Image,
                 self.output_image_topic,
-                10)
+                 10)
+
+        # Timer for periodic inference (copied from perception node pattern)
+        timer_period = 1.0 / self.processing_rate_hz  # Use processing_rate_hz parameter
+        self.inference_timer = self.create_timer(
+            timer_period, 
+            self.inference_timer_callback
+        )
         
         self.get_logger().info(f"Face Detector Node initialized")
         self.get_logger().info(f"Input topic: {self.input_topic}")
@@ -99,12 +112,158 @@ class FaceDetectorNode(Node):
             self.get_logger().info(f"Output image topic: {self.output_image_topic}")
         else:
             self.get_logger().info("Image output disabled")
+
+    # -------------------------------------------------------------------------
+    #             Image Storage Callbacks (Copied from perception node)
+    # -------------------------------------------------------------------------
+    def _store_latest_rgb(self, color_msg):
+        """
+        Stores the latest color image.
+
+        Simple callback for RGB image storage.
+
+        Args:
+            color_msg: ROS Image message containing RGB data
+        """
+        self.latest_color_image_msg = color_msg
+        self.color_image_processed = False
+        self.latest_color_image_timestamp = self.get_clock().now()
+        # self.get_logger().info("Color image received.")
+
+    # -------------------------------------------------------------------------
+    #                         Timer Callback for Inference
+    # -------------------------------------------------------------------------
+    def inference_timer_callback(self):
+        """
+        Regular callback for continuous inference mode.
+
+        Triggered by the timer at the configured frequency.
+        Acquires the latest images, processes them, and publishes results.
+        """
+        
+        start_time = self.get_clock().now()
+
+        color_msg = self.latest_color_image_msg
+        color_image_processed = self.color_image_processed
+
+        if color_msg is None:
+            self.get_logger().warning("No data received from color camera")
+            return  # No data available yet
+        if color_image_processed is True:
+            return
+        
+        # Convert ROS Image to OpenCV format (copied from perception node pattern)
+        cv_image = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
+
+        self.color_image_processed = True
+
+        if cv_image is None or cv_image.size == 0:
+            self.get_logger().warn("Received empty or invalid image")
+            return
+
+        # Increment counters
+        self.image_count += 1
+        self.frame_count += 1
+
+        if self.detector is None:
+            self.get_logger().warn("Face detector not initialized, skipping image")
+            return
+            
+        if self.enable_debug_output:
+            self.get_logger().info(f"Processing image: {cv_image.shape}, dtype: {cv_image.dtype}")
+        
+        # Run face detection
+        detection_results = self.detector.detect(cv_image)
+        
+        # Debug the detection results structure
+        if self.enable_debug_output:
+            self.get_logger().info(f"Raw detection_results keys: {list(detection_results.keys())}")
+            self.get_logger().info(f"Raw detection_results: {detection_results}")
+        
+        # Log detection results conditionally
+        num_faces = len(detection_results.get('faces', []))
+        if self.enable_debug_output:
+            if self.image_count % 30 == 1 or num_faces > 0:  # Log every 30 images OR when faces detected
+                self.get_logger().info(f"Detection results: {num_faces} face(s) detected")
+                if num_faces > 0:
+                    self.get_logger().info(f"First face: {detection_results.get('faces', [])[0] if detection_results.get('faces') else 'None'}")
+            
+            # Log when faces are detected for debugging
+            if num_faces > 0:
+                self.get_logger().info(f"[DEBUG] Face detection successful! Found {num_faces} faces")
+                self.get_logger().info(f"[DEBUG] Detection keys: {list(detection_results.keys())}")
+                for key, value in detection_results.items():
+                    self.get_logger().info(f"[DEBUG] {key}: {len(value) if isinstance(value, list) else value}")
+            elif self.image_count % 60 == 1:  # Log "no faces" less frequently
+                self.get_logger().info(f"[DEBUG] No faces detected in image #{self.image_count}")
+        
+        if self.enable_debug_output:
+            if num_faces > 0:
+                self.get_logger().info(f"Detected {num_faces} face(s)")
+                # Debug face coordinates
+                for i, face in enumerate(detection_results.get('faces', [])):
+                    self.get_logger().info(f"Face {i}: {face}")
+            else:
+                # Log when no faces are detected (for debugging)
+                self.get_logger().info("No faces detected in this frame")
+        
+        # Convert to ROS messages and publish
+        facial_landmarks_msgs = self._convert_to_facial_landmarks_msgs(
+            detection_results, color_msg.header, cv_image.shape)
+        
+        # Log message conversion results (only if debug enabled)
+        if self.enable_debug_output and num_faces > 0:
+            self.get_logger().info(f"[DEBUG] Converted {len(facial_landmarks_msgs)} faces to ROS messages")
+        
+        # Publish all faces in one FacialLandmarksArray message
+        if facial_landmarks_msgs:
+            facial_landmarks_array = FacialLandmarksArray()
+            facial_landmarks_array.header = color_msg.header
+            facial_landmarks_array.ids = facial_landmarks_msgs
+            
+            self.facial_landmarks_publisher.publish(facial_landmarks_array)
+            if self.enable_debug_output:
+                self.get_logger().info(f"[ROS PUBLISH] Published FacialLandmarksArray with {len(facial_landmarks_msgs)} faces")
+        
+        # Error logging (always log errors)
+        if len(facial_landmarks_msgs) == 0 and num_faces > 0:
+            self.get_logger().error(f"[ERROR] Detected {num_faces} faces but converted 0 messages!")
+        elif len(facial_landmarks_msgs) == 0 and self.enable_debug_output:
+            if self.image_count % 60 == 1:
+                self.get_logger().info("No faces detected, no messages published")
+        
+        # Publish visualization if enabled
+        if self.enable_image_output and self.image_publisher is not None:
+            self._publish_image_with_faces(cv_image, detection_results, color_msg.header)
+
+        # Calculate and log timing information
+        end_time = self.get_clock().now()
+        processing_time = (end_time - start_time).nanoseconds / 1e6  # Convert to milliseconds
+        
+        # Update timing statistics
+        self.total_processing_time += processing_time
+        self.max_processing_time = max(self.max_processing_time, processing_time)
+        self.min_processing_time = min(self.min_processing_time, processing_time)
+        
+        # Log timing every 30 frames or when debug is enabled
+        if self.frame_count % 30 == 0 or self.enable_debug_output:
+            avg_time = self.total_processing_time / self.frame_count
+            self.get_logger().info(
+                f"[TIMING] Face Detection - Frame #{self.frame_count}: "
+                f"Current: {processing_time:.2f}ms, "
+                f"Avg: {avg_time:.2f}ms, "
+                f"Min: {self.min_processing_time:.2f}ms, "
+                f"Max: {self.max_processing_time:.2f}ms"
+            )
         
     def _declare_parameters(self):
         """Declare ROS2 parameters with default values."""
         self.declare_parameter('input_topic', '/camera/color/image_rect_raw')
         self.declare_parameter('output_topic', '/people/faces/detected')
         self.declare_parameter('output_image_topic', '/people/faces/detected/image_with_faces')
+        
+        # Processing rate parameter (copied from perception node)
+        self.declare_parameter('processing_rate_hz', 30.0)  # Default 10 Hz
         
         # YOLO Face Detection Parameters
         self.declare_parameter('model_path', 'weights/yolov8n-face.onnx')
@@ -181,6 +340,9 @@ class FaceDetectorNode(Node):
         self.face_bbox_color = self.get_parameter('face_bbox_color').get_parameter_value().integer_array_value
         self.face_landmark_color = self.get_parameter('face_landmark_color').get_parameter_value().integer_array_value
         
+        # Get processing rate parameter
+        self.processing_rate_hz = self.get_parameter('processing_rate_hz').get_parameter_value().double_value
+        
     def _initialize_detector(self):
         """Initialize the face detection backend."""
         try:
@@ -204,128 +366,6 @@ class FaceDetectorNode(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to initialize face detector: {e}")
             self.detector = None
-    
-    def image_callback(self, msg: Image):
-        """
-        Process incoming RGB image and detect faces.
-        
-        Args:
-            msg: sensor_msgs/Image message
-        """
-        # Start timing
-        start_time = time.time()
-        
-        if self.detector is None:
-            self.get_logger().warn("Face detector not initialized, skipping image")
-            return
-        
-        try:
-            # Increment image counter
-            self.image_count += 1
-            self.frame_count += 1
-            
-            # Log every 30 images (about once per second at 30fps)
-            if self.image_count % 30 == 1:
-                self.get_logger().info(f"Received image #{self.image_count}")
-            
-            # Convert ROS Image to OpenCV format
-            cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-            
-            if cv_image is None or cv_image.size == 0:
-                self.get_logger().warn("Received empty or invalid image")
-                return
-                
-            if self.enable_debug_output:
-                self.get_logger().info(f"Processing image: {cv_image.shape}, dtype: {cv_image.dtype}")
-            
-            # Run face detection
-            detection_results = self.detector.detect(cv_image)
-            
-            # Debug the detection results structure
-            if self.enable_debug_output:
-                self.get_logger().info(f"Raw detection_results keys: {list(detection_results.keys())}")
-                self.get_logger().info(f"Raw detection_results: {detection_results}")
-            
-            # Log detection results conditionally
-            num_faces = len(detection_results.get('faces', []))
-            if self.enable_debug_output:
-                if self.image_count % 30 == 1 or num_faces > 0:  # Log every 30 images OR when faces detected
-                    self.get_logger().info(f"Detection results: {num_faces} face(s) detected")
-                    if num_faces > 0:
-                        self.get_logger().info(f"First face: {detection_results.get('faces', [])[0] if detection_results.get('faces') else 'None'}")
-                
-                # Log when faces are detected for debugging
-                if num_faces > 0:
-                    self.get_logger().info(f"[DEBUG] Face detection successful! Found {num_faces} faces")
-                    self.get_logger().info(f"[DEBUG] Detection keys: {list(detection_results.keys())}")
-                    for key, value in detection_results.items():
-                        self.get_logger().info(f"[DEBUG] {key}: {len(value) if isinstance(value, list) else value}")
-                elif self.image_count % 60 == 1:  # Log "no faces" less frequently
-                    self.get_logger().info(f"[DEBUG] No faces detected in image #{self.image_count}")
-            
-            if self.enable_debug_output:
-                if num_faces > 0:
-                    self.get_logger().info(f"Detected {num_faces} face(s)")
-                    # Debug face coordinates
-                    for i, face in enumerate(detection_results.get('faces', [])):
-                        self.get_logger().info(f"Face {i}: {face}")
-                else:
-                    # Log when no faces are detected (for debugging)
-                    self.get_logger().info("No faces detected in this frame")
-            
-            # Convert to ROS messages and publish
-            facial_landmarks_msgs = self._convert_to_facial_landmarks_msgs(
-                detection_results, msg.header, cv_image.shape)
-            
-            # Log message conversion results (only if debug enabled)
-            if self.enable_debug_output and num_faces > 0:
-                self.get_logger().info(f"[DEBUG] Converted {len(facial_landmarks_msgs)} faces to ROS messages")
-            
-            # Publish all faces in one FacialLandmarksArray message
-            if facial_landmarks_msgs:
-                facial_landmarks_array = FacialLandmarksArray()
-                facial_landmarks_array.header = msg.header
-                facial_landmarks_array.ids = facial_landmarks_msgs
-                
-                self.facial_landmarks_publisher.publish(facial_landmarks_array)
-                if self.enable_debug_output:
-                    self.get_logger().info(f"[ROS PUBLISH] Published FacialLandmarksArray with {len(facial_landmarks_msgs)} faces")
-            
-            # Error logging (always log errors)
-            if len(facial_landmarks_msgs) == 0 and num_faces > 0:
-                self.get_logger().error(f"[ERROR] Detected {num_faces} faces but converted 0 messages!")
-            elif len(facial_landmarks_msgs) == 0 and self.enable_debug_output:
-                if self.image_count % 60 == 1:
-                    self.get_logger().info("No faces detected, no messages published")
-            
-            # Publish visualization if enabled
-            if self.enable_image_output and self.image_publisher is not None:
-                self._publish_image_with_faces(cv_image, detection_results, msg.header)
-                
-        except Exception as e:
-            import traceback
-            self.get_logger().error(f"Error processing image: {e}")
-            if self.enable_debug_output:
-                self.get_logger().error(f"Traceback: {traceback.format_exc()}")
-        finally:
-            # Calculate and log timing information
-            processing_time = (time.time() - start_time) * 1000  # Convert to milliseconds
-            
-            # Update timing statistics
-            self.total_processing_time += processing_time
-            self.max_processing_time = max(self.max_processing_time, processing_time)
-            self.min_processing_time = min(self.min_processing_time, processing_time)
-            
-            # Log timing every 30 frames or when debug is enabled
-            if self.frame_count % 30 == 0 or self.enable_debug_output:
-                avg_time = self.total_processing_time / self.frame_count
-                self.get_logger().info(
-                    f"[TIMING] Face Detection - Frame #{self.frame_count}: "
-                    f"Current: {processing_time:.2f}ms, "
-                    f"Avg: {avg_time:.2f}ms, "
-                    f"Min: {self.min_processing_time:.2f}ms, "
-                    f"Max: {self.max_processing_time:.2f}ms"
-                )
     
     def _convert_to_facial_landmarks_msgs(self, detection_results: Dict[str, Any], 
                                         original_header: Header, 

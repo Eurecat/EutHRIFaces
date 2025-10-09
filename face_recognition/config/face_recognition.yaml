@@ -33,9 +33,6 @@ face_recognition_node:
 
     # Processing Parameters
     gaze_identity_exclusion_threshold: 0.5  # Exclude poor gaze faces from identity processing
-    batch_processing_enabled: true  # Enable batch processing for better performance
-    max_batch_size: 10  # Maximum number of faces to process in one batch
-    batch_timeout_ms: 50  # Maximum time to wait for batching (milliseconds)
 
     # HRI Messages Parameters
     receiver_id: 'face_recognition'  # Receiver ID for hri_msgs

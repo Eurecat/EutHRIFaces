@@ -37,6 +37,7 @@ def _setup_face_detection(context, *args, **kwargs):
                 'input_topic': LaunchConfiguration('input_topic'),
                 'output_topic': LaunchConfiguration('output_topic'),
                 'output_image_topic': LaunchConfiguration('output_image_topic'),
+                'processing_rate_hz': LaunchConfiguration('processing_rate_hz'),
                 'device': LaunchConfiguration('device'),
                 'model_path': LaunchConfiguration('model_path'),
                 'confidence_threshold': LaunchConfiguration('confidence_threshold'),
@@ -93,7 +94,7 @@ def generate_launch_description():
     
     device_arg = DeclareLaunchArgument(
         'device',
-        default_value='cpu',
+        default_value='cuda:0',
         description='Device to run inference on (cpu/cuda)'
     )
     
@@ -185,6 +186,12 @@ def generate_launch_description():
         description='Color of facial landmarks (BGR format)'
     )
     
+    processing_rate_hz_arg = DeclareLaunchArgument(
+        'processing_rate_hz',
+        default_value='30.0',
+        description='Processing rate in Hz'
+    )
+    
     return LaunchDescription([
         config_file_arg,
         input_topic_arg,
@@ -204,5 +211,6 @@ def generate_launch_description():
         use_boxmot_arg,
         boxmot_tracker_type_arg,
         boxmot_reid_model_arg,
+        processing_rate_hz_arg,
         OpaqueFunction(function=_setup_face_detection),
     ])

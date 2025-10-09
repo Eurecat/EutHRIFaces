@@ -106,11 +106,6 @@ Key parameters can be configured in `config/face_recognition.yaml` or via launch
 - `track_identity_stickiness_margin`: Margin for track identity persistence (default: 0.4)
 - `embedding_inclusion_threshold`: Threshold for including embeddings in cluster (default: 0.6)
 
-### Processing Parameters
-- `batch_processing_enabled`: Enable batch processing (default: true)
-- `max_batch_size`: Maximum faces per batch (default: 10)
-- `batch_timeout_ms`: Maximum batching wait time (default: 50ms)
-
 ## Identity Management System
 
 The identity management system is directly adapted from EUT YOLO and provides:
@@ -189,7 +184,6 @@ This package is designed to work seamlessly with the EutHRIFaces pipeline:
 
 2. **"CUDA out of memory"**
    - Set `device: 'cpu'` in configuration
-   - Reduce `max_batch_size`
 
 3. **"No image available for face recognition"**
    - Ensure image topic is publishing

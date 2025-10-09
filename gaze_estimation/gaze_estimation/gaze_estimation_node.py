@@ -58,6 +58,11 @@ class GazeEstimationNode(Node):
         
         # Declare and get parameters
         self.declare_and_get_parameters()
+
+        # Initialize image storage variables (copied from perception node)
+        self.latest_color_image_msg = None
+        self.color_image_processed = False
+        self.latest_color_image_timestamp = None
         
         # QoS profile for real-time applications (landmarks and gaze data)
         qos_profile = QoSProfile(
@@ -66,12 +71,11 @@ class GazeEstimationNode(Node):
             depth=10
         )
         
-        # QoS profile for image data (matching face_detector configuration)
-        image_qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+        # Setup QoS profiles (copied from perception node)
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1,
-            durability=DurabilityPolicy.VOLATILE
+            depth=1
         )
         
         # Create subscriber and publisher
@@ -90,22 +94,29 @@ class GazeEstimationNode(Node):
         
         # Initialize CV bridge for image handling
         self.bridge = CvBridge()
-        self.latest_image = None
         
-        # Create image subscriber and publisher if visualization is enabled
+        # Create RGB-only subscriber (copied from perception node RGB-only pattern)
         if self.enable_image_output:
-            self.image_sub = self.create_subscription(
-                Image,
-                self.image_input_topic,
-                self.image_callback,
-                image_qos_profile
+            self.get_logger().info("Setting up RGB-only processing for gaze visualization")
+            self.color_sub = self.create_subscription(
+                Image, 
+                self.image_input_topic, 
+                self._store_latest_rgb, 
+                sensor_qos
             )
             
             self.image_pub = self.create_publisher(
                 Image,
                 self.image_output_topic,
-                10  # Use simple depth like in face_detector
+                10
             )
+
+        # Timer for periodic inference (copied from perception node pattern)
+        timer_period = 1.0 / self.processing_rate_hz  # Use processing_rate_hz parameter
+        self.inference_timer = self.create_timer(
+            timer_period, 
+            self.inference_timer_callback
+        )
         
         # Initialize gaze computer utility
         self.gaze_computer = GazeComputer(
@@ -121,8 +132,13 @@ class GazeEstimationNode(Node):
         # Rate limiting
         self.last_publish_time = self.get_clock().now()
         self.min_publish_interval = 1.0 / self.publish_rate
+
+        # Store latest landmarks for processing
+        self.latest_landmarks_array = None
+        self.landmarks_processed = False
         
         self.get_logger().info(f'Gaze Estimation Node started')
+        self.get_logger().info(f'Processing rate: {self.processing_rate_hz} Hz')
         self.get_logger().info(f'Subscribing to: {self.input_topic}')
         self.get_logger().info(f'Publishing to: {self.output_topic}')
         if self.enable_image_output:
@@ -133,6 +149,125 @@ class GazeEstimationNode(Node):
         self.get_logger().info(f'Camera parameters: focal_length={self.focal_length}, '
                               f'center=({self.center_x}, {self.center_y}), '
                               f'image_size=({self.image_width}, {self.image_height})')
+
+    # -------------------------------------------------------------------------
+    #             Image Storage Callbacks (Copied from perception node)
+    # -------------------------------------------------------------------------
+    def _store_latest_rgb(self, color_msg):
+        """
+        Stores the latest color image.
+
+        Simple callback for RGB image storage.
+
+        Args:
+            color_msg: ROS Image message containing RGB data
+        """
+        self.latest_color_image_msg = color_msg
+        self.color_image_processed = False
+        self.latest_color_image_timestamp = self.get_clock().now()
+        # self.get_logger().info("Color image received.")
+
+    # -------------------------------------------------------------------------
+    #                         Timer Callback for Inference
+    # -------------------------------------------------------------------------
+    def inference_timer_callback(self):
+        """
+        Regular callback for continuous inference mode.
+
+        Triggered by the timer at the configured frequency.
+        Processes latest landmarks and image data for gaze estimation.
+        """
+        
+        start_time = self.get_clock().now()
+
+        # Check if we have new landmarks to process
+        if self.latest_landmarks_array is None:
+            # self.get_logger().warning("No landmarks data received")
+            return
+        if self.landmarks_processed is True:
+            return
+
+        # If image visualization is enabled, check for image data
+        if self.enable_image_output:
+            color_msg = self.latest_color_image_msg
+            color_image_processed = self.color_image_processed
+            
+            if color_msg is None:
+                # self.get_logger().warning("No image data received for visualization")
+                return
+            if color_image_processed is True:
+                return
+            
+            # Convert ROS Image to OpenCV format (copied from perception node pattern)
+            cv_image = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
+            self.color_image_processed = True
+            
+            if cv_image is None or cv_image.size == 0:
+                self.get_logger().warn("Received empty or invalid image")
+                return
+        else:
+            cv_image = None
+
+        # Mark landmarks as processed
+        landmarks_msg = self.latest_landmarks_array
+        self.landmarks_processed = True
+
+        try:
+            # Process the landmarks array
+            self.process_landmarks_array(landmarks_msg, cv_image)
+                
+        except Exception as e:
+            self.get_logger().error(f"Error processing gaze estimation: {e}")
+
+        # Calculate and log timing information
+        end_time = self.get_clock().now()
+        processing_time = (end_time - start_time).nanoseconds / 1e6  # Convert to milliseconds
+        
+        # Update timing statistics
+        self.frame_count += 1
+        self.total_processing_time += processing_time
+        self.max_processing_time = max(self.max_processing_time, processing_time)
+        self.min_processing_time = min(self.min_processing_time, processing_time)
+        
+        # Log timing every 30 frames or when debug is enabled
+        if self.frame_count % 30 == 0 or self.enable_debug_output:
+            avg_time = self.total_processing_time / self.frame_count
+            faces_count = len(landmarks_msg.ids) if landmarks_msg and landmarks_msg.ids else 0
+            self.get_logger().info(
+                f"[TIMING] Gaze Estimation - Frame #{self.frame_count}: "
+                f"Current: {processing_time:.2f}ms, "
+                f"Avg: {avg_time:.2f}ms, "
+                f"Min: {self.min_processing_time:.2f}ms, "
+                f"Max: {self.max_processing_time:.2f}ms, "
+                f"Faces: {faces_count}"
+            )
+
+    def process_landmarks_array(self, landmarks_msg, cv_image=None):
+        """
+        Process landmarks array and compute gaze for all faces.
+        
+        Args:
+            landmarks_msg: FacialLandmarksArray message
+            cv_image: OpenCV image for visualization (optional)
+        """
+        if not landmarks_msg.ids:
+            if self.enable_debug_output:
+                self.get_logger().debug('Received empty FacialLandmarksArray')
+            return
+
+        if self.enable_debug_output:
+            self.get_logger().debug(f'Processing FacialLandmarksArray with {len(landmarks_msg.ids)} faces')
+        
+        try:
+            # Process each face in the array
+            for facial_landmarks_msg in landmarks_msg.ids:
+                try:
+                    self.process_single_face_landmarks(facial_landmarks_msg, cv_image)
+                except Exception as e:
+                    self.get_logger().error(f'Error processing face {facial_landmarks_msg.face_id}: {str(e)}')
+        
+        except Exception as e:
+            self.get_logger().error(f'Error in facial landmarks array processing: {e}')
     
     def declare_and_get_parameters(self):
         """Declare and get all ROS2 parameters."""
@@ -141,6 +276,10 @@ class GazeEstimationNode(Node):
         self.declare_parameter('output_topic', '/people/faces/gaze')
         self.input_topic = self.get_parameter('input_topic').get_parameter_value().string_value
         self.output_topic = self.get_parameter('output_topic').get_parameter_value().string_value
+        
+        # Processing rate parameter (copied from perception node)
+        self.declare_parameter('processing_rate_hz', 30.0)  # Default 30 Hz
+        self.processing_rate_hz = self.get_parameter('processing_rate_hz').get_parameter_value().double_value
         
         # Declare and get camera parameters
         # Note: image_width and image_height will be taken from FacialLandmarks message
@@ -231,56 +370,17 @@ class GazeEstimationNode(Node):
         Args:
             msg: FacialLandmarksArray message containing multiple face landmarks
         """
-        # Start timing
-        start_time = time.time()
-        
-        if not msg.ids:
-            if self.enable_debug_output:
-                self.get_logger().debug('Received empty FacialLandmarksArray')
-            return
+        # Store the latest landmarks array for processing
+        self.latest_landmarks_array = msg
+        self.landmarks_processed = False
 
-        if self.enable_debug_output:
-            self.get_logger().debug(f'Processing FacialLandmarksArray with {len(msg.ids)} faces')
-        
-        try:
-            # Process each face in the array
-            for facial_landmarks_msg in msg.ids:
-                try:
-                    self.process_single_face_landmarks(facial_landmarks_msg)
-                except Exception as e:
-                    self.get_logger().error(f'Error processing face {facial_landmarks_msg.face_id}: {str(e)}')
-        
-        except Exception as e:
-            self.get_logger().error(f'Error in facial landmarks array callback: {e}')
-        
-        finally:
-            # Calculate and log timing information
-            processing_time = (time.time() - start_time) * 1000  # Convert to milliseconds
-            self.frame_count += 1
-            
-            # Update timing statistics
-            self.total_processing_time += processing_time
-            self.max_processing_time = max(self.max_processing_time, processing_time)
-            self.min_processing_time = min(self.min_processing_time, processing_time)
-            
-            # Log timing every 30 frames or when debug is enabled
-            if self.frame_count % 30 == 0 or self.enable_debug_output:
-                avg_time = self.total_processing_time / self.frame_count
-                self.get_logger().info(
-                    f"[TIMING] Gaze Estimation - Frame #{self.frame_count}: "
-                    f"Current: {processing_time:.2f}ms, "
-                    f"Avg: {avg_time:.2f}ms, "
-                    f"Min: {self.min_processing_time:.2f}ms, "
-                    f"Max: {self.max_processing_time:.2f}ms, "
-                    f"Faces: {len(msg.ids)}"
-                )
-    
-    def process_single_face_landmarks(self, msg):
+    def process_single_face_landmarks(self, msg, cv_image=None):
         """
         Process a single facial landmarks message (extracted from the original callback).
         
         Args:
             msg: FacialLandmarks message containing face landmarks
+            cv_image: OpenCV image for visualization (optional)
         """
         # Update image dimensions and camera parameters from message
         self.update_camera_parameters_from_message(msg)
@@ -313,8 +413,8 @@ class GazeEstimationNode(Node):
                 self.last_publish_time = current_time
                 
                 # Publish gaze visualization if enabled
-                if self.enable_image_output:
-                    self.publish_gaze_visualization(msg, gaze_score, gaze_direction, pitch, yaw, roll)
+                if self.enable_image_output and cv_image is not None:
+                    self.publish_gaze_visualization(cv_image, msg, gaze_score, gaze_direction, pitch, yaw, roll)
                 
                 if self.enable_debug_output:
                     self.get_logger().debug(
@@ -325,29 +425,13 @@ class GazeEstimationNode(Node):
         except Exception as e:
             self.get_logger().error(f'Error processing facial landmarks: {str(e)}')
 
-    def image_callback(self, msg: Image):
-        """
-        Callback for receiving RGB images for gaze visualization.
-        
-        Args:
-            msg: sensor_msgs/Image message
-        """
-        try:
-            # Store the latest image for gaze visualization
-            self.latest_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-            
-            if self.enable_debug_output:
-                self.get_logger().debug(f'Received image: {self.latest_image.shape if self.latest_image is not None else "None"}')
-            
-        except Exception as e:
-            self.get_logger().error(f'Error processing image: {str(e)}')
-    
-    def publish_gaze_visualization(self, landmarks_msg, gaze_score: float, 
+    def publish_gaze_visualization(self, image, landmarks_msg, gaze_score: float, 
                                  gaze_direction, pitch: float, yaw: float, roll: float):
         """
         Publish image with gaze visualization overlay.
         
         Args:
+            image: OpenCV image
             landmarks_msg: FacialLandmarks message
             gaze_score: Computed gaze confidence score
             gaze_direction: Gaze direction vector
@@ -355,14 +439,14 @@ class GazeEstimationNode(Node):
             yaw: Head yaw angle in degrees  
             roll: Head roll angle in degrees
         """
-        if not self.enable_image_output or self.latest_image is None:
+        if not self.enable_image_output or image is None:
             if self.enable_debug_output:
-                self.get_logger().debug(f'Skipping gaze visualization: enable_image_output={self.enable_image_output}, latest_image={self.latest_image is not None}')
+                self.get_logger().debug(f'Skipping gaze visualization: enable_image_output={self.enable_image_output}, image={image is not None}')
             return
             
         try:
             # Create a copy for annotation
-            annotated_image = self.latest_image.copy()
+            annotated_image = image.copy()
             
             # Extract face bounding box from landmarks message
             if len(landmarks_msg.bbox_xyxy) >= 4:

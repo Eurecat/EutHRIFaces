@@ -41,7 +41,6 @@ RUN apt-get update && \
  
 # Copy local ROS2 packages
 COPY deps/hri_msgs /workspace/src/hri_msgs
-COPY deps/eut_yolo/src/eut_yolo_interfaces /workspace/src/eut_yolo_interfaces
 
 # ------------------------------------------------------------
 # Install dependencies

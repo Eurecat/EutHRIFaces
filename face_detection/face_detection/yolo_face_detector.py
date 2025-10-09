@@ -3,7 +3,6 @@
 YOLO-based face detection implementation for ROS2 face detection node.
 
 This detector uses a YOLOv8-based face detection model with landmarks support.
-Adapted from eut_yolo_core for standalone ROS2 usage.
 """
 import os
 import math

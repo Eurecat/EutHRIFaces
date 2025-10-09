@@ -35,6 +35,7 @@ def _setup_gaze_estimation(context, *args, **kwargs):
             {
                 'input_topic': LaunchConfiguration('input_topic'),
                 'output_topic': LaunchConfiguration('output_topic'),
+                'processing_rate_hz': LaunchConfiguration('processing_rate_hz'),
                 'focal_length': LaunchConfiguration('focal_length'),
                 'center_x_ratio': LaunchConfiguration('center_x_ratio'),
                 'center_y_ratio': LaunchConfiguration('center_y_ratio'),
@@ -127,6 +128,12 @@ def generate_launch_description():
         description='Output image topic with gaze visualization'
     )
     
+    processing_rate_hz_arg = DeclareLaunchArgument(
+        'processing_rate_hz',
+        default_value='30.0',
+        description='Processing rate in Hz'
+    )
+    
     return LaunchDescription([
         config_file_arg,
         input_topic_arg,
@@ -138,5 +145,6 @@ def generate_launch_description():
         enable_image_output_arg,
         image_input_topic_arg,
         image_output_topic_arg,
+        processing_rate_hz_arg,
         OpaqueFunction(function=_setup_gaze_estimation),
     ])

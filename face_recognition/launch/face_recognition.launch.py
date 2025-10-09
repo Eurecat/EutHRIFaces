@@ -41,6 +41,7 @@ def _setup_face_recognition(context, *args, **kwargs):
                 'input_topic': LaunchConfiguration('input_topic'),
                 'output_topic': LaunchConfiguration('output_topic'),
                 'image_input_topic': LaunchConfiguration('image_input_topic'),
+                'processing_rate_hz': LaunchConfiguration('processing_rate_hz'),
                 'device': LaunchConfiguration('device'),
                 'face_embedding_model': LaunchConfiguration('face_embedding_model'),
                 'weights_path': LaunchConfiguration('weights_path'),
@@ -51,8 +52,6 @@ def _setup_face_recognition(context, *args, **kwargs):
                 'identity_timeout': LaunchConfiguration('identity_timeout'),
                 'identity_database_path': LaunchConfiguration('identity_database_path'),
                 'enable_debug_prints': LaunchConfiguration('enable_debug_prints'),
-                'batch_processing_enabled': LaunchConfiguration('batch_processing_enabled'),
-                'max_batch_size': LaunchConfiguration('max_batch_size'),
                 'receiver_id': LaunchConfiguration('receiver_id'),
             }
         ],
@@ -128,19 +127,19 @@ def generate_launch_description():
     # Identity management parameters
     similarity_threshold_arg = DeclareLaunchArgument(
         'similarity_threshold',
-        default_value='0.6',
+        default_value='0.35',
         description='Minimum similarity threshold for identity assignment'
     )
     
     clustering_threshold_arg = DeclareLaunchArgument(
         'clustering_threshold',
-        default_value='0.7',
+        default_value='0.4',
         description='Threshold for clustering embeddings into identities'
     )
     
     max_embeddings_per_identity_arg = DeclareLaunchArgument(
         'max_embeddings_per_identity',
-        default_value='50',
+        default_value='150',
         description='Maximum embeddings to store per identity'
     )
     
@@ -155,30 +154,22 @@ def generate_launch_description():
         default_value='',
         description='Path to persistent identity database JSON file'
     )
-    
     enable_debug_prints_arg = DeclareLaunchArgument(
         'enable_debug_prints',
-        default_value='false',
+        default_value='true',
         description='Enable detailed debug output'
     )
-    
-    # Processing parameters
-    batch_processing_enabled_arg = DeclareLaunchArgument(
-        'batch_processing_enabled',
-        default_value='true',
-        description='Enable batch processing for better performance'
-    )
-    
-    max_batch_size_arg = DeclareLaunchArgument(
-        'max_batch_size',
-        default_value='10',
-        description='Maximum number of faces to process in one batch'
-    )
-    
+
     receiver_id_arg = DeclareLaunchArgument(
         'receiver_id',
         default_value='face_recognition',
         description='Receiver ID for hri_msgs'
+    )
+    
+    processing_rate_hz_arg = DeclareLaunchArgument(
+        'processing_rate_hz',
+        default_value='30.0',
+        description='Processing rate in Hz'
     )
     
     return LaunchDescription([
@@ -197,9 +188,8 @@ def generate_launch_description():
         identity_timeout_arg,
         identity_database_path_arg,
         enable_debug_prints_arg,
-        batch_processing_enabled_arg,
-        max_batch_size_arg,
         receiver_id_arg,
+        processing_rate_hz_arg,
         
         # Node with virtual environment setup
         OpaqueFunction(function=_setup_face_recognition),
