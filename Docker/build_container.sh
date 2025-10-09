@@ -32,12 +32,16 @@ fi
 # Check arguments
 BASE_IMAGE="eut_ros_torch:jazzy"
 REBUILD=false
+NO_VCS=false
 for arg in "$@"; do
     if [ "$arg" == "--clean-rebuild" ]; then
         REBUILD=true
     fi
     if [ "$arg" == "--vulcanexus" ]; then
         BASE_IMAGE="eut_ros_vulcanexus_torch:jazzy"
+    fi
+    if [ "$arg" == "--no-vcs" ]; then
+        NO_VCS=true
     fi
 done
 
@@ -47,12 +51,16 @@ if $REBUILD; then
 fi
 
 # Import/update dependencies repository using VCS tools (currently empty)
-echo "Importing/updating dependencies repository using VCS..."
-if [ -s deps.repos ]; then
-    vcs import ${DEPS_DIR} < deps.repos
-    vcs pull ${DEPS_DIR}
+if ! $NO_VCS; then
+    echo "Importing/updating dependencies repository using VCS..."
+    if [ -s deps.repos ]; then
+        vcs import ${DEPS_DIR} < deps.repos
+        vcs pull ${DEPS_DIR}
+    else
+        echo "No external dependencies defined in deps.repos"
+    fi
 else
-    echo "No external dependencies defined in deps.repos"
+    echo "Skipping VCS operations..."
 fi
 
 # Display build configuration
