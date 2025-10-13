@@ -42,7 +42,7 @@ def _setup_gaze_estimation(context, *args, **kwargs):
                 'receiver_id': LaunchConfiguration('receiver_id'),
                 'enable_image_output': LaunchConfiguration('enable_image_output'),
                 'image_input_topic': LaunchConfiguration('image_input_topic'),
-                'image_output_topic': LaunchConfiguration('image_output_topic'),
+                'output_image_topic': LaunchConfiguration('output_image_topic'),
             }
         ],
         output='screen',
@@ -74,13 +74,13 @@ def generate_launch_description():
     
     input_topic_arg = DeclareLaunchArgument(
         'input_topic',
-        default_value='/people/faces/detected',
+        default_value='/humans/faces/detected',
         description='Input topic for facial landmarks'
     )
     
     output_topic_arg = DeclareLaunchArgument(
         'output_topic', 
-        default_value='/people/faces/gaze',
+        default_value='/humans/faces/gaze',
         description='Output topic for gaze messages'
     )
     
@@ -122,9 +122,9 @@ def generate_launch_description():
         description='Input image topic for visualization'
     )
     
-    image_output_topic_arg = DeclareLaunchArgument(
-        'image_output_topic',
-        default_value='/people/faces/gaze/image_with_gaze',
+    output_image_topic_arg = DeclareLaunchArgument(
+        'output_image_topic',
+        default_value='/humans/faces/gaze/annotated_img',
         description='Output image topic with gaze visualization'
     )
     
@@ -144,7 +144,7 @@ def generate_launch_description():
         receiver_id_arg,
         enable_image_output_arg,
         image_input_topic_arg,
-        image_output_topic_arg,
+        output_image_topic_arg,
         processing_rate_hz_arg,
         OpaqueFunction(function=_setup_gaze_estimation),
     ])

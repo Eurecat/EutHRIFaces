@@ -107,7 +107,7 @@ class GazeEstimationNode(Node):
             
             self.image_pub = self.create_publisher(
                 Image,
-                self.image_output_topic,
+                self.output_image_topic,
                 10
             )
 
@@ -143,7 +143,7 @@ class GazeEstimationNode(Node):
         self.get_logger().info(f'Publishing to: {self.output_topic}')
         if self.enable_image_output:
             self.get_logger().info(f'Image input topic: {self.image_input_topic}')
-            self.get_logger().info(f'Image output topic: {self.image_output_topic}')
+            self.get_logger().info(f'Image output topic: {self.output_image_topic}')
         else:
             self.get_logger().info('Image output disabled')
         self.get_logger().info(f'Camera parameters: focal_length={self.focal_length}, '
@@ -272,8 +272,8 @@ class GazeEstimationNode(Node):
     def declare_and_get_parameters(self):
         """Declare and get all ROS2 parameters."""
         # Declare and get topic parameters
-        self.declare_parameter('input_topic', '/people/faces/detected')
-        self.declare_parameter('output_topic', '/people/faces/gaze')
+        self.declare_parameter('input_topic', '/humans/faces/detected')
+        self.declare_parameter('output_topic', '/humans/faces/gaze')
         self.input_topic = self.get_parameter('input_topic').get_parameter_value().string_value
         self.output_topic = self.get_parameter('output_topic').get_parameter_value().string_value
         
@@ -321,12 +321,12 @@ class GazeEstimationNode(Node):
         # Declare and get image visualization parameters
         self.declare_parameter('enable_image_output', True)
         self.declare_parameter('image_input_topic', '/camera/color/image_rect_raw')
-        self.declare_parameter('image_output_topic', '/people/faces/gaze/image_with_gaze')
+        self.declare_parameter('output_image_topic', '/humans/faces/gaze/annotated_img')
         self.enable_debug_output = self.get_parameter('enable_debug_output').get_parameter_value().bool_value
         self.publish_rate = self.get_parameter('publish_rate').get_parameter_value().double_value
         self.enable_image_output = self.get_parameter('enable_image_output').get_parameter_value().bool_value
         self.image_input_topic = self.get_parameter('image_input_topic').get_parameter_value().string_value
-        self.image_output_topic = self.get_parameter('image_output_topic').get_parameter_value().string_value
+        self.output_image_topic = self.get_parameter('output_image_topic').get_parameter_value().string_value
 
     
     def setup_camera_matrix(self):

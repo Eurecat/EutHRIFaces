@@ -88,7 +88,7 @@ def generate_launch_description():
     
     output_topic_arg = DeclareLaunchArgument(
         'output_topic', 
-        default_value='/people/faces/detected',
+        default_value='/humans/faces/detected',
         description='Output facial landmarks topic'
     )
     
@@ -152,7 +152,7 @@ def generate_launch_description():
     # Image visualization parameters  
     output_image_topic_arg = DeclareLaunchArgument(
         'output_image_topic',
-        default_value='/people/faces/detected/image_with_faces',
+        default_value='/humans/faces/detected/annotated_img',
         description='Output topic for visualization images'
     )
     

@@ -34,11 +34,11 @@ The package follows the EUT YOLO identity management approach with these key com
 ## Input/Output
 
 ### Input Topics
-- `/people/faces/detected` (hri_msgs/FacialLandmarksArray): Face detection results with bounding boxes and landmarks
+- `/humans/faces/detected` (hri_msgs/FacialLandmarksArray): Face detection results with bounding boxes and landmarks
 - `/camera/color/image_rect_raw` (sensor_msgs/Image): RGB camera images for face cropping
 
 ### Output Topics
-- `/people/faces/recognized` (hri_msgs/FacialRecognition): Recognition results with persistent unique IDs
+- `/humans/faces/recognized` (hri_msgs/FacialRecognition): Recognition results with persistent unique IDs
 
 ## Installation
 

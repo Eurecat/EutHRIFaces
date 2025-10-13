@@ -83,13 +83,13 @@ def generate_launch_description():
     
     input_topic_arg = DeclareLaunchArgument(
         'input_topic',
-        default_value='/people/faces/detected',
+        default_value='/humans/faces/detected',
         description='Input topic for facial landmarks'
     )
     
     output_topic_arg = DeclareLaunchArgument(
         'output_topic', 
-        default_value='/people/faces/recognized',
+        default_value='/humans/faces/recognized',
         description='Output topic for facial recognition results'
     )
     

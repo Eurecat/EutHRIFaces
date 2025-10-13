@@ -77,8 +77,8 @@ ros2 launch gaze_estimation gaze_estimation.launch.py \
 Launch with custom input/output topics:
 ```bash
 ros2 launch gaze_estimation gaze_estimation.launch.py \
-    input_topic:=/people/faces/detected \
-    output_topic:=/people/faces/gaze
+    input_topic:=/humans/faces/detected \
+    output_topic:=/humans/faces/gaze
 ```
 
 ## Configuration
@@ -89,9 +89,9 @@ The node accepts the following parameters:
 
 #### Topics
 - `input_topic` (string): Input topic for FacialLandmarksArray messages
-  - Default: `/people/faces/detected`
+  - Default: `/humans/faces/detected`
 - `output_topic` (string): Output topic for Gaze messages  
-  - Default: `/people/faces/gaze`
+  - Default: `/humans/faces/gaze`
 
 #### Camera Parameters
 - `image_width` (int): Image width in pixels
@@ -194,7 +194,7 @@ geometry_msgs/Vector3 gaze_direction  # 3D gaze vector
 ## Troubleshooting
 
 ### No Gaze Messages Published
-- Check that input topic has FacialLandmarksArray messages: `ros2 topic echo /people/faces/detected`
+- Check that input topic has FacialLandmarksArray messages: `ros2 topic echo /humans/faces/detected`
 - Verify required landmarks are present in the messages
 - Check debug output for error messages
 

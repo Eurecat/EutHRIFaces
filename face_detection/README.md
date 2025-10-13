@@ -18,7 +18,7 @@ This ROS2 package provides face detection capabilities using YOLO face detection
 - **Type**: `sensor_msgs/Image` (BGR format)
 
 ### Output
-- **Topic**: `/people/faces/detected` (configurable)  
+- **Topic**: `/humans/faces/detected` (configurable)  
 - **Type**: `hri_msgs/FacialLandmarksArray`
 - **Optional Visualization**: `/face_detection/image_with_faces` (annotated image)
 
@@ -81,7 +81,7 @@ The package can be configured via:
 ### Key Parameters
 
 - `input_topic`: Input camera topic (default: `/camera/color/image_rect_raw`)
-- `output_topic`: Output landmarks topic (default: `/people/faces/detected`)
+- `output_topic`: Output landmarks topic (default: `/humans/faces/detected`)
 - `model_path`: Path to YOLO model file (default: `weights/yolov8n-face.onnx`)
 - `confidence_threshold`: Minimum face detection confidence (default: 0.5)
 - `iou_threshold`: IoU threshold for NMS (default: 0.4)

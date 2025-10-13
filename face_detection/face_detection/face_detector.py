@@ -259,8 +259,8 @@ class FaceDetectorNode(Node):
     def _declare_parameters(self):
         """Declare ROS2 parameters with default values."""
         self.declare_parameter('input_topic', '/camera/color/image_rect_raw')
-        self.declare_parameter('output_topic', '/people/faces/detected')
-        self.declare_parameter('output_image_topic', '/people/faces/detected/image_with_faces')
+        self.declare_parameter('output_topic', '/humans/faces/detected')
+        self.declare_parameter('output_image_topic', '/humans/faces/detected/annotated_img')
         
         # Processing rate parameter (copied from perception node)
         self.declare_parameter('processing_rate_hz', 30.0)  # Default 10 Hz

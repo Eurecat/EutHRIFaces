@@ -4,13 +4,13 @@
 face_recognition_node:
   ros__parameters:
     # Input/Output Topics
-    input_topic: '/people/faces/detected'
-    output_topic: '/people/faces/recognized'
+    input_topic: '/humans/faces/detected'
+    output_topic: '/humans/faces/recognized'
     image_input_topic: '/camera/color/image_rect_raw'
     
     # Image Output Parameters
     enable_image_output: true
-    image_output_topic: '/people/faces/recognized/image_with_recognition'
+    output_image_topic: '/humans/faces/recognized/annotated_img'
 
     # Face Embedding Parameters
     face_embedding_model: 'vggface2'  # Options: 'vggface2', 'casia-webface'

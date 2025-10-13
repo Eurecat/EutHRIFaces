@@ -255,8 +255,8 @@ class FaceRecognitionNode(Node):
     def _declare_parameters(self):
         """Declare ROS2 parameters."""
         # Input/Output topics
-        self.declare_parameter('input_topic', '/people/faces/detected')
-        self.declare_parameter('output_topic', '/people/faces/recognized')
+        self.declare_parameter('input_topic', '/humans/faces/detected')
+        self.declare_parameter('output_topic', '/humans/faces/recognized')
         self.declare_parameter('image_input_topic', '/camera/color/image_rect_raw')
         
         # Processing rate parameter (copied from perception node)
@@ -267,7 +267,7 @@ class FaceRecognitionNode(Node):
         
         # Image output parameters
         self.declare_parameter('enable_image_output', True)
-        self.declare_parameter('image_output_topic', '/people/faces/recognized/image_with_recognition')
+        self.declare_parameter('output_image_topic', '/humans/faces/recognized/annotated_img')
         
         # Face embedding parameters
         self.declare_parameter('face_embedding_model', 'vggface2')
@@ -319,13 +319,13 @@ class FaceRecognitionNode(Node):
         # Image output publisher (optional)
         self.enable_image_output = self.get_parameter('enable_image_output').get_parameter_value().bool_value
         if self.enable_image_output:
-            image_output_topic = self.get_parameter('image_output_topic').get_parameter_value().string_value
+            output_image_topic = self.get_parameter('output_image_topic').get_parameter_value().string_value
             self.image_output_publisher = self.create_publisher(
                 Image,
-                image_output_topic,
+                output_image_topic,
                 self.qos_profile
             )
-            self.get_logger().info(f"Image output enabled: {image_output_topic}")
+            self.get_logger().info(f"Image output enabled: {output_image_topic}")
         else:
             self.image_output_publisher = None
         
