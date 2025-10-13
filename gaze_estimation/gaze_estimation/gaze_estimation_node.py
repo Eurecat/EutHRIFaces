@@ -19,13 +19,14 @@ import cv2
 import time
 
 try:
-    from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, Gaze
+    from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, Gaze, GazeArray
 except ImportError:
     # Fallback in case hri_msgs is not available
     print("Warning: hri_msgs not found. Please install hri_msgs package.")
     FacialLandmarks = None
     FacialLandmarksArray = None
     Gaze = None
+    GazeArray = None
 from geometry_msgs.msg import Vector3
 from std_msgs.msg import Header
 from sensor_msgs.msg import Image
@@ -66,8 +67,9 @@ class GazeEstimationNode(Node):
         
         # QoS profile for real-time applications (landmarks and gaze data)
         qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
             depth=10
         )
         
@@ -87,10 +89,12 @@ class GazeEstimationNode(Node):
         )
         
         self.gaze_pub = self.create_publisher(
-            Gaze,
+            GazeArray,
             self.output_topic,
             qos_profile
         )
+        
+        self.get_logger().info("Publishing GazeArray messages")
         
         # Initialize CV bridge for image handling
         self.bridge = CvBridge()
@@ -258,13 +262,26 @@ class GazeEstimationNode(Node):
         if self.enable_debug_output:
             self.get_logger().debug(f'Processing FacialLandmarksArray with {len(landmarks_msg.ids)} faces')
         
+        gaze_array_msg = GazeArray()
+        gaze_array_msg.header = Header()
+        gaze_array_msg.header.stamp = self.get_clock().now().to_msg()
+        gaze_array_msg.header.frame_id = landmarks_msg.header.frame_id
+        
         try:
             # Process each face in the array
             for facial_landmarks_msg in landmarks_msg.ids:
                 try:
-                    self.process_single_face_landmarks(facial_landmarks_msg, cv_image)
+                    gaze_msg = self.process_single_face_landmarks(facial_landmarks_msg, cv_image)
+                    if gaze_msg:
+                        gaze_array_msg.gaze_array.append(gaze_msg)
                 except Exception as e:
                     self.get_logger().error(f'Error processing face {facial_landmarks_msg.face_id}: {str(e)}')
+            
+            # Publish the GazeArray message
+            self.gaze_pub.publish(gaze_array_msg)
+            
+            if self.enable_debug_output:
+                self.get_logger().info(f"Published GazeArray with {len(gaze_array_msg.gaze_array)} faces")
         
         except Exception as e:
             self.get_logger().error(f'Error in facial landmarks array processing: {e}')
@@ -398,7 +415,7 @@ class GazeEstimationNode(Node):
             if gaze_result is not None:
                 gaze_score, gaze_direction, pitch, yaw, roll = gaze_result
                 
-                # Create and publish Gaze message
+                # Create Gaze message
                 gaze_msg = Gaze()
                 gaze_msg.header = Header()
                 gaze_msg.header.stamp = self.get_clock().now().to_msg()
@@ -409,7 +426,6 @@ class GazeEstimationNode(Node):
                 gaze_msg.score = float(gaze_score)
                 gaze_msg.gaze_direction = gaze_direction
                 
-                self.gaze_pub.publish(gaze_msg)
                 self.last_publish_time = current_time
                 
                 # Publish gaze visualization if enabled
@@ -421,9 +437,12 @@ class GazeEstimationNode(Node):
                         f'Face {msg.face_id}: gaze_score={gaze_score:.3f}, '
                         f'yaw={yaw:.1f}°, pitch={pitch:.1f}°, roll={roll:.1f}°'
                     )
+                
+                return gaze_msg
             
         except Exception as e:
             self.get_logger().error(f'Error processing facial landmarks: {str(e)}')
+            return None
 
     def publish_gaze_visualization(self, image, landmarks_msg, gaze_score: float, 
                                  gaze_direction, pitch: float, yaw: float, roll: float):

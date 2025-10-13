@@ -21,12 +21,13 @@ import os
 from typing import Dict, List, Optional, Tuple, Any
 
 try:
-    from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, FacialRecognition
+    from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, FacialRecognition, FacialRecognitionArray
 except ImportError:
     print("Warning: hri_msgs not found. Please install hri_msgs package.")
     FacialLandmarks = None
     FacialLandmarksArray = None
     FacialRecognition = None
+    FacialRecognitionArray = None
 
 from std_msgs.msg import Header
 from sensor_msgs.msg import Image
@@ -309,9 +310,9 @@ class FaceRecognitionNode(Node):
             self.qos_profile
         )
         
-        # Publisher for facial recognition results
+        # Publisher for facial recognition array results
         self.recognition_publisher = self.create_publisher(
-            FacialRecognition,
+            FacialRecognitionArray,
             output_topic,
             self.qos_profile
         )
@@ -331,6 +332,7 @@ class FaceRecognitionNode(Node):
         
         self.get_logger().info(f"Subscribed to: {input_topic}")
         self.get_logger().info(f"Publishing to: {output_topic}")
+        self.get_logger().info("Publishing FacialRecognitionArray messages")
     
     def _initialize_components(self):
         """Initialize face embedding extractor and identity manager."""
@@ -474,6 +476,8 @@ class FaceRecognitionNode(Node):
         
         if not face_crops:
             self.get_logger().warning("No valid face crops extracted from landmarks array")
+            # Publish empty array when no valid faces
+            self._publish_recognition_array([])
             return
         
         # Check if face embedding extractor is available
@@ -520,10 +524,8 @@ class FaceRecognitionNode(Node):
                 identity_time = (time.time() - identity_start_time) * 1000
                 self.get_logger().info(f"Identity processing took: {identity_time:.2f}ms for {len(face_embeddings)} faces")
             
-            # Publish results for each valid face
-            if self.enable_debug_prints:
-                publish_start_time = time.time()
-            
+            # Collect results for batch publishing
+            recognition_results = []
             for i in valid_indices:
                 face_id = face_ids[i]
                 landmarks_msg = landmarks_msgs[i]
@@ -532,21 +534,75 @@ class FaceRecognitionNode(Node):
                 if self.enable_debug_prints:
                     self.get_logger().debug(f"Face {face_id} -> Identity: {unique_id}, Confidence: {confidence:.3f}")
                 
-                self._publish_recognition_result(landmarks_msg, unique_id, confidence)
+                recognition_results.append((landmarks_msg, unique_id, confidence))
+            
+            # Publish recognition array for all faces
+            if self.enable_debug_prints:
+                publish_start_time = time.time()
+            
+            self._publish_recognition_array(recognition_results)
             
             # Publish annotated image with all recognitions if enabled
             if self.enable_image_output and self.image_output_publisher and valid_indices:
-                recognition_results = [(landmarks_msgs[i], identity_results.get(face_ids[i], (None, 0.0))) for i in valid_indices]
-                self._publish_batch_annotated_image(recognition_results)
+                image_recognition_results = [(landmarks_msgs[i], identity_results.get(face_ids[i], (None, 0.0))) for i in valid_indices]
+                self._publish_batch_annotated_image(image_recognition_results)
             
             if self.enable_debug_prints:
                 publish_time = (time.time() - publish_start_time) * 1000
                 self.get_logger().info(f"Publishing results took: {publish_time:.2f}ms for {len(valid_indices)} faces")
         else:
             self.get_logger().warning("No valid embeddings extracted for identity processing")
+            # Publish empty array when no valid embeddings
+            self._publish_recognition_array([])
             self._publish_batch_annotated_image(None)
-
-
+    
+    def _publish_recognition_array(self, recognition_results: List):
+        """Publish facial recognition results as a single array message."""
+        try:
+            # Create FacialRecognitionArray message
+            recognition_array_msg = FacialRecognitionArray()
+            
+            # Set header with current timestamp if we have results, otherwise use current time
+            if recognition_results:
+                # Use header from first landmarks message
+                recognition_array_msg.header = recognition_results[0][0].header
+            else:
+                recognition_array_msg.header = Header()
+                recognition_array_msg.header.stamp = self.get_clock().now().to_msg()
+                recognition_array_msg.header.frame_id = "camera_color_optical_frame"  # Default frame
+            
+            # Create individual recognition messages
+            facial_recognition_msgs = []
+            for landmarks_msg, unique_id, confidence in recognition_results:
+                recognition_msg = FacialRecognition()
+                
+                # Copy header from landmarks message
+                recognition_msg.header = landmarks_msg.header
+                
+                # Set face_id from original message
+                recognition_msg.face_id = landmarks_msg.face_id
+                
+                # Set recognized face ID and confidence
+                if unique_id is not None:
+                    recognition_msg.recognized_face_id = unique_id
+                    recognition_msg.confidence = float(confidence)
+                else:
+                    recognition_msg.recognized_face_id = "unknown"
+                    recognition_msg.confidence = 0.0
+                
+                facial_recognition_msgs.append(recognition_msg)
+            
+            # Set the array
+            recognition_array_msg.facial_recognition = facial_recognition_msgs
+            
+            # Publish the array message
+            self.recognition_publisher.publish(recognition_array_msg)
+            
+            if self.enable_debug_prints:
+                self.get_logger().info(f"Published FacialRecognitionArray with {len(facial_recognition_msgs)} faces")
+            
+        except Exception as e:
+            self.get_logger().error(f"Failed to publish recognition array: {e}")
     
     def _extract_face_crop_from_landmarks(self, msg) -> Optional[np.ndarray]:
         """Extract face crop from landmarks message using bounding box."""
@@ -641,37 +697,6 @@ class FaceRecognitionNode(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to extract face crop: {e}")
             return None
-    
-
-    
-    def _publish_recognition_result(self, landmarks_msg, unique_id: Optional[str], confidence: float):
-        """Publish facial recognition result."""
-        try:
-            # Create FacialRecognition message
-            recognition_msg = FacialRecognition()
-            
-            # Copy header from landmarks message
-            recognition_msg.header = landmarks_msg.header
-            
-            # Set face_id from original message
-            recognition_msg.face_id = landmarks_msg.face_id
-            
-            # Set recognized face ID and confidence
-            if unique_id is not None:
-                recognition_msg.recognized_face_id = unique_id
-                recognition_msg.confidence = float(confidence)
-            else:
-                recognition_msg.recognized_face_id = "unknown"
-                recognition_msg.confidence = 0.0
-            
-            # Publish the message
-            self.recognition_publisher.publish(recognition_msg)
-            
-            if unique_id:
-                self.get_logger().debug(f"Published recognition: {landmarks_msg.face_id} -> {unique_id} (confidence: {confidence:.3f})")
-            
-        except Exception as e:
-            self.get_logger().error(f"Failed to publish recognition result: {e}")
     
 
     def _publish_batch_annotated_image(self, recognition_results: List):
