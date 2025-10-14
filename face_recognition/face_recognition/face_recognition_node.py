@@ -610,22 +610,30 @@ class FaceRecognitionNode(Node):
             if self.enable_debug_prints:
                 self.get_logger().debug(f"Extracting face crop for face_id: {msg.face_id}")
                 self.get_logger().debug(f"Bbox confidence: {msg.bbox_confidence}")
-                self.get_logger().debug(f"Bbox xyxy: {msg.bbox_xyxy}")
-                self.get_logger().debug(f"Bbox centroid: {msg.bbox_centroid}")
+                self.get_logger().debug(f"Bbox xyxy type: {type(msg.bbox_xyxy)}")
                 
-            # Use face bounding box from bbox_xyxy if available
-            if len(msg.bbox_xyxy) >= 4 and msg.bbox_confidence > 0:
-                # bbox_xyxy format: [x1, y1, x2, y2]
-                x1, y1, x2, y2 = msg.bbox_xyxy[:4]
+            # Use face bounding box from bbox_xyxy (now NormalizedRegionOfInterest2D)
+            if hasattr(msg.bbox_xyxy, 'xmin') and msg.bbox_confidence > 0:
+                # bbox_xyxy is now NormalizedRegionOfInterest2D with normalized coordinates [0,1]
+                # Denormalize to pixel coordinates
+                x1_norm, y1_norm = msg.bbox_xyxy.xmin, msg.bbox_xyxy.ymin
+                x2_norm, y2_norm = msg.bbox_xyxy.xmax, msg.bbox_xyxy.ymax
                 
-                # Convert to pixel coordinates (assuming they are already in pixels)
-                x = int(x1)
-                y = int(y1)
-                w = int(x2 - x1)
-                h = int(y2 - y1)
+                # Convert normalized coordinates to pixel coordinates
+                x1 = int(x1_norm * msg.width)
+                y1 = int(y1_norm * msg.height)
+                x2 = int(x2_norm * msg.width)
+                y2 = int(y2_norm * msg.height)
+                
+                # Convert to x, y, w, h format
+                x = x1
+                y = y1
+                w = x2 - x1
+                h = y2 - y1
                 
                 if self.enable_debug_prints:
-                    self.get_logger().debug(f"Using bbox_xyxy: x={x}, y={y}, w={w}, h={h}")
+                    self.get_logger().debug(f"Normalized bbox: ({x1_norm:.3f}, {y1_norm:.3f}, {x2_norm:.3f}, {y2_norm:.3f})")
+                    self.get_logger().debug(f"Pixel bbox: x={x}, y={y}, w={w}, h={h}")
                 
                 # Ensure coordinates are within image bounds
                 x = max(0, x)
@@ -636,7 +644,7 @@ class FaceRecognitionNode(Node):
                 if w > 0 and h > 0:
                     face_crop = self.last_image[y:y+h, x:x+w]
                     if self.enable_debug_prints:
-                        self.get_logger().debug(f"Extracted face crop from bbox: {face_crop.shape}")
+                        self.get_logger().debug(f"Extracted face crop from normalized bbox: {face_crop.shape}")
                     return face_crop
                 else:
                     if self.enable_debug_prints:
@@ -646,7 +654,7 @@ class FaceRecognitionNode(Node):
             landmarks = []
             valid_landmarks = 0
             for landmark in msg.landmarks:
-                if landmark.c > 0:  # Valid landmark
+                if landmark.c > 0:  # Valid landmark confidence
                     # Convert normalized coordinates to pixel coordinates
                     x_pixel = int(landmark.x * msg.width)
                     y_pixel = int(landmark.y * msg.height)
@@ -748,14 +756,17 @@ class FaceRecognitionNode(Node):
     def _draw_recognition_annotation(self, image: np.ndarray, landmarks_msg, unique_id: Optional[str], confidence: float):
         """Draw recognition annotation on the image."""
         try:
-            # Get face bounding box from bbox_xyxy
-            if len(landmarks_msg.bbox_xyxy) >= 4 and landmarks_msg.bbox_confidence > 0:
-                # bbox_xyxy format: [x1, y1, x2, y2]
-                x1, y1, x2, y2 = landmarks_msg.bbox_xyxy[:4]
-                x = int(x1)
-                y = int(y1)
-                w = int(x2 - x1)
-                h = int(y2 - y1)
+            # Get face bounding box from bbox_xyxy (now NormalizedRegionOfInterest2D type)
+            if hasattr(landmarks_msg.bbox_xyxy, 'xmin') and landmarks_msg.bbox_confidence > 0:
+                # Convert normalized coordinates to pixel coordinates
+                x1_norm, y1_norm = landmarks_msg.bbox_xyxy.xmin, landmarks_msg.bbox_xyxy.ymin
+                x2_norm, y2_norm = landmarks_msg.bbox_xyxy.xmax, landmarks_msg.bbox_xyxy.ymax
+                
+                # Convert normalized coordinates to pixel coordinates
+                x = int(x1_norm * landmarks_msg.width)
+                y = int(y1_norm * landmarks_msg.height)
+                w = int((x2_norm - x1_norm) * landmarks_msg.width)
+                h = int((y2_norm - y1_norm) * landmarks_msg.height)
                 
                 # Draw face bounding box
                 color = (0, 255, 0) if unique_id and unique_id != "unknown" else (0, 0, 255)  # Green for recognized, red for unknown

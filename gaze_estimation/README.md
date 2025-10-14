@@ -179,7 +179,7 @@ uint32 height
 uint32 width
 float32 bbox_confidence
 uint32[] bbox_xyxy
-float32[] bbox_centroid
+float32[] bbox_centroid # in pixel coordinates, msg: [x,y]
 ```
 
 ### Output: hri_msgs/Gaze

@@ -467,10 +467,21 @@ class GazeEstimationNode(Node):
             # Create a copy for annotation
             annotated_image = image.copy()
             
-            # Extract face bounding box from landmarks message
-            if len(landmarks_msg.bbox_xyxy) >= 4:
-                x1, y1, x2, y2 = landmarks_msg.bbox_xyxy[:4]
-                face_bbox = [x1, y1, x2 - x1, y2 - y1]  # Convert to [x, y, w, h] format
+            # Extract face bounding box from landmarks message (now NormalizedRegionOfInterest2D)
+            if hasattr(landmarks_msg.bbox_xyxy, 'xmin'):
+                # bbox_xyxy is now NormalizedRegionOfInterest2D with normalized coordinates [0,1]
+                # Denormalize to pixel coordinates
+                x1_norm, y1_norm = landmarks_msg.bbox_xyxy.xmin, landmarks_msg.bbox_xyxy.ymin
+                x2_norm, y2_norm = landmarks_msg.bbox_xyxy.xmax, landmarks_msg.bbox_xyxy.ymax
+                
+                # Convert normalized coordinates to pixel coordinates
+                x1 = int(x1_norm * landmarks_msg.width)
+                y1 = int(y1_norm * landmarks_msg.height)
+                x2 = int(x2_norm * landmarks_msg.width)
+                y2 = int(y2_norm * landmarks_msg.height)
+                
+                # Convert to [x, y, w, h] format for visualization
+                face_bbox = [x1, y1, x2 - x1, y2 - y1]
                 
                 # Draw gaze visualization
                 self._draw_gaze_on_image(annotated_image, face_bbox, landmarks_msg,
@@ -478,6 +489,9 @@ class GazeEstimationNode(Node):
                 
                 if self.enable_debug_output:
                     self.get_logger().debug(f'Drew gaze visualization for face {landmarks_msg.face_id}')
+            else:
+                if self.enable_debug_output:
+                    self.get_logger().debug(f'No valid bbox_xyxy for face {landmarks_msg.face_id}')
             
             # Convert back to ROS Image and publish
             annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')

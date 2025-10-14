@@ -19,7 +19,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import Image
-from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, NormalizedPointOfInterest2D
+from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, NormalizedPointOfInterest2D, NormalizedRegionOfInterest2D
 from std_msgs.msg import Header
 from cv_bridge import CvBridge
 from typing import Dict, List, Optional, Tuple, Any
@@ -400,7 +400,7 @@ class FaceDetectorNode(Node):
                 facial_landmarks_msg.height = height
                 facial_landmarks_msg.width = width
                 
-                # Set bounding box information
+                # Set bounding box information using NormalizedRegionOfInterest2D
                 facial_landmarks_msg.bbox_confidence = float(confidence)
                 x, y, w, h = face_bbox
                 
@@ -416,8 +416,18 @@ class FaceDetectorNode(Node):
                 if self.enable_debug_output:
                     self.get_logger().info(f"Clamped face {i}: bbox=({x}, {y}, {w}, {h})")
                 
-                # Use uint32 list for bbox_xyxy as per message definition
-                facial_landmarks_msg.bbox_xyxy = [int(x), int(y), int(x + w), int(y + h)]
+                # Create NormalizedRegionOfInterest2D for bbox_xyxy
+                bbox_roi = NormalizedRegionOfInterest2D()
+                bbox_roi.header = original_header
+                
+                # Normalize coordinates to [0,1] range
+                bbox_roi.xmin = float(x) / width
+                bbox_roi.ymin = float(y) / height
+                bbox_roi.xmax = float(x + w) / width
+                bbox_roi.ymax = float(y + h) / height
+                bbox_roi.c = float(confidence)
+                
+                facial_landmarks_msg.bbox_xyxy = bbox_roi
                 facial_landmarks_msg.bbox_centroid = [float(x + w/2.0), float(y + h/2.0)]
                 
                 # Convert YOLO 5-point landmarks to ros4hri format
