@@ -127,7 +127,7 @@ def generate_launch_description():
     # Identity management parameters
     similarity_threshold_arg = DeclareLaunchArgument(
         'similarity_threshold',
-        default_value='0.2',
+        default_value='0.3',
         description='Minimum similarity threshold for identity assignment'
     )
     

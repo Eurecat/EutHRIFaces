@@ -262,23 +262,47 @@ class GazeEstimationNode(Node):
         if self.enable_debug_output:
             self.get_logger().debug(f'Processing FacialLandmarksArray with {len(landmarks_msg.ids)} faces')
         
+        # Update camera parameters once per frame using the first face's message
+        # This assumes all faces in the same frame have the same image dimensions
+        if landmarks_msg.ids:
+            self.update_camera_parameters_from_message(landmarks_msg.ids[0])
+        
         gaze_array_msg = GazeArray()
         gaze_array_msg.header = Header()
         gaze_array_msg.header.stamp = self.get_clock().now().to_msg()
         gaze_array_msg.header.frame_id = landmarks_msg.header.frame_id
         
+        # For visualization - we'll collect gaze data for all faces
+        gaze_visualization_data = []
+        
         try:
             # Process each face in the array
             for facial_landmarks_msg in landmarks_msg.ids:
                 try:
-                    gaze_msg = self.process_single_face_landmarks(facial_landmarks_msg, cv_image)
+                    gaze_msg, gaze_data = self.process_single_face_landmarks(facial_landmarks_msg)
                     if gaze_msg:
                         gaze_array_msg.gaze_array.append(gaze_msg)
+                        if gaze_data:
+                            gaze_visualization_data.append((facial_landmarks_msg, gaze_data))
                 except Exception as e:
                     self.get_logger().error(f'Error processing face {facial_landmarks_msg.face_id}: {str(e)}')
             
             # Publish the GazeArray message
             self.gaze_pub.publish(gaze_array_msg)
+            
+            # Handle image visualization outside the per-face processing
+            if self.enable_image_output and cv_image is not None and gaze_visualization_data:
+                annotated_image = cv_image.copy()
+                for face_msg, (gaze_score, gaze_direction, pitch, yaw, roll) in gaze_visualization_data:
+                    self.draw_single_face_visualization(annotated_image, face_msg, gaze_score, gaze_direction, pitch, yaw, roll)
+                
+                # Convert to ROS Image and publish once
+                annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
+                annotated_msg.header = landmarks_msg.header
+                self.image_pub.publish(annotated_msg)
+                
+                if self.enable_debug_output:
+                    self.get_logger().debug(f'Published gaze visualization with {len(gaze_visualization_data)} faces')
             
             if self.enable_debug_output:
                 self.get_logger().info(f"Published GazeArray with {len(gaze_array_msg.gaze_array)} faces")
@@ -391,23 +415,18 @@ class GazeEstimationNode(Node):
         self.latest_landmarks_array = msg
         self.landmarks_processed = False
 
-    def process_single_face_landmarks(self, msg, cv_image=None):
+    def process_single_face_landmarks(self, msg):
         """
-        Process a single facial landmarks message (extracted from the original callback).
+        Process a single facial landmarks message.
         
         Args:
             msg: FacialLandmarks message containing face landmarks
-            cv_image: OpenCV image for visualization (optional)
+            
+        Returns:
+            Tuple of (gaze_msg, gaze_data) where:
+                - gaze_msg is the ROS Gaze message or None
+                - gaze_data is a tuple of (gaze_score, gaze_direction, pitch, yaw, roll) or None
         """
-        # Update image dimensions and camera parameters from message
-        self.update_camera_parameters_from_message(msg)
-        
-        # Rate limiting per face (optional - you might want to remove this for batch processing)
-        current_time = self.get_clock().now()
-        time_diff = (current_time - self.last_publish_time).nanoseconds / 1e9
-        if time_diff < self.min_publish_interval:
-            return
-        
         try:
             # Extract gaze information
             gaze_result = self.compute_gaze_from_landmarks(msg)
@@ -426,23 +445,64 @@ class GazeEstimationNode(Node):
                 gaze_msg.score = float(gaze_score)
                 gaze_msg.gaze_direction = gaze_direction
                 
-                self.last_publish_time = current_time
-                
-                # Publish gaze visualization if enabled
-                if self.enable_image_output and cv_image is not None:
-                    self.publish_gaze_visualization(cv_image, msg, gaze_score, gaze_direction, pitch, yaw, roll)
-                
                 if self.enable_debug_output:
                     self.get_logger().debug(
                         f'Face {msg.face_id}: gaze_score={gaze_score:.3f}, '
                         f'yaw={yaw:.1f}°, pitch={pitch:.1f}°, roll={roll:.1f}°'
                     )
                 
-                return gaze_msg
+                # Return both the message and the gaze data for visualization
+                return gaze_msg, (gaze_score, gaze_direction, pitch, yaw, roll)
+            
+            return None, None
             
         except Exception as e:
             self.get_logger().error(f'Error processing facial landmarks: {str(e)}')
-            return None
+            return None, None
+
+    def draw_single_face_visualization(self, image, landmarks_msg, gaze_score: float, 
+                                gaze_direction, pitch: float, yaw: float, roll: float):
+        """
+        Draw gaze visualization for a single face on the image.
+        
+        Args:
+            image: OpenCV image to draw on
+            landmarks_msg: FacialLandmarks message
+            gaze_score: Computed gaze confidence score
+            gaze_direction: Gaze direction vector
+            pitch: Head pitch angle in degrees
+            yaw: Head yaw angle in degrees  
+            roll: Head roll angle in degrees
+        """
+        try:
+            # Extract face bounding box from landmarks message (now NormalizedRegionOfInterest2D)
+            if hasattr(landmarks_msg.bbox_xyxy, 'xmin'):
+                # bbox_xyxy is now NormalizedRegionOfInterest2D with normalized coordinates [0,1]
+                # Denormalize to pixel coordinates
+                x1_norm, y1_norm = landmarks_msg.bbox_xyxy.xmin, landmarks_msg.bbox_xyxy.ymin
+                x2_norm, y2_norm = landmarks_msg.bbox_xyxy.xmax, landmarks_msg.bbox_xyxy.ymax
+                
+                # Convert normalized coordinates to pixel coordinates
+                x1 = int(x1_norm * landmarks_msg.width)
+                y1 = int(y1_norm * landmarks_msg.height)
+                x2 = int(x2_norm * landmarks_msg.width)
+                y2 = int(y2_norm * landmarks_msg.height)
+                
+                # Convert to [x, y, w, h] format for visualization
+                face_bbox = [x1, y1, x2 - x1, y2 - y1]
+                
+                # Draw gaze visualization
+                self._draw_gaze_on_image(image, face_bbox, landmarks_msg,
+                                      gaze_score, gaze_direction, pitch, yaw, roll)
+                
+                if self.enable_debug_output:
+                    self.get_logger().debug(f'Drew gaze visualization for face {landmarks_msg.face_id}')
+            else:
+                if self.enable_debug_output:
+                    self.get_logger().debug(f'No valid bbox_xyxy for face {landmarks_msg.face_id}')
+                
+        except Exception as e:
+            self.get_logger().error(f'Error drawing gaze visualization for face {landmarks_msg.face_id}: {str(e)}')
 
     def publish_gaze_visualization(self, image, landmarks_msg, gaze_score: float, 
                                  gaze_direction, pitch: float, yaw: float, roll: float):

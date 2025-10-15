@@ -561,7 +561,7 @@ class IdentityManager:
             
             if self.enable_debug_prints:
                 print(f"[IDENTITY_DEBUG] Fast mode: computed similarity matrix shape: {similarity_matrix.shape}")
-        
+                print(f"[IDENTITY_DEBUG] Similarity matrix:\n{similarity_matrix}")
         # Find merge candidates
         merge_candidates = []
         
