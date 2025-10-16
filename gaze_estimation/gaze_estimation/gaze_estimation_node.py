@@ -12,7 +12,7 @@ to avoid code duplication and improve maintainability.
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy, QoSReliabilityPolicy, QoSHistoryPolicy
 
 import numpy as np
 import cv2
@@ -65,21 +65,13 @@ class GazeEstimationNode(Node):
         self.color_image_processed = False
         self.latest_color_image_timestamp = None
         
-        # QoS profile for real-time applications (landmarks and gaze data)
-        qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10
-        )
-        
         # Setup QoS profiles (copied from perception node)
-        sensor_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1
+        qos_profile = QoSProfile(
+            depth=1,  # Keep only the latest image
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            #durability=DurabilityPolicy.VOLATILE,
+            history=QoSHistoryPolicy.KEEP_LAST,
         )
-        
         # Create subscriber and publisher
         self.facial_landmarks_sub = self.create_subscription(
             FacialLandmarksArray,
@@ -106,7 +98,7 @@ class GazeEstimationNode(Node):
                 Image, 
                 self.image_input_topic, 
                 self._store_latest_rgb, 
-                sensor_qos
+                qos_profile
             )
             
             self.image_pub = self.create_publisher(
@@ -268,10 +260,8 @@ class GazeEstimationNode(Node):
             self.update_camera_parameters_from_message(landmarks_msg.ids[0])
         
         gaze_array_msg = GazeArray()
-        gaze_array_msg.header = Header()
-        gaze_array_msg.header.stamp = self.get_clock().now().to_msg()
-        gaze_array_msg.header.frame_id = landmarks_msg.header.frame_id
-        
+        gaze_array_msg.header = landmarks_msg.header if landmarks_msg.header is not None else Header()
+
         # For visualization - we'll collect gaze data for all faces
         gaze_visualization_data = []
         
@@ -298,7 +288,7 @@ class GazeEstimationNode(Node):
                 
                 # Convert to ROS Image and publish once
                 annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
-                annotated_msg.header = landmarks_msg.header
+                annotated_msg.header = landmarks_msg.header if landmarks_msg.header is not None else Header()
                 self.image_pub.publish(annotated_msg)
                 
                 if self.enable_debug_output:
@@ -436,9 +426,7 @@ class GazeEstimationNode(Node):
                 
                 # Create Gaze message
                 gaze_msg = Gaze()
-                gaze_msg.header = Header()
-                gaze_msg.header.stamp = self.get_clock().now().to_msg()
-                gaze_msg.header.frame_id = msg.header.frame_id
+                gaze_msg.header = msg.header if msg.header is not None else Header()
                 
                 gaze_msg.sender = msg.face_id
                 gaze_msg.receiver = self.receiver_id

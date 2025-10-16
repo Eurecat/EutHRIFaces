@@ -17,7 +17,7 @@ import os
 import time
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy, QoSReliabilityPolicy, QoSHistoryPolicy
 from sensor_msgs.msg import Image
 from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, NormalizedPointOfInterest2D, NormalizedRegionOfInterest2D
 from std_msgs.msg import Header
@@ -67,10 +67,12 @@ class FaceDetectorNode(Node):
         
         # Setup QoS profiles (copied from perception node)
         sensor_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1
+            depth=1,  # Keep only the latest image
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            #durability=DurabilityPolicy.VOLATILE,
+            history=QoSHistoryPolicy.KEEP_LAST,
         )
+    
         
         # Create RGB-only subscriber (copied from perception node RGB-only pattern)
         self.get_logger().info("Setting up RGB-only processing")
