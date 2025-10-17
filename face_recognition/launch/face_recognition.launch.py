@@ -151,7 +151,7 @@ def generate_launch_description():
     
     identity_database_path_arg = DeclareLaunchArgument(
         'identity_database_path',
-        default_value='',
+        default_value='src/face_recognition/database/identity_database.json',
         description='Path to persistent identity database JSON file'
     )
     enable_debug_prints_arg = DeclareLaunchArgument(

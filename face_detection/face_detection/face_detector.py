@@ -68,9 +68,9 @@ class FaceDetectorNode(Node):
         # Setup QoS profiles (copied from perception node)
         sensor_qos = QoSProfile(
             depth=1,  # Keep only the latest image
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            # reliability=QoSReliabilityPolicy.BEST_EFFORT,
             # durability=DurabilityPolicy.VOLATILE,
-            history=QoSHistoryPolicy.KEEP_LAST,
+            # history=QoSHistoryPolicy.KEEP_LAST,
         )
     
         

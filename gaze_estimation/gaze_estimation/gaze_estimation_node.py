@@ -68,9 +68,9 @@ class GazeEstimationNode(Node):
         # Setup QoS profiles (copied from perception node)
         qos_profile = QoSProfile(
             depth=1,  # Keep only the latest image
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            # reliability=QoSReliabilityPolicy.BEST_EFFORT,
             # durability=DurabilityPolicy.VOLATILE,
-            history=QoSHistoryPolicy.KEEP_LAST,
+            # history=QoSHistoryPolicy.KEEP_LAST,
         )
         # Create subscriber and publisher
         self.facial_landmarks_sub = self.create_subscription(

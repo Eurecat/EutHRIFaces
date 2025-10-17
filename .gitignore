@@ -209,3 +209,4 @@ __marimo__/
 face_detection/weights
 *.pt
 Docker/deps/
+face_recognition/database
