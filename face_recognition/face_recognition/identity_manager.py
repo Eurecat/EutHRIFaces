@@ -255,6 +255,11 @@ class IdentityManager:
                     similarity = 1 - cosine(embedding, identity_embedding)
                     similarity_matrix[i, j] = similarity
         
+        # Debug: Print the similarity matrix
+        if self.enable_debug_prints:
+            print("[IDENTITY_DEBUG] Similarity Matrix:")
+            print(similarity_matrix)
+        
         # Find best matches with exclusive assignment (no identity can be assigned to multiple tracks)
         best_matches = []
         used_identity_indices = set()  # Track which identities have been assigned
@@ -277,6 +282,7 @@ class IdentityManager:
         # Initialize all matches as None
         best_matches = [(None, 0.0) for _ in range(len(similarity_matrix))]
         
+
         # Assign identities in order of best similarity, ensuring exclusive assignment
         for track_idx, _ in track_best_similarities:
             track_id = track_ids[track_idx] if track_ids else track_idx
@@ -313,7 +319,10 @@ class IdentityManager:
                 unique_id = identity_ids[best_identity_idx]
                 best_matches[track_idx] = (unique_id, best_similarity)
                 used_identity_indices.add(best_identity_idx)
-
+                    # Debug: Print the best matches after initialization
+        if self.enable_debug_prints:
+            print("[IDENTITY_DEBUG] Best Matches (Initialized):")
+            print(best_matches)
         return similarity_matrix, best_matches
     
     def _create_new_identity(self, track_id: int, embeddings: List[np.ndarray], confidence: float, timestamp: float) -> str:
@@ -559,9 +568,9 @@ class IdentityManager:
             # Compute cosine similarity matrix: identities x identities
             similarity_matrix = np.dot(identities_matrix, identities_matrix.T)
             
-            if self.enable_debug_prints:
-                print(f"[IDENTITY_DEBUG] Fast mode: computed similarity matrix shape: {similarity_matrix.shape}")
-                print(f"[IDENTITY_DEBUG] Similarity matrix:\n{similarity_matrix}")
+            # if self.enable_debug_prints:
+            #     print(f"[IDENTITY_DEBUG] Fast mode: computed similarity matrix shape: {similarity_matrix.shape}")
+            #     print(f"[IDENTITY_DEBUG] Similarity matrix:\n{similarity_matrix}")
         # Find merge candidates
         merge_candidates = []
         

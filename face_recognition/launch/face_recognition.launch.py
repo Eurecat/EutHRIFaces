@@ -127,19 +127,19 @@ def generate_launch_description():
     # Identity management parameters
     similarity_threshold_arg = DeclareLaunchArgument(
         'similarity_threshold',
-        default_value='0.3',
+        default_value='0.25',
         description='Minimum similarity threshold for identity assignment'
     )
     
     clustering_threshold_arg = DeclareLaunchArgument(
         'clustering_threshold',
-        default_value='0.4',
+        default_value='0.3',
         description='Threshold for clustering embeddings into identities'
     )
     
     max_embeddings_per_identity_arg = DeclareLaunchArgument(
         'max_embeddings_per_identity',
-        default_value='150',
+        default_value='250',
         description='Maximum embeddings to store per identity'
     )
     

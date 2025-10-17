@@ -72,7 +72,7 @@ class FaceRecognitionNode(Node):
         self.qos_profile = QoSProfile(
             depth=1,  # Keep only the latest image
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
-            #durability=DurabilityPolicy.VOLATILE,
+            # durability=DurabilityPolicy.VOLATILE,
             history=QoSHistoryPolicy.KEEP_LAST,
         )
     
@@ -766,28 +766,33 @@ class FaceRecognitionNode(Node):
                 color = (0, 255, 0) if unique_id and unique_id != "unknown" else (0, 0, 255)  # Green for recognized, red for unknown
                 cv2.rectangle(image, (x, y), (x + w, y + h), color, 2)
                 
-                # Prepare text
+                # Prepare text for unique ID
                 if unique_id and unique_id != "unknown":
                     text = f"{unique_id} ({confidence:.2f})"
                 else:
                     text = "Unknown"
                 
-                # Draw text background
+                # Draw text background for unique ID
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 font_scale = 0.6
                 thickness = 2
                 (text_width, text_height), _ = cv2.getTextSize(text, font, font_scale, thickness)
                 
-                # Background rectangle for text
+                # Background rectangle for unique ID text
                 cv2.rectangle(image, (x, y - text_height - 10), (x + text_width + 10, y), color, -1)
                 
-                # Draw text
+                # Draw unique ID text
                 cv2.putText(image, text, (x + 5, y - 5), font, font_scale, (0, 0, 0), thickness)
                 
-                # Draw face ID (original detection ID)
+                # Prepare and draw face ID (original detection ID) text
                 face_id_text = f"Face: {landmarks_msg.face_id}"
-                cv2.putText(image, face_id_text, (x, y + h + 20), font, 0.4, (255, 255, 255), 1)
-            
+                (face_id_text_width, face_id_text_height), _ = cv2.getTextSize(face_id_text, font, font_scale, thickness)
+                
+                # Background rectangle for face ID text
+                cv2.rectangle(image, (x, y + h + 10), (x + face_id_text_width + 10, y + h + 10 + face_id_text_height), color, -1)
+                
+                # Draw face ID text
+                cv2.putText(image, face_id_text, (x + 5, y + h + 10 + face_id_text_height - 5), font, font_scale, (0, 0, 0), thickness)
             else:
                 # Fallback: estimate position from landmarks
                 landmarks = []
