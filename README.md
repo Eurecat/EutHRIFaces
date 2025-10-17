@@ -1,4 +1,4 @@
-# GPT README: EutHRIFaces
+# README: EutHRIFaces
 
 ROS2 packages for face-related perception capabilities in Human-Robot Interaction (HRI) applications.
 
@@ -7,7 +7,6 @@ This repository contains three main packages:
 ## Packages
 
 ### 1. face_detection 🔍
-**Status**: ✅ **Implemented**
 
 YOLO-based face detection with 5 key facial landmarks.
 
@@ -22,8 +21,6 @@ YOLO-based face detection with 5 key facial landmarks.
 [➡️ See face_detection README](face_detection/README.md)
 
 ### 2. face_recognition 👤
-**Status**: 🚧 **TODO - Not Implemented**
-
 Face recognition and identification capabilities.
 
 - **Planned Features**:
@@ -33,8 +30,6 @@ Face recognition and identification capabilities.
   - Database integration
 
 ### 3. gaze_estimation 👁️
-**Status**: 🚧 **TODO - Not Implemented**
-
 Gaze direction estimation from facial landmarks.
 
 - **Planned Features**:
@@ -44,55 +39,6 @@ Gaze direction estimation from facial landmarks.
   - 3D gaze vectors
 
 ## Quick Start
-
-### Prerequisites
-- ROS2 (Humble/Iron)
-- Python 3.8+
-- OpenCV
-- ONNXRuntime
-
-### Installation
-
-1. Clone into your ROS2 workspace:
-```bash
-cd your_ws/src
-git clone <repository_url>
-```
-
-2. Install dependencies:
-```bash
-cd your_ws
-rosdep install --from-paths src --ignore-src -r -y
-```
-
-3. Build packages:
-```bash
-colcon build --packages-select face_detection face_recognition gaze_estimation
-source install/setup.bash
-```
-
-### Usage
-
-#### Face Detection
-```bash
-# Launch face detection node
-ros2 launch face_detection face_detection.launch.py
-
-# With custom camera topic
-ros2 launch face_detection face_detection.launch.py input_topic:=/your/camera/topic
-```
-
-#### Face Recognition
-```bash
-# Launch face recognition node
-ros2 launch face_recognition face_recognition.launch.py
-```
-
-#### Gaze Estimation
-```bash
-# Launch gaze estimation node
-ros2 launch gaze_estimation gaze_estimation.launch.py
-```
 
 ## Installation & Setup
 
@@ -110,7 +56,7 @@ cd EutHRIFaces
 #### 2. Build the application image
 
    ```bash
-   cd Docker && ./build_container.sh
+   cd Docker && ./build_container.sh --vulcanexus
    ```
    Please note that:
     * your default ssh keys will be used to build the image
@@ -153,6 +99,30 @@ Please note that launching the stack might involve launch of GUI application fro
 
 ```bash
 xhost +local:docker
+```
+
+### Usage
+In terminal inside the docker:
+
+#### Face Detection
+```bash
+# Launch face detection node
+ros2 launch face_detection face_detection.launch.py
+
+# With custom camera topic
+ros2 launch face_detection face_detection.launch.py input_topic:=/your/camera/topic
+```
+
+#### Face Recognition
+```bash
+# Launch face recognition node
+ros2 launch face_recognition face_recognition.launch.py
+```
+
+#### Gaze Estimation
+```bash
+# Launch gaze estimation node
+ros2 launch gaze_estimation gaze_estimation.launch.py
 ```
 
 ## Docker Support

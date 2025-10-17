@@ -207,9 +207,6 @@ This will show:
 - Clustering operations
 - Performance metrics
 
-## License
-
-Apache-2.0
 
 ## Maintainer
 
