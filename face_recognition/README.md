@@ -80,7 +80,7 @@ ros2 launch face_recognition face_recognition.launch.py \
     input_topic:=/your/face/detection/topic \
     device:=cuda \
     similarity_threshold:=0.7 \
-    enable_debug_prints:=true
+    enable_debug_output:=true
 ```
 
 ### Run Node Directly
@@ -198,7 +198,7 @@ This package is designed to work seamlessly with the EutHRIFaces pipeline:
 
 Enable detailed debug output:
 ```bash
-ros2 launch face_recognition face_recognition.launch.py enable_debug_prints:=true
+ros2 launch face_recognition face_recognition.launch.py enable_debug_output:=true
 ```
 
 This will show:

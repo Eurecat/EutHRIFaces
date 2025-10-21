@@ -50,7 +50,7 @@ def _setup_face_recognition(context, *args, **kwargs):
                 'max_embeddings_per_identity': LaunchConfiguration('max_embeddings_per_identity'),
                 'identity_timeout': LaunchConfiguration('identity_timeout'),
                 'identity_database_path': LaunchConfiguration('identity_database_path'),
-                'enable_debug_prints': LaunchConfiguration('enable_debug_prints'),
+                'enable_debug_output': LaunchConfiguration('enable_debug_output'),
                 'receiver_id': LaunchConfiguration('receiver_id'),
             }
         ],
@@ -147,9 +147,9 @@ def generate_launch_description():
         default_value='src/face_recognition/database/identity_database.json',
         description='Path to persistent identity database JSON file'
     )
-    enable_debug_prints_arg = DeclareLaunchArgument(
-        'enable_debug_prints',
-        default_value='true',
+    enable_debug_output_arg = DeclareLaunchArgument(
+        'enable_debug_output',
+        default_value='false',
         description='Enable detailed debug output'
     )
 
@@ -179,7 +179,7 @@ def generate_launch_description():
         max_embeddings_per_identity_arg,
         identity_timeout_arg,
         identity_database_path_arg,
-        enable_debug_prints_arg,
+        enable_debug_output_arg,
         receiver_id_arg,
         processing_rate_hz_arg,
         

@@ -225,8 +225,8 @@ class GazeEstimationNode(Node):
         self.max_processing_time = max(self.max_processing_time, processing_time)
         self.min_processing_time = min(self.min_processing_time, processing_time)
         
-        # Log timing every 30 frames or when debug is enabled
-        if self.frame_count % 30 == 0 or self.enable_debug_output:
+        # Log timing every 200 frames or when debug is enabled
+        if self.frame_count % 200 == 0 or self.enable_debug_output:
             avg_time = self.total_processing_time / self.frame_count
             faces_count = len(landmarks_msg.ids) if landmarks_msg and landmarks_msg.ids else 0
             self.get_logger().info(

@@ -247,8 +247,8 @@ class FaceDetectorNode(Node):
         self.max_processing_time = max(self.max_processing_time, processing_time)
         self.min_processing_time = min(self.min_processing_time, processing_time)
         
-        # Log timing every 30 frames or when debug is enabled
-        if self.frame_count % 30 == 0 or self.enable_debug_output:
+        # Log timing every 100 frames or when debug is enabled
+        if self.frame_count % 100 == 0 or self.enable_debug_output:
             avg_time = self.total_processing_time / self.frame_count
             self.get_logger().info(
                 f"[TIMING] Face Detection - Frame #{self.frame_count}: "
@@ -311,7 +311,7 @@ class FaceDetectorNode(Node):
                 package_src_dir = os.path.dirname(current_file_dir)
                 package_src_dir = package_src_dir.replace('build', 'src') #save it in docker volume of ros2 package
                 self.model_path = os.path.join(package_src_dir,"weights",model_path_param)
-                
+
                 if self.enable_debug_output:
                     self.get_logger().debug(f"Using package source directory: {package_src_dir}")
                     self.get_logger().debug(f"Model path resolved to: {self.model_path}")

@@ -66,7 +66,7 @@ class FaceRecognitionNode(Node):
         self.processed_messages = 0
         
         # Debug settings
-        self.enable_debug_prints = False  # Will be set during initialization
+        self.enable_debug_output = False  # Will be set during initialization
 
         # Setup QoS profiles (copied from perception node)
         self.qos_profile = QoSProfile(
@@ -195,8 +195,8 @@ class FaceRecognitionNode(Node):
             self.max_processing_time = max(self.max_processing_time, processing_time)
             self.min_processing_time = min(self.min_processing_time, processing_time)
         
-        # Log timing every 30 frames or when debug is enabled
-        if self.processed_messages % 30 == 0 or self.enable_debug_prints:
+        # Log timing every 100 frames or when debug is enabled
+        if self.processed_messages % 100 == 0 or self.enable_debug_output:
             avg_time = self.total_processing_time / self.processed_messages
             faces_count = len(landmarks_msg.ids) if landmarks_msg and landmarks_msg.ids else 0
             self.get_logger().info(
@@ -227,14 +227,14 @@ class FaceRecognitionNode(Node):
             return
             
         if not msg.ids:
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 self.get_logger().debug('Received empty FacialLandmarksArray - publishing clean image')
             # Publish clean image when no faces detected
             if self.enable_image_output and self.image_output_publisher:
                 self._publish_clean_image()
             return
         
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             self.get_logger().debug(f'Processing FacialLandmarksArray with {len(msg.ids)} faces')
         
         try:
@@ -278,7 +278,7 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('embedding_inclusion_threshold', 0.6)
         self.declare_parameter('identity_timeout', 60.0)
         self.declare_parameter('min_detections_for_stable_identity', 5)
-        self.declare_parameter('enable_debug_prints', True)  # Temporarily enable for debugging
+        self.declare_parameter('enable_debug_output', True)  # Temporarily enable for debugging
         self.declare_parameter('identity_database_path', '')
         self.declare_parameter('use_ewma_for_mean', False)
         self.declare_parameter('ewma_alpha', 0.6)
@@ -384,13 +384,13 @@ class FaceRecognitionNode(Node):
             embedding_inclusion_thresh = self.get_parameter('embedding_inclusion_threshold').get_parameter_value().double_value
             identity_timeout = self.get_parameter('identity_timeout').get_parameter_value().double_value
             min_detections = self.get_parameter('min_detections_for_stable_identity').get_parameter_value().integer_value
-            debug_prints = self.get_parameter('enable_debug_prints').get_parameter_value().bool_value
+            debug_prints = self.get_parameter('enable_debug_output').get_parameter_value().bool_value
             database_path = self.get_parameter('identity_database_path').get_parameter_value().string_value
             use_ewma = self.get_parameter('use_ewma_for_mean').get_parameter_value().bool_value
             ewma_alpha = self.get_parameter('ewma_alpha').get_parameter_value().double_value
             
             # Set debug prints flag
-            self.enable_debug_prints = debug_prints
+            self.enable_debug_output = debug_prints
             
             self.identity_manager = IdentityManager(
                 logger=self.get_logger(),
@@ -401,7 +401,7 @@ class FaceRecognitionNode(Node):
                 embedding_inclusion_threshold=embedding_inclusion_thresh,
                 identity_timeout=identity_timeout,
                 min_detections_for_stable_identity=min_detections,
-                enable_debug_prints=debug_prints,
+                enable_debug_output=debug_prints,
                 identity_database_path=database_path if database_path else None,
                 use_ewma_for_mean=use_ewma,
                 ewma_alpha=ewma_alpha
@@ -431,7 +431,7 @@ class FaceRecognitionNode(Node):
             return
         
         # Extract face crops and face IDs for all faces
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             crop_start_time = time.time()
         
         face_crops = []
@@ -445,7 +445,7 @@ class FaceRecognitionNode(Node):
                 face_ids.append(facial_landmarks_msg.face_id)
                 landmarks_msgs.append(facial_landmarks_msg)
         
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             crop_time = (time.time() - crop_start_time) * 1000
             self.get_logger().debug(f"Face crop extraction took: {crop_time:.2f}ms for {len(msg.ids)} input faces, got {len(face_crops)} valid crops")
         
@@ -461,17 +461,17 @@ class FaceRecognitionNode(Node):
             return
         
         # Extract embeddings in batch
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             embedding_start_time = time.time()
         
         embeddings = self.face_embedding_extractor.extract_embeddings_batch(face_crops)
         
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             embedding_time = (time.time() - embedding_start_time) * 1000
             self.get_logger().debug(f"Embedding extraction took: {embedding_time:.2f}ms for {len(face_crops)} faces")
         
         # Create face_embeddings dictionary for identity manager using face_id as key
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             prep_start_time = time.time()
         
         face_embeddings = {}
@@ -484,18 +484,18 @@ class FaceRecognitionNode(Node):
             else:
                 self.get_logger().warning(f"Failed to extract embedding for face {face_ids[i]}")
         
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             prep_time = (time.time() - prep_start_time) * 1000
             self.get_logger().debug(f"Embedding preparation took: {prep_time:.2f}ms")
         
         # Process identities in batch
         if face_embeddings:
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 identity_start_time = time.time()
             
             identity_results = self.identity_manager.process_new_embedding_batch(face_embeddings)
             
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 identity_time = (time.time() - identity_start_time) * 1000
                 self.get_logger().debug(f"Identity processing took: {identity_time:.2f}ms for {len(face_embeddings)} faces")
             
@@ -506,13 +506,13 @@ class FaceRecognitionNode(Node):
                 landmarks_msg = landmarks_msgs[i]
                 unique_id, confidence = identity_results.get(face_id, (None, 0.0))
                 
-                if self.enable_debug_prints:
+                if self.enable_debug_output:
                     self.get_logger().debug(f"Face {face_id} -> Identity: {unique_id}, Confidence: {confidence:.3f}")
                 
                 recognition_results.append((landmarks_msg, unique_id, confidence))
             
             # Publish recognition array for all faces
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 publish_start_time = time.time()
             
             self._publish_recognition_array(recognition_results)
@@ -522,7 +522,7 @@ class FaceRecognitionNode(Node):
                 image_recognition_results = [(landmarks_msgs[i], identity_results.get(face_ids[i], (None, 0.0))) for i in valid_indices]
                 self._publish_batch_annotated_image(image_recognition_results)
             
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 publish_time = (time.time() - publish_start_time) * 1000
                 self.get_logger().debug(f"Publishing results took: {publish_time:.2f}ms for {len(valid_indices)} faces")
         else:
@@ -573,7 +573,7 @@ class FaceRecognitionNode(Node):
             # Publish the array message
             self.recognition_publisher.publish(recognition_array_msg)
             
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 self.get_logger().debug(f"Published FacialRecognitionArray with {len(facial_recognition_msgs)} faces")
             
         except Exception as e:
@@ -582,7 +582,7 @@ class FaceRecognitionNode(Node):
     def _extract_face_crop_from_landmarks(self, msg) -> Optional[np.ndarray]:
         """Extract face crop from landmarks message using bounding box."""
         try:
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 self.get_logger().debug(f"Extracting face crop for face_id: {msg.face_id}")
                 self.get_logger().debug(f"Bbox confidence: {msg.bbox_confidence}")
                 self.get_logger().debug(f"Bbox xyxy type: {type(msg.bbox_xyxy)}")
@@ -606,7 +606,7 @@ class FaceRecognitionNode(Node):
                 w = x2 - x1
                 h = y2 - y1
                 
-                if self.enable_debug_prints:
+                if self.enable_debug_output:
                     self.get_logger().debug(f"Normalized bbox: ({x1_norm:.3f}, {y1_norm:.3f}, {x2_norm:.3f}, {y2_norm:.3f})")
                     self.get_logger().debug(f"Pixel bbox: x={x}, y={y}, w={w}, h={h}")
                 
@@ -618,11 +618,11 @@ class FaceRecognitionNode(Node):
                 
                 if w > 0 and h > 0:
                     face_crop = self.last_image[y:y+h, x:x+w]
-                    if self.enable_debug_prints:
+                    if self.enable_debug_output:
                         self.get_logger().debug(f"Extracted face crop from normalized bbox: {face_crop.shape}")
                     return face_crop
                 else:
-                    if self.enable_debug_prints:
+                    if self.enable_debug_output:
                         self.get_logger().debug(f"Invalid bbox dimensions after bounds check: w={w}, h={h}")
             
             # Fallback: estimate bounding box from landmarks
@@ -636,7 +636,7 @@ class FaceRecognitionNode(Node):
                     landmarks.append([x_pixel, y_pixel])
                     valid_landmarks += 1
             
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 self.get_logger().debug(f"Valid landmarks found: {valid_landmarks}")
             
             if len(landmarks) >= 4:  # Need at least 4 landmarks
@@ -644,7 +644,7 @@ class FaceRecognitionNode(Node):
                 x_min, y_min = np.min(landmarks, axis=0)
                 x_max, y_max = np.max(landmarks, axis=0)
                 
-                if self.enable_debug_prints:
+                if self.enable_debug_output:
                     self.get_logger().debug(f"Landmark bounds: x_min={x_min}, y_min={y_min}, x_max={x_max}, y_max={y_max}")
                 
                 # Add margin around landmarks
@@ -659,19 +659,19 @@ class FaceRecognitionNode(Node):
                 w = min(int(width + 2 * x_margin), self.last_image.shape[1] - x)
                 h = min(int(height + 2 * y_margin), self.last_image.shape[0] - y)
                 
-                if self.enable_debug_prints:
+                if self.enable_debug_output:
                     self.get_logger().debug(f"Landmark-based crop: x={x}, y={y}, w={w}, h={h}")
                 
                 if w > 0 and h > 0:
                     face_crop = self.last_image[y:y+h, x:x+w]
-                    if self.enable_debug_prints:
+                    if self.enable_debug_output:
                         self.get_logger().debug(f"Extracted face crop from landmarks: {face_crop.shape}")
                     return face_crop
                 else:
-                    if self.enable_debug_prints:
+                    if self.enable_debug_output:
                         self.get_logger().debug(f"Invalid landmark-based dimensions: w={w}, h={h}")
             else:
-                if self.enable_debug_prints:
+                if self.enable_debug_output:
                     self.get_logger().debug(f"Not enough valid landmarks: {len(landmarks)} (need at least 4)")
             
             self.get_logger().warning(f"Failed to extract face crop for face {msg.face_id}: no valid bbox or landmarks")
@@ -722,7 +722,7 @@ class FaceRecognitionNode(Node):
             # Publish clean image
             self.image_output_publisher.publish(image_msg)
             
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 self.get_logger().debug("Published clean image (no faces detected)")
             
         except Exception as e:

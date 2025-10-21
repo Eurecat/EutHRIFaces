@@ -70,7 +70,7 @@ class IdentityManager:
                  embedding_inclusion_threshold: float = 0.6,
                  identity_timeout: float = 60.0,
                  min_detections_for_stable_identity: int = 5,
-                 enable_debug_prints: bool = False,
+                 enable_debug_output: bool = False,
                  identity_database_path: Optional[str] = None,
                  use_ewma_for_mean: bool = False,
                  ewma_alpha: float = 0.6):
@@ -86,7 +86,7 @@ class IdentityManager:
             embedding_inclusion_threshold: Threshold for including embeddings in identity cluster (must be >= similarity_threshold)
             identity_timeout: Time (seconds) after which inactive identity is considered lost
             min_detections_for_stable_identity: Minimum detections needed for stable identity
-            enable_debug_prints: Enable detailed debug prints for embedding similarities and clustering
+            enable_debug_output: Enable detailed debug prints for embedding similarities and clustering
             identity_database_path: Path to JSON file for persistent identity storage (optional)
             use_ewma_for_mean: Whether to use Exponentially Weighted Moving Average for updating mean embeddings
             ewma_alpha: Learning rate for EWMA (0 < alpha < 1). Higher values adapt faster to new embeddings.
@@ -99,7 +99,7 @@ class IdentityManager:
         self.embedding_inclusion_threshold = max(embedding_inclusion_threshold, similarity_threshold)
         self.identity_timeout = identity_timeout
         self.min_detections_for_stable_identity = min_detections_for_stable_identity
-        self.enable_debug_prints = enable_debug_prints
+        self.enable_debug_output = enable_debug_output
         self.identity_database_path = identity_database_path
         
         # EWMA parameters for mean embedding updates
@@ -157,7 +157,7 @@ class IdentityManager:
         for track_id, embedding in track_embeddings.items():
             normalized_embeddings[track_id] = self._normalize_embedding(embedding)
         
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             self.logger.debug(f"[IDENTITY_DEBUG] Processing {len(normalized_embeddings)} embeddings in batch")
 
         # Get batched identity matches with similarity matrix
@@ -175,16 +175,16 @@ class IdentityManager:
                 # Update existing identity
                 self._update_existing_identity(unique_id, track_id, normalized_embeddings[track_id], confidence, current_time, confidence)
                 results[track_id] = (unique_id, confidence)
-                if self.enable_debug_prints:
+                if self.enable_debug_output:
                     self.logger.debug(f"[IDENTITY_DEBUG] Track {track_id} assigned to existing identity {unique_id} with confidence {confidence:.3f}")
             else:
                 # Create new identity
                 new_unique_id = self._create_new_identity(track_id, [normalized_embeddings[track_id]], confidence, current_time)
                 results[track_id] = (new_unique_id, confidence)
-                if self.enable_debug_prints:
+                if self.enable_debug_output:
                     self.logger.debug(f"[IDENTITY_DEBUG] Track {track_id} assigned to new identity {new_unique_id}")
 
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             self.logger.debug(f"[IDENTITY_DEBUG] Batch processing complete. Total identities: {len(self.identity_clusters)}")
              
         return results
@@ -259,7 +259,7 @@ class IdentityManager:
                     similarity_matrix[i, j] = similarity
         
         # Debug: Print the similarity matrix
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             self.logger.debug("[IDENTITY_DEBUG] Similarity Matrix:")
             # Convert numpy similarity matrix to a readable string before logging to avoid
             # passing non-string objects to the ROS2 logger (which expects a str message).
@@ -330,7 +330,7 @@ class IdentityManager:
                 best_matches[track_idx] = (unique_id, best_similarity)
                 used_identity_indices.add(best_identity_idx)
                     # Debug: Print the best matches after initialization
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             self.logger.debug("[IDENTITY_DEBUG] Best Matches (Initialized):")
             # Format best_matches as a concise string to avoid passing complex objects
             try:
@@ -359,7 +359,7 @@ class IdentityManager:
         unique_id = f"U{self.next_user_number}"
         self.next_user_number += 1
         
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             self.logger.debug(f"[IDENTITY_DEBUG] Creating new identity {unique_id} for track {track_id}")
         
         # Create new identity cluster
@@ -504,13 +504,13 @@ class IdentityManager:
         if len(valid_clusters) < 2:
             return  # Need at least 2 valid identities to merge
         
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             self.logger.debug(f"[IDENTITY_DEBUG] Batch merge check: comparing {len(valid_clusters)} identities")
             self.logger.debug(f"[IDENTITY_DEBUG] Identity IDs: {valid_identity_ids}")
         
         # Use clustering threshold for merges
         merge_threshold = max(0.0, self.clustering_threshold)
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             self.logger.debug(f"[IDENTITY_DEBUG] Using merge threshold: {merge_threshold:.3f}")
         
         # Compute similarity matrix between all identities
@@ -573,7 +573,7 @@ class IdentityManager:
             
             similarity_matrix = combined_similarity_matrix
             
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 self.logger.debug(f"[IDENTITY_DEBUG] Accurate mode: computed combined similarity matrix shape: {similarity_matrix.shape}")
         
         else:
@@ -586,7 +586,7 @@ class IdentityManager:
             # Compute cosine similarity matrix: identities x identities
             similarity_matrix = np.dot(identities_matrix, identities_matrix.T)
             
-            # if self.enable_debug_prints:
+            # if self.enable_debug_output:
             #     self.logger.debug(f"[IDENTITY_DEBUG] Fast mode: computed similarity matrix shape: {similarity_matrix.shape}")
             #     self.logger.debug(f"[IDENTITY_DEBUG] Similarity matrix:\n{similarity_matrix}")
         # Find merge candidates
@@ -597,7 +597,7 @@ class IdentityManager:
             for j in range(i + 1, len(valid_clusters)):
                 similarity = similarity_matrix[i, j]
                 
-                if self.enable_debug_prints:
+                if self.enable_debug_output:
                     if similarity < 0.2:
                         continue  # Skip printing for very low similarity
                     elif 0.2 <= similarity < 0.3:
@@ -609,7 +609,7 @@ class IdentityManager:
                 
                 if similarity > merge_threshold:
                     merge_candidates.append((valid_identity_ids[i], valid_identity_ids[j], similarity))
-                    if self.enable_debug_prints:
+                    if self.enable_debug_output:
                         self.logger.debug(f"[IDENTITY_DEBUG] Merge candidate: {valid_identity_ids[i]} <-> {valid_identity_ids[j]} (similarity: {similarity:.3f})")
         
         # Perform merges with best candidates first
@@ -617,7 +617,7 @@ class IdentityManager:
             # Sort by similarity (best first)
             merge_candidates.sort(key=lambda x: x[2], reverse=True)
             
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 self.logger.debug(f"[IDENTITY_DEBUG] Found {len(merge_candidates)} merge candidates")
             
             # Keep track of already merged identities to avoid conflicts
@@ -642,14 +642,14 @@ class IdentityManager:
                         success = self.merge_identities(id1, id2)
                         if success:
                             merged_identities.add(id2)
-                            if self.enable_debug_prints:
+                            if self.enable_debug_output:
                                 self.logger.debug(f"[IDENTITY] Batch auto-merged {id2} into {id1} (similarity: {similarity:.3f})")
                     else:
                         # Keep id2, merge id1 into it
                         success = self.merge_identities(id2, id1)
                         if success:
                             merged_identities.add(id1)
-                            if self.enable_debug_prints:
+                            if self.enable_debug_output:
                                 self.logger.debug(f"[IDENTITY] Batch auto-merged {id1} into {id2} (similarity: {similarity:.3f})")
                 else:
                     # Fallback: merge into older identity by timestamp
@@ -660,18 +660,18 @@ class IdentityManager:
                         success = self.merge_identities(id1, id2)
                         if success:
                             merged_identities.add(id2)
-                            if self.enable_debug_prints:
+                            if self.enable_debug_output:
                                 self.logger.debug(f"[IDENTITY] Batch auto-merged {id2} into {id1} (by timestamp)")
                     else:
                         success = self.merge_identities(id2, id1)
                         if success:
                             merged_identities.add(id1)
-                            if self.enable_debug_prints:
+                            if self.enable_debug_output:
                                 self.logger.debug(f"[IDENTITY] Batch auto-merged {id1} into {id2} (by timestamp)")
             
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 self.logger.debug(f"[IDENTITY_DEBUG] Batch merge complete. Merged {len(merged_identities)} identities: {list(merged_identities)}")
-        elif self.enable_debug_prints:
+        elif self.enable_debug_output:
             self.logger.debug(f"[IDENTITY_DEBUG] No merge candidates found above threshold {merge_threshold:.3f}")
 
     def merge_identities(self, primary_id: str, secondary_id: str) -> bool:
@@ -753,7 +753,7 @@ class IdentityManager:
             if track_id not in current_active_track_ids:
                 inactive_track_ids.append(track_id)
         
-        if self.enable_debug_prints:
+        if self.enable_debug_output:
             self.logger.debug(f"[IDENTITY_DEBUG] Inactive track IDs to clean: {inactive_track_ids}")
         
         # Remove mappings for inactive tracks
@@ -765,7 +765,7 @@ class IdentityManager:
             if unique_id in self.identity_clusters:
                 self.identity_clusters[unique_id].current_track_id = -1
             
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 self.logger.debug(f"[IDENTITY_DEBUG] Cleaned up mapping: track {track_id} -> {unique_id} (track no longer active)")
         
         # Clean up pending identities for inactive tracks
@@ -776,10 +776,10 @@ class IdentityManager:
         
         for track_id in pending_to_remove:
             del self.pending_identities[track_id]
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 self.logger.debug(f"[IDENTITY_DEBUG] Cleaned up pending identity for inactive track {track_id}")
         
-        if inactive_track_ids and self.enable_debug_prints:
+        if inactive_track_ids and self.enable_debug_output:
             self.logger.debug(f"[IDENTITY_DEBUG] Cleaned up {len(inactive_track_ids)} inactive track mappings")
             self.logger.debug(f"[IDENTITY_DEBUG] Active tracks: {sorted(current_active_track_ids)}")
             self.logger.debug(f"[IDENTITY_DEBUG] Remaining mappings: {dict(sorted(self.track_id_to_unique_id.items(), key=lambda x: str(x[0])))}")
@@ -802,7 +802,7 @@ class IdentityManager:
         
         if len(found_tracks) > 1:
             # Multiple tracks found for same identity - this is a violation!
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 self.logger.debug(f"[IDENTITY_DEBUG] WARNING: _find_track_for_identity found multiple tracks for {unique_id}: {found_tracks}")
             # Return the first one, but this indicates a problem
             return found_tracks[0]
@@ -967,7 +967,7 @@ class IdentityManager:
                 inactive_identities.append(unique_id)
         
         for unique_id in inactive_identities:
-            if self.enable_debug_prints:
+            if self.enable_debug_output:
                 self.logger.debug(f"[IDENTITY_DEBUG] Removing inactive identity {unique_id}")
             del self.identity_clusters[unique_id]
             # Remove from track mappings

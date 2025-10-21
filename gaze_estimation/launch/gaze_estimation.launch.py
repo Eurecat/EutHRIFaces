@@ -43,6 +43,7 @@ def _setup_gaze_estimation(context, *args, **kwargs):
                 'enable_image_output': LaunchConfiguration('enable_image_output'),
                 'image_input_topic': LaunchConfiguration('image_input_topic'),
                 'output_image_topic': LaunchConfiguration('output_image_topic'),
+                'enable_debug_output': LaunchConfiguration('enable_debug_output'),
             }
         ],
         output='screen',
@@ -134,10 +135,18 @@ def generate_launch_description():
         description='Processing rate in Hz'
     )
     
+        
+    enable_debug_output_arg = DeclareLaunchArgument(
+        'enable_debug_output',
+        default_value='false',
+        description='Enable debug output'
+    )
+    
     return LaunchDescription([
         # config_file_arg,
         input_topic_arg,
         output_topic_arg,
+        enable_debug_output_arg,
         focal_length_arg,
         center_x_ratio_arg,
         center_y_ratio_arg,
