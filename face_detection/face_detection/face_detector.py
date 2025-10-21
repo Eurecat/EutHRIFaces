@@ -75,7 +75,7 @@ class FaceDetectorNode(Node):
     
         
         # Create RGB-only subscriber (copied from perception node RGB-only pattern)
-        self.get_logger().info("Setting up RGB-only processing")
+        self.get_logger().debug("Setting up RGB-only processing")
         self.color_sub = self.create_subscription(
             Image, 
             self.input_topic, 
@@ -107,13 +107,13 @@ class FaceDetectorNode(Node):
             self.inference_timer_callback
         )
         
-        self.get_logger().info(f"Face Detector Node initialized")
-        self.get_logger().info(f"Input topic: {self.input_topic}")
-        self.get_logger().info(f"Output topic: {self.output_topic}")
+        self.get_logger().debug(f"Face Detector Node initialized")
+        self.get_logger().debug(f"Input topic: {self.input_topic}")
+        self.get_logger().debug(f"Output topic: {self.output_topic}")
         if self.enable_image_output:
-            self.get_logger().info(f"Output image topic: {self.output_image_topic}")
+            self.get_logger().debug(f"Output image topic: {self.output_image_topic}")
         else:
-            self.get_logger().info("Image output disabled")
+            self.get_logger().debug("Image output disabled")
 
     # -------------------------------------------------------------------------
     #             Image Storage Callbacks (Copied from perception node)
@@ -130,7 +130,7 @@ class FaceDetectorNode(Node):
         self.latest_color_image_msg = color_msg
         self.color_image_processed = False
         self.latest_color_image_timestamp = self.get_clock().now()
-        # self.get_logger().info("Color image received.")
+        # self.get_logger().debug("Color image received.")
 
     # -------------------------------------------------------------------------
     #                         Timer Callback for Inference
@@ -172,42 +172,42 @@ class FaceDetectorNode(Node):
             return
             
         if self.enable_debug_output:
-            self.get_logger().info(f"Processing image: {cv_image.shape}, dtype: {cv_image.dtype}")
+            self.get_logger().debug(f"Processing image: {cv_image.shape}, dtype: {cv_image.dtype}")
         
         # Run face detection
         detection_results = self.detector.detect(cv_image)
         
         # Debug the detection results structure
         if self.enable_debug_output:
-            self.get_logger().info(f"Raw detection_results keys: {list(detection_results.keys())}")
-            self.get_logger().info(f"Raw detection_results: {detection_results}")
+            self.get_logger().debug(f"Raw detection_results keys: {list(detection_results.keys())}")
+            self.get_logger().debug(f"Raw detection_results: {detection_results}")
         
         # Log detection results conditionally
         num_faces = len(detection_results.get('faces', []))
         if self.enable_debug_output:
             if self.image_count % 30 == 1 or num_faces > 0:  # Log every 30 images OR when faces detected
-                self.get_logger().info(f"Detection results: {num_faces} face(s) detected")
+                self.get_logger().debug(f"Detection results: {num_faces} face(s) detected")
                 if num_faces > 0:
-                    self.get_logger().info(f"First face: {detection_results.get('faces', [])[0] if detection_results.get('faces') else 'None'}")
+                    self.get_logger().debug(f"First face: {detection_results.get('faces', [])[0] if detection_results.get('faces') else 'None'}")
             
             # Log when faces are detected for debugging
             if num_faces > 0:
-                self.get_logger().info(f"[DEBUG] Face detection successful! Found {num_faces} faces")
-                self.get_logger().info(f"[DEBUG] Detection keys: {list(detection_results.keys())}")
+                self.get_logger().debug(f"[DEBUG] Face detection successful! Found {num_faces} faces")
+                self.get_logger().debug(f"[DEBUG] Detection keys: {list(detection_results.keys())}")
                 for key, value in detection_results.items():
-                    self.get_logger().info(f"[DEBUG] {key}: {len(value) if isinstance(value, list) else value}")
+                    self.get_logger().debug(f"[DEBUG] {key}: {len(value) if isinstance(value, list) else value}")
             elif self.image_count % 60 == 1:  # Log "no faces" less frequently
-                self.get_logger().info(f"[DEBUG] No faces detected in image #{self.image_count}")
+                self.get_logger().debug(f"[DEBUG] No faces detected in image #{self.image_count}")
         
         if self.enable_debug_output:
             if num_faces > 0:
-                self.get_logger().info(f"Detected {num_faces} face(s)")
+                self.get_logger().debug(f"Detected {num_faces} face(s)")
                 # Debug face coordinates
                 for i, face in enumerate(detection_results.get('faces', [])):
-                    self.get_logger().info(f"Face {i}: {face}")
+                    self.get_logger().debug(f"Face {i}: {face}")
             else:
                 # Log when no faces are detected (for debugging)
-                self.get_logger().info("No faces detected in this frame")
+                self.get_logger().debug("No faces detected in this frame")
         
         # Convert to ROS messages and publish
         facial_landmarks_msgs = self._convert_to_facial_landmarks_msgs(
@@ -215,7 +215,7 @@ class FaceDetectorNode(Node):
         
         # Log message conversion results (only if debug enabled)
         if self.enable_debug_output and num_faces > 0:
-            self.get_logger().info(f"[DEBUG] Converted {len(facial_landmarks_msgs)} faces to ROS messages")
+            self.get_logger().debug(f"[DEBUG] Converted {len(facial_landmarks_msgs)} faces to ROS messages")
         
         # Publish all faces in one FacialLandmarksArray message
         if facial_landmarks_msgs:
@@ -225,14 +225,14 @@ class FaceDetectorNode(Node):
             
             self.facial_landmarks_publisher.publish(facial_landmarks_array)
             if self.enable_debug_output:
-                self.get_logger().info(f"[ROS PUBLISH] Published FacialLandmarksArray with {len(facial_landmarks_msgs)} faces")
+                self.get_logger().debug(f"[ROS PUBLISH] Published FacialLandmarksArray with {len(facial_landmarks_msgs)} faces")
         
         # Error logging (always log errors)
         if len(facial_landmarks_msgs) == 0 and num_faces > 0:
             self.get_logger().error(f"[ERROR] Detected {num_faces} faces but converted 0 messages!")
         elif len(facial_landmarks_msgs) == 0 and self.enable_debug_output:
             if self.image_count % 60 == 1:
-                self.get_logger().info("No faces detected, no messages published")
+                self.get_logger().debug("No faces detected, no messages published")
         
         # Publish visualization if enabled
         if self.enable_image_output and self.image_publisher is not None:
@@ -309,11 +309,12 @@ class FaceDetectorNode(Node):
                 current_file_dir = os.path.dirname(os.path.abspath(__file__))
                 # Navigate up from face_detection/face_detection/ to face_detection/
                 package_src_dir = os.path.dirname(current_file_dir)
-                self.model_path = os.path.join(package_src_dir, model_path_param)
+                package_src_dir = package_src_dir.replace('build', 'src') #save it in docker volume of ros2 package
+                self.model_path = os.path.join(package_src_dir,"weights",model_path_param)
                 
                 if self.enable_debug_output:
-                    self.get_logger().info(f"Using package source directory: {package_src_dir}")
-                    self.get_logger().info(f"Model path resolved to: {self.model_path}")
+                    self.get_logger().debug(f"Using package source directory: {package_src_dir}")
+                    self.get_logger().debug(f"Model path resolved to: {self.model_path}")
                     
             except Exception as e:
                 # Fallback to share directory if source directory detection fails
@@ -349,6 +350,7 @@ class FaceDetectorNode(Node):
         """Initialize the face detection backend."""
         try:
             self.detector = YoloFaceDetector(
+                logger=self.get_logger(),
                 model_path=self.model_path,
                 conf_threshold=self.confidence_threshold,
                 iou_threshold=self.iou_threshold,
@@ -360,7 +362,7 @@ class FaceDetectorNode(Node):
             )
             
             if self.detector.initialize():
-                self.get_logger().info("YOLO face detector initialized successfully")
+                self.get_logger().debug("YOLO face detector initialized successfully")
             else:
                 self.get_logger().error("Failed to initialize YOLO face detector")
                 self.detector = None
@@ -407,7 +409,7 @@ class FaceDetectorNode(Node):
                 x, y, w, h = face_bbox
                 
                 if self.enable_debug_output:
-                    self.get_logger().info(f"Processing face {i}: bbox=({x}, {y}, {w}, {h}), confidence={confidence}")
+                    self.get_logger().debug(f"Processing face {i}: bbox=({x}, {y}, {w}, {h}), confidence={confidence}")
                 
                 # Ensure coordinates are non-negative and within image bounds
                 x = max(0, min(int(x), width - 1))
@@ -416,7 +418,7 @@ class FaceDetectorNode(Node):
                 h = max(1, min(int(h), height - y))
                 
                 if self.enable_debug_output:
-                    self.get_logger().info(f"Clamped face {i}: bbox=({x}, {y}, {w}, {h})")
+                    self.get_logger().debug(f"Clamped face {i}: bbox=({x}, {y}, {w}, {h})")
                 
                 # Create NormalizedRegionOfInterest2D for bbox_xyxy
                 bbox_roi = NormalizedRegionOfInterest2D()
@@ -437,7 +439,7 @@ class FaceDetectorNode(Node):
                     face_landmarks, width, height)
                 
                 if self.enable_debug_output:
-                    self.get_logger().info(f"Created FacialLandmarks message for face {i} with {len(facial_landmarks_msg.landmarks)} landmarks")
+                    self.get_logger().debug(f"Created FacialLandmarks message for face {i} with {len(facial_landmarks_msg.landmarks)} landmarks")
                 
                 facial_landmarks_msgs.append(facial_landmarks_msg)
                 
@@ -535,7 +537,7 @@ class FaceDetectorNode(Node):
         
         if self.enable_debug_output:
             valid_landmarks = sum(1 for lm in landmarks if lm.c > 0.0)
-            self.get_logger().info(f"Mapped {valid_landmarks}/70 landmarks from YOLO 5-point detection")
+            self.get_logger().debug(f"Mapped {valid_landmarks}/70 landmarks from YOLO 5-point detection")
         
         return landmarks
 

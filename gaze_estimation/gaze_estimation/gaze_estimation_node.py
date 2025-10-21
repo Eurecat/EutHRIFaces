@@ -295,7 +295,7 @@ class GazeEstimationNode(Node):
                     self.get_logger().debug(f'Published gaze visualization with {len(gaze_visualization_data)} faces')
             
             if self.enable_debug_output:
-                self.get_logger().info(f"Published GazeArray with {len(gaze_array_msg.gaze_array)} faces")
+                self.get_logger().debug(f"Published GazeArray with {len(gaze_array_msg.gaze_array)} faces")
         
         except Exception as e:
             self.get_logger().error(f'Error in facial landmarks array processing: {e}')

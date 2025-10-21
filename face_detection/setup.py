@@ -13,7 +13,7 @@ setup(
         ('share/' + package_name + '/launch', [
             'launch/face_detection.launch.py',
         ]),
-        ('share/' + package_name + '/config', ['config/face_detection.yaml']),
+        # ('share/' + package_name + '/config', ['config/face_detection.yaml']),
     ],
     install_requires=[
         'setuptools',

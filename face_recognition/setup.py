@@ -13,7 +13,7 @@ setup(
         ('share/' + package_name + '/launch', [
             'launch/face_recognition.launch.py',
         ]),
-        ('share/' + package_name + '/config', ['config/face_recognition.yaml']),
+        # ('share/' + package_name + '/config', ['config/face_recognition.yaml']),
         ('share/' + package_name + '/weights', []),  # Placeholder for weights directory
     ],
     install_requires=[

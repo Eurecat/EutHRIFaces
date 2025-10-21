@@ -32,7 +32,7 @@ def _setup_face_detection(context, *args, **kwargs):
         executable='face_detector',
         name='face_detector',
         parameters=[
-            LaunchConfiguration('config_file'),
+            # LaunchConfiguration('config_file'),
             {
                 'input_topic': LaunchConfiguration('input_topic'),
                 'output_topic': LaunchConfiguration('output_topic'),
@@ -70,15 +70,15 @@ def generate_launch_description():
     """Generate launch description for face detection."""
     
     # Declare launch arguments
-    config_file_arg = DeclareLaunchArgument(
-        'config_file',
-        default_value=PathJoinSubstitution([
-            FindPackageShare('face_detection'),
-            'config',
-            'face_detection.yaml'
-        ]),
-        description='Path to the face detection configuration file'
-    )
+    # config_file_arg = DeclareLaunchArgument(
+    #     'config_file',
+    #     default_value=PathJoinSubstitution([
+    #         FindPackageShare('face_detection'),
+    #         'config',
+    #         'face_detection.yaml'
+    #     ]),
+    #     description='Path to the face detection configuration file'
+    # )
     
     input_topic_arg = DeclareLaunchArgument(
         'input_topic',
@@ -105,9 +105,9 @@ def generate_launch_description():
     )
     
     # YOLO Face Detection Parameters
-    model_path_arg = DeclareLaunchArgument(
+    model_path_arg = DeclareLaunchArgument( #it will be inside src/pkg_name/weights/
         'model_path',
-        default_value='weights/yolov8n-face.onnx',
+        default_value='yolov8n-face.onnx',
         description='Path to YOLO face detection model'
     )
     
@@ -193,7 +193,7 @@ def generate_launch_description():
     )
     
     return LaunchDescription([
-        config_file_arg,
+        # config_file_arg,
         input_topic_arg,
         output_topic_arg,
         output_image_topic_arg,

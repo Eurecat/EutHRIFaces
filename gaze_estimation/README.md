@@ -16,7 +16,7 @@ The gaze estimation node:
 - **Pinhole Camera Model**: Configurable camera intrinsic parameters
 - **Real-time Processing**: Efficient computation suitable for real-time applications
 - **ROS4HRI Compliance**: Uses standard HRI message types
-- **Configurable Parameters**: Tunable via YAML config files and launch parameters
+- **Configurable Parameters**: Tunable via launch parameters
 - **Debug Output**: Optional debug logging for development
 
 ## Dependencies

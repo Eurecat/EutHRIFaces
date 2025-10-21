@@ -33,11 +33,12 @@ class YoloFaceDetector:
     - 5 facial landmarks (left_eye, right_eye, nose, left_mouth, right_mouth)
     """
     
-    def __init__(self, model_path: str, conf_threshold: float = 0.2, iou_threshold: float = 0.5, device: str = "cpu", debug: bool = False, use_boxmot: bool = False, boxmot_tracker_type: str = "bytetrack", boxmot_reid_model: str = ""):
+    def __init__(self, logger, model_path: str, conf_threshold: float = 0.2, iou_threshold: float = 0.5, device: str = "cpu", debug: bool = False, use_boxmot: bool = False, boxmot_tracker_type: str = "bytetrack", boxmot_reid_model: str = ""):
         """
         Initialize YOLO face detector.
         
         Args:
+            logger: Logger instance for logging
             model_path: Path to the ONNX model file
             conf_threshold: Confidence threshold for face detection
             iou_threshold: IoU threshold for NMS
@@ -47,6 +48,7 @@ class YoloFaceDetector:
             boxmot_tracker_type: Type of BOXMOT tracker to use
             boxmot_reid_model: Path to ReID model for BOXMOT
         """
+        self.logger = logger
         self.model_path = model_path
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
@@ -83,11 +85,11 @@ class YoloFaceDetector:
         # Log tracker status
         if self.use_boxmot:
             if BOXMOT_AVAILABLE:
-                print(f"[INFO] BOXMOT face tracking enabled with {self.boxmot_tracker_type}")
+                self.logger.info(f"[INFO] BOXMOT face tracking enabled with {self.boxmot_tracker_type}")
             else:
-                print("[WARNING] BOXMOT requested but not available, falling back to simple enumeration")
+                self.logger.warn("[WARNING] BOXMOT requested but not available, falling back to simple enumeration")
         else:
-            print("[INFO] Using simple face enumeration (no tracking)")
+            self.logger.warn("[INFO] Using simple face enumeration (no tracking)")
     
     def _download_model(self, model_path: str, url: str) -> bool:
         """
@@ -104,31 +106,44 @@ class YoloFaceDetector:
             # Create directory if it doesn't exist
             os.makedirs(os.path.dirname(model_path), exist_ok=True)
             
-            print(f"[INFO] Downloading YOLO face model from {url}")
-            print(f"[INFO] Saving to {model_path}")
+            self.logger.info(f"[INFO] Downloading YOLO face model from {url}")
+            self.logger.info(f"[INFO] Saving to {model_path}")
             
-            # Download with progress
+            # Use a small stateful hook to log download progress without using
+            # printing kwargs unsupported by ROS2 logger (e.g., end, flush).
+            last_percent = -1
             def progress_hook(block_num, block_size, total_size):
+                nonlocal last_percent
+                # total_size can be -1 or 0 when unknown; fall back to logging bytes
                 downloaded = block_num * block_size
+                if total_size <= 0:
+                    # Log occasionally to avoid spamming the logger
+                    if block_num % 10 == 0:
+                        self.logger.info(f"[INFO] Downloaded {downloaded} bytes")
+                    return
+
                 percent = min(100, (downloaded * 100) // total_size)
-                print(f"\r[INFO] Download progress: {percent}%", end="", flush=True)
-            
+                # Only log when percent changes to reduce log spam
+                if percent != last_percent:
+                    last_percent = percent
+                    self.logger.info(f"[INFO] Download progress: {percent}%")
+
             urllib.request.urlretrieve(url, model_path, progress_hook)
-            print()  # New line after progress
+            self.logger.info(f"[INFO] Model download finished: {os.path.basename(model_path)}")
             
             # Verify the file was downloaded
             if os.path.exists(model_path) and os.path.getsize(model_path) > 0:
-                print(f"[INFO] Model downloaded successfully: {os.path.getsize(model_path)} bytes")
+                self.logger.info(f"[INFO] Model downloaded successfully: {os.path.getsize(model_path)} bytes")
                 return True
             else:
-                print(f"[ERROR] Downloaded file is empty or doesn't exist")
+                self.logger.error(f"[ERROR] Downloaded file is empty or doesn't exist")
                 return False
                 
         except urllib.error.URLError as e:
-            print(f"[ERROR] Failed to download model from {url}: {e}")
+            self.logger.error(f"[ERROR] Failed to download model from {url}: {e}")
             return False
         except Exception as e:
-            print(f"[ERROR] Unexpected error during model download: {e}")
+            self.logger.error(f"[ERROR] Unexpected error during model download: {e}")
             return False
     
     def initialize(self) -> bool:
@@ -140,25 +155,25 @@ class YoloFaceDetector:
             bool: True if initialization successful, False otherwise
         """
         try:
-            # Check if model exists, if not try to download it
-            if not os.path.exists(self.model_path):
-                print(f"[INFO] YOLO face model not found at: {self.model_path}")
-                print(f"[INFO] Attempting to auto-download...")
+            # Check if model exists, if not try to download it, and is not 0 bytes
+            if not os.path.exists(self.model_path) or os.path.getsize(self.model_path) == 0: 
+                self.logger.info(f"[INFO] YOLO face model not found at: {self.model_path}")
+                self.logger.info(f"[INFO] Attempting to auto-download...")
                 
                 if not self._download_model(self.model_path, self.default_model_url):
-                    print(f"[ERROR] Failed to download YOLO face model")
+                    self.logger.error(f"[ERROR] Failed to download YOLO face model")
                     return False
             else:
-                print(f"[INFO] Found existing YOLO face model at: {self.model_path}")
+                self.logger.info(f"[INFO] Found existing YOLO face model at: {self.model_path}")
             
-            print(f"[INFO] Initializing YOLO face detector from {self.model_path}")
-            print(f"[INFO] Using device: {self.device}")
+            self.logger.info(f"[INFO] Initializing YOLO face detector from {self.model_path}")
+            self.logger.info(f"[INFO] Using device: {self.device}")
             
             # Check for onnxruntime-gpu if CUDA is requested
             if 'cuda' in self.device.lower():
                 try:
                     if 'CUDAExecutionProvider' not in ort.get_available_providers():
-                        print(f"\033[91m[WARNING] onnxruntime-gpu not installed! Install with: pip install onnxruntime-gpu\033[0m")
+                        self.logger.warn(f"\033[91m[WARNING] onnxruntime-gpu not installed! Install with: pip install onnxruntime-gpu\033[0m")
                 except: pass
             
             # Initialize OpenCV DNN (backup method)
@@ -167,7 +182,7 @@ class YoloFaceDetector:
             # Initialize ONNX InferenceSession with GPU/CPU support
             providers = ['CUDAExecutionProvider'] if 'cuda' in self.device.lower() else ['CPUExecutionProvider']
             
-            print(f"[DEBUG] Providers: {providers}")
+            self.logger.info(f"[INFO] Providers: {providers}")
             
             self.session = ort.InferenceSession(self.model_path, providers=providers)
             
@@ -179,11 +194,11 @@ class YoloFaceDetector:
                 self._initialize_boxmot()
             
             self.is_initialized = True
-            print(f"[INFO] YOLO face detector initialized successfully")
+            self.logger.info(f"[INFO] YOLO face detector initialized successfully")
             return True
             
         except Exception as e:
-            print(f"[ERROR] Failed to initialize YOLO face detector: {e}")
+            self.logger.error(f"[ERROR] Failed to initialize YOLO face detector: {e}")
             return False
     
     def detect(self, image: np.ndarray) -> Dict[str, Any]:
@@ -204,21 +219,21 @@ class YoloFaceDetector:
         
         try:
             if self.debug:
-                print(f"[DEBUG YOLO] Input image shape: {image.shape}, dtype: {image.dtype}")
+                self.logger.debug(f"[DEBUG YOLO] Input image shape: {image.shape}, dtype: {image.dtype}")
             
             # Run face detection on full image
             face_boxes, face_scores, face_classids, face_landmarks = self._detect_faces(image)
             
             if self.debug:
-                print(f"[DEBUG YOLO] Raw detection results: {len(face_boxes)} boxes, {len(face_scores)} scores")
+                self.logger.debug(f"[DEBUG YOLO] Raw detection results: {len(face_boxes)} boxes, {len(face_scores)} scores")
                 if len(face_scores) > 0:
-                    print(f"[DEBUG YOLO] Score range: {min(face_scores):.3f} - {max(face_scores):.3f}")
-                    print(f"[DEBUG YOLO] Confidence threshold: {self.conf_threshold}")
+                    self.logger.debug(f"[DEBUG YOLO] Score range: {min(face_scores):.3f} - {max(face_scores):.3f}")
+                    self.logger.debug(f"[DEBUG YOLO] Confidence threshold: {self.conf_threshold}")
             
             # Handle case where detection returns empty results
             if len(face_boxes) == 0:
                 if self.debug:
-                    print(f"[DEBUG YOLO] No faces detected")
+                    self.logger.debug(f"[DEBUG YOLO] No faces detected")
                 return {"faces": [], "confidences": [], "landmarks": [], "track_ids": []}
             
             # Apply tracking if BOXMOT is enabled
@@ -288,13 +303,13 @@ class YoloFaceDetector:
                     landmarks.append(face_landmarks_5pt)
                     
                 except Exception as e:
-                    print(f"[WARNING] Error processing face {i}: {e}")
+                    self.logger.warn(f"[WARNING] Error processing face {i}: {e}")
                     continue
             
             if self.debug:
-                print(f"[DEBUG YOLO] Final results: {len(faces)} faces after processing")
+                self.logger.debug(f"[DEBUG YOLO] Final results: {len(faces)} faces after processing")
                 for i, (face, conf) in enumerate(zip(faces, confidences)):
-                    print(f"[DEBUG YOLO] Face {i}: bbox={face}, conf={conf:.3f}")
+                    self.logger.debug(f"[DEBUG YOLO] Face {i}: bbox={face}, conf={conf:.3f}")
             
             return {
                 "faces": faces,
@@ -304,7 +319,7 @@ class YoloFaceDetector:
             }
             
         except Exception as e:
-            print(f"[ERROR] Face detection failed: {e}")
+            self.logger.error(f"[ERROR] Face detection failed: {e}")
             import traceback
             traceback.print_exc()
             return {"faces": [], "confidences": [], "landmarks": [], "track_ids": []}
@@ -537,14 +552,14 @@ class YoloFaceDetector:
         Initialize BOXMOT tracker for face tracking.
         """
         if not BOXMOT_AVAILABLE:
-            print("[ERROR] BOXMOT is not available. Cannot initialize BOXMOT tracker.")
+            self.logger.warn("[WARN] BOXMOT is not available. Cannot initialize BOXMOT tracker.")
             return
             
         try:
             # Get tracker configuration
             tracker_conf = get_tracker_config(self.boxmot_tracker_type)
             
-            print(f"[INFO] Using default BOXMOT config: {tracker_conf}")
+            self.logger.info(f"[INFO] Using default BOXMOT config: {tracker_conf}")
 
             reid_weights = Path(self.boxmot_reid_model) if self.boxmot_reid_model else None
 
@@ -556,15 +571,15 @@ class YoloFaceDetector:
                 half=False,  # Use float32 for compatibility
                 per_class=True,  # Track all classes together
             )
-            print(f"[INFO] BOXMOT face tracker '{self.boxmot_tracker_type}' initialized successfully")
+            self.logger.info(f"[INFO] BOXMOT face tracker '{self.boxmot_tracker_type}' initialized successfully")
             
         except Exception as e:
             import traceback
-            print(f"[ERROR] Failed to initialize BOXMOT face tracker: {e}")
-            print(f"[ERROR] Exception type: {type(e)}")
-            print(f"[ERROR] Full traceback:")
+            self.logger.error(f"[ERROR] Failed to initialize BOXMOT face tracker: {e}")
+            self.logger.error(f"[ERROR] Exception type: {type(e)}")
+            self.logger.error(f"[ERROR] Full traceback:")
             traceback.print_exc()
-            print("[INFO] Falling back to simple enumeration")
+            self.logger.error("[INFO] Falling back to simple enumeration")
             self.use_boxmot = False
     
     def _apply_boxmot_tracking(self, face_boxes: np.ndarray, face_scores: np.ndarray, face_classids: np.ndarray, image: np.ndarray) -> List[int]:
@@ -585,13 +600,13 @@ class YoloFaceDetector:
             dets = self._create_boxmot_detections(face_boxes, face_scores, face_classids)
             
             if self.debug:
-                print(f"[DEBUG BOXMOT] Created {len(dets)} detections for tracking")
+                self.logger.debug(f"[DEBUG BOXMOT] Created {len(dets)} detections for tracking")
                 
             # Update BOXMOT tracker
             tracks = self.boxmot_tracker.update(dets, image)
             
             if self.debug:
-                print(f"[DEBUG BOXMOT] Tracker returned {len(tracks) if tracks is not None else 0} tracks")
+                self.logger.debug(f"[DEBUG BOXMOT] Tracker returned {len(tracks) if tracks is not None else 0} tracks")
                 
             # Extract track IDs
             track_ids = []
@@ -604,20 +619,20 @@ class YoloFaceDetector:
                         track_ids.append(track_id)
                         
                         if self.debug:
-                            print(f"[DEBUG BOXMOT] Track ID: {track_id}, Detection Index: {det_ind}")
+                            self.logger.debug(f"[DEBUG BOXMOT] Track ID: {track_id}, Detection Index: {det_ind}")
                     else:
-                        print(f"[WARNING] Invalid track format: {track}")
+                        self.logger.warn(f"[WARNING] Invalid track format: {track}")
                         track_ids.append(len(track_ids))  # Fallback to enumeration
             else:
                 # Fallback to simple enumeration if tracking fails
                 track_ids = list(range(len(face_boxes)))
                 if self.debug:
-                    print("[DEBUG BOXMOT] No tracks returned, using simple enumeration")
+                    self.logger.debug("[DEBUG BOXMOT] No tracks returned, using simple enumeration")
                     
             return track_ids
             
         except Exception as e:
-            print(f"[ERROR] BOXMOT tracking failed: {e}")
+            self.logger.error(f"[ERROR] BOXMOT tracking failed: {e}")
             import traceback
             traceback.print_exc()
             # Fallback to simple enumeration

@@ -31,7 +31,7 @@ def _setup_gaze_estimation(context, *args, **kwargs):
         executable='gaze_estimation_node',
         name='gaze_estimation_node',
         parameters=[
-            LaunchConfiguration('config_file'),
+            # LaunchConfiguration('config_file'),
             {
                 'input_topic': LaunchConfiguration('input_topic'),
                 'output_topic': LaunchConfiguration('output_topic'),
@@ -62,15 +62,15 @@ def generate_launch_description():
     pkg_gaze_estimation = get_package_share_directory('gaze_estimation')
     
     # Declare launch arguments
-    config_file_arg = DeclareLaunchArgument(
-        'config_file',
-        default_value=PathJoinSubstitution([
-            FindPackageShare('gaze_estimation'),
-            'config',
-            'gaze_estimation.yaml'
-        ]),
-        description='Path to the config file'
-    )
+    # config_file_arg = DeclareLaunchArgument(
+    #     'config_file',
+    #     default_value=PathJoinSubstitution([
+    #         FindPackageShare('gaze_estimation'),
+    #         'config',
+    #         'gaze_estimation.yaml'
+    #     ]),
+    #     description='Path to the config file'
+    # )
     
     input_topic_arg = DeclareLaunchArgument(
         'input_topic',
@@ -135,7 +135,7 @@ def generate_launch_description():
     )
     
     return LaunchDescription([
-        config_file_arg,
+        # config_file_arg,
         input_topic_arg,
         output_topic_arg,
         focal_length_arg,

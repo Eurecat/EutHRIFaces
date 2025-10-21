@@ -82,7 +82,7 @@ class FaceRecognitionNode(Node):
         
         # Create RGB-only subscriber (copied from perception node RGB-only pattern)
         if self.enable_image_output:
-            self.get_logger().info("Setting up RGB-only processing for face recognition")
+            self.get_logger().debug("Setting up RGB-only processing for face recognition")
             self.color_sub = self.create_subscription(
                 Image, 
                 self.image_input_topic, 
@@ -104,8 +104,8 @@ class FaceRecognitionNode(Node):
         # Initialize face embedding extractor and identity manager
         self._initialize_components()
         
-        self.get_logger().info("Face Recognition Node initialized")
-        self.get_logger().info(f"Processing rate: {self.processing_rate_hz} Hz")
+        self.get_logger().debug("Face Recognition Node initialized")
+        self.get_logger().debug(f"Processing rate: {self.processing_rate_hz} Hz")
 
     # -------------------------------------------------------------------------
     #             Image Storage Callbacks (Copied from perception node)
@@ -122,7 +122,7 @@ class FaceRecognitionNode(Node):
         self.latest_color_image_msg = color_msg
         self.color_image_processed = False
         self.latest_color_image_timestamp = self.get_clock().now()
-        # self.get_logger().info("Color image received.")
+        # self.get_logger().debug("Color image received.")
 
     # -------------------------------------------------------------------------
     #                         Timer Callback for Inference
@@ -320,60 +320,40 @@ class FaceRecognitionNode(Node):
                 output_image_topic,
                 self.qos_profile
             )
-            self.get_logger().info(f"Image output enabled: {output_image_topic}")
+            self.get_logger().debug(f"Image output enabled: {output_image_topic}")
         else:
             self.image_output_publisher = None
         
-        self.get_logger().info(f"Subscribed to: {input_topic}")
-        self.get_logger().info(f"Publishing to: {output_topic}")
-        self.get_logger().info("Publishing FacialRecognitionArray messages")
+        self.get_logger().debug(f"Subscribed to: {input_topic}")
+        self.get_logger().debug(f"Publishing to: {output_topic}")
+        self.get_logger().debug("Publishing FacialRecognitionArray messages")
     
     def _initialize_components(self):
         """Initialize face embedding extractor and identity manager."""
         # Get parameters
         face_embedding_model = self.get_parameter('face_embedding_model').get_parameter_value().string_value
         device = self.get_parameter('device').get_parameter_value().string_value
-        weights_path = self.get_parameter('weights_path').get_parameter_value().string_value
         face_embedding_weights_name = self.get_parameter('face_embedding_weights_name').get_parameter_value().string_value
         
         # Build full weights path similar to YOLO approach
         weights_dir_path = None
         face_embedding_weights_path = None
         
-        if weights_path:
-            # Try to find the source directory first (for development)
-            possible_paths = [
-                # Source directory (development workspace)
-                '/workspace/src/face_recognition/weights',
-                os.path.join(os.path.dirname(os.path.dirname(__file__)), weights_path),
-                # Install directory (after colcon build)
-                None  # Will be set below
-            ]
-            
-            try:
-                import ament_index_python.packages as ament_packages
-                package_share = ament_packages.get_package_share_directory('face_recognition')
-                possible_paths.append(os.path.join(package_share, weights_path))
-            except:
-                pass
-            
-            # Check each possible path
-            for path in possible_paths:
-                if path and os.path.exists(path):
-                    weights_dir_path = path
-                    self.get_logger().info(f"Weights directory found: {weights_dir_path}")
-                    break
-            
-            # Fallback to relative path if none found
-            if not weights_dir_path:
-                weights_dir_path = weights_path
-                self.get_logger().warn(f"Using relative weights path: {weights_dir_path}")
-            
-            # If specific weights filename is provided, build full path
-            if face_embedding_weights_name:
-                face_embedding_weights_path = os.path.join(weights_dir_path, face_embedding_weights_name)
-                self.get_logger().info(f"Face embedding weights path: {face_embedding_weights_path}")
-        
+        # Get the current file's directory and navigate to package root
+        current_file_dir = os.path.dirname(os.path.abspath(__file__))
+        package_src_dir = os.path.dirname(current_file_dir)
+        package_src_dir = package_src_dir.replace('build', 'src') #save it in docker volume of ros2 package
+        weights_dir_path = os.path.join(package_src_dir,"weights")
+        #create weights dir if not there
+        if not os.path.exists(weights_dir_path):
+            os.makedirs(weights_dir_path) 
+        # If specific weights filename is provided, build full path
+        if not face_embedding_weights_name:
+            self.get_logger().error("No specific face embedding weights name provided; using default vggface2 for model")
+            face_embedding_weights_name = '20180402-114759-vggface2.pt'  # Default for vggface2 model
+
+        face_embedding_weights_path = os.path.join(weights_dir_path, face_embedding_weights_name)
+        self.get_logger().debug(f"Face embedding weights path: {face_embedding_weights_path}")
         # Initialize face embedding extractor
         try:
             self.face_embedding_extractor = create_face_embedding_extractor(
@@ -384,9 +364,9 @@ class FaceRecognitionNode(Node):
             )
             
             if self.face_embedding_extractor.is_available():
-                self.get_logger().info(f"Face embedding extractor initialized: {face_embedding_model} on {device}")
+                self.get_logger().debug(f"Face embedding extractor initialized: {face_embedding_model} on {device}")
                 model_info = self.face_embedding_extractor.get_model_info()
-                self.get_logger().info(f"Model info: {model_info}")
+                self.get_logger().debug(f"Model debug: {model_info}")
             else:
                 self.get_logger().error("Face embedding extractor failed to initialize")
                 return
@@ -413,6 +393,7 @@ class FaceRecognitionNode(Node):
             self.enable_debug_prints = debug_prints
             
             self.identity_manager = IdentityManager(
+                logger=self.get_logger(),
                 max_embeddings_per_identity=max_embeddings,
                 similarity_threshold=similarity_thresh,
                 track_identity_stickiness_margin=stickiness_margin,
@@ -426,8 +407,8 @@ class FaceRecognitionNode(Node):
                 ewma_alpha=ewma_alpha
             )
             
-            self.get_logger().info("Identity manager initialized")
-            self.get_logger().info(f"Parameters: similarity_threshold={similarity_thresh}, clustering_threshold={clustering_thresh}")
+            self.get_logger().debug("Identity manager initialized")
+            self.get_logger().debug(f"Parameters: similarity_threshold={similarity_thresh}, clustering_threshold={clustering_thresh}")
             
         except Exception as e:
             self.get_logger().error(f"Failed to initialize identity manager: {e}")
@@ -466,7 +447,7 @@ class FaceRecognitionNode(Node):
         
         if self.enable_debug_prints:
             crop_time = (time.time() - crop_start_time) * 1000
-            self.get_logger().info(f"Face crop extraction took: {crop_time:.2f}ms for {len(msg.ids)} input faces, got {len(face_crops)} valid crops")
+            self.get_logger().debug(f"Face crop extraction took: {crop_time:.2f}ms for {len(msg.ids)} input faces, got {len(face_crops)} valid crops")
         
         if not face_crops:
             self.get_logger().warning("No valid face crops extracted from landmarks array")
@@ -487,7 +468,7 @@ class FaceRecognitionNode(Node):
         
         if self.enable_debug_prints:
             embedding_time = (time.time() - embedding_start_time) * 1000
-            self.get_logger().info(f"Embedding extraction took: {embedding_time:.2f}ms for {len(face_crops)} faces")
+            self.get_logger().debug(f"Embedding extraction took: {embedding_time:.2f}ms for {len(face_crops)} faces")
         
         # Create face_embeddings dictionary for identity manager using face_id as key
         if self.enable_debug_prints:
@@ -505,7 +486,7 @@ class FaceRecognitionNode(Node):
         
         if self.enable_debug_prints:
             prep_time = (time.time() - prep_start_time) * 1000
-            self.get_logger().info(f"Embedding preparation took: {prep_time:.2f}ms")
+            self.get_logger().debug(f"Embedding preparation took: {prep_time:.2f}ms")
         
         # Process identities in batch
         if face_embeddings:
@@ -516,7 +497,7 @@ class FaceRecognitionNode(Node):
             
             if self.enable_debug_prints:
                 identity_time = (time.time() - identity_start_time) * 1000
-                self.get_logger().info(f"Identity processing took: {identity_time:.2f}ms for {len(face_embeddings)} faces")
+                self.get_logger().debug(f"Identity processing took: {identity_time:.2f}ms for {len(face_embeddings)} faces")
             
             # Collect results for batch publishing
             recognition_results = []
@@ -543,7 +524,7 @@ class FaceRecognitionNode(Node):
             
             if self.enable_debug_prints:
                 publish_time = (time.time() - publish_start_time) * 1000
-                self.get_logger().info(f"Publishing results took: {publish_time:.2f}ms for {len(valid_indices)} faces")
+                self.get_logger().debug(f"Publishing results took: {publish_time:.2f}ms for {len(valid_indices)} faces")
         else:
             self.get_logger().warning("No valid embeddings extracted for identity processing")
             # Publish empty array when no valid embeddings
@@ -593,7 +574,7 @@ class FaceRecognitionNode(Node):
             self.recognition_publisher.publish(recognition_array_msg)
             
             if self.enable_debug_prints:
-                self.get_logger().info(f"Published FacialRecognitionArray with {len(facial_recognition_msgs)} faces")
+                self.get_logger().debug(f"Published FacialRecognitionArray with {len(facial_recognition_msgs)} faces")
             
         except Exception as e:
             self.get_logger().error(f"Failed to publish recognition array: {e}")
@@ -822,7 +803,7 @@ class FaceRecognitionNode(Node):
         if self.identity_manager and hasattr(self.identity_manager, 'save_identity_database'):
             try:
                 self.identity_manager.save_identity_database()
-                self.get_logger().info("Identity database saved")
+                self.get_logger().debug("Identity database saved")
             except Exception as e:
                 self.get_logger().error(f"Failed to save identity database: {e}")
         

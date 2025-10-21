@@ -91,7 +91,7 @@ ros2 run face_recognition face_recognition_node
 
 ## Configuration
 
-Key parameters can be configured in `config/face_recognition.yaml` or via launch arguments:
+Key parameters can be configured via launch arguments:
 
 ### Face Embedding Parameters
 - `face_embedding_model`: Model to use ('vggface2' or 'casia-webface')

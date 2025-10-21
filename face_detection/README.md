@@ -75,7 +75,7 @@ ros2 run face_detection face_detector
 
 The package can be configured via:
 1. Launch file parameters
-2. Configuration YAML file (`config/face_detection.yaml`)
+2. Configuration via launch file
 3. ROS2 parameters at runtime
 
 ### Key Parameters

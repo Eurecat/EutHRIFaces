@@ -36,7 +36,7 @@ def _setup_face_recognition(context, *args, **kwargs):
         executable='face_recognition_node',
         name='face_recognition_node',
         parameters=[
-            LaunchConfiguration('config_file'),
+            # LaunchConfiguration('config_file'),
             {
                 'input_topic': LaunchConfiguration('input_topic'),
                 'output_topic': LaunchConfiguration('output_topic'),
@@ -44,7 +44,6 @@ def _setup_face_recognition(context, *args, **kwargs):
                 'processing_rate_hz': LaunchConfiguration('processing_rate_hz'),
                 'device': LaunchConfiguration('device'),
                 'face_embedding_model': LaunchConfiguration('face_embedding_model'),
-                'weights_path': LaunchConfiguration('weights_path'),
                 'face_embedding_weights_name': LaunchConfiguration('face_embedding_weights_name'),
                 'similarity_threshold': LaunchConfiguration('similarity_threshold'),
                 'clustering_threshold': LaunchConfiguration('clustering_threshold'),
@@ -71,15 +70,15 @@ def generate_launch_description():
     """Generate launch description for face recognition."""
     
     # Declare launch arguments
-    config_file_arg = DeclareLaunchArgument(
-        'config_file',
-        default_value=PathJoinSubstitution([
-            FindPackageShare('face_recognition'),
-            'config',
-            'face_recognition.yaml'
-        ]),
-        description='Path to the face recognition configuration file'
-    )
+    # config_file_arg = DeclareLaunchArgument(
+    #     'config_file',
+    #     default_value=PathJoinSubstitution([
+    #         FindPackageShare('face_recognition'),
+    #         'config',
+    #         'face_recognition.yaml'
+    #     ]),
+    #     description='Path to the face recognition configuration file'
+    # )
     
     input_topic_arg = DeclareLaunchArgument(
         'input_topic',
@@ -112,12 +111,6 @@ def generate_launch_description():
         description='Face embedding model to use (vggface2, casia-webface)'
     )
     
-    weights_path_arg = DeclareLaunchArgument(
-        'weights_path',
-        default_value='weights',
-        description='Path to weights directory (relative to package root)'
-    )
-    
     face_embedding_weights_name_arg = DeclareLaunchArgument(
         'face_embedding_weights_name',
         default_value='20180402-114759-vggface2.pt',
@@ -127,7 +120,7 @@ def generate_launch_description():
     # Identity management parameters
     similarity_threshold_arg = DeclareLaunchArgument(
         'similarity_threshold',
-        default_value='0.25',
+        default_value='0.3',
         description='Minimum similarity threshold for identity assignment'
     )
     
@@ -139,7 +132,7 @@ def generate_launch_description():
     
     max_embeddings_per_identity_arg = DeclareLaunchArgument(
         'max_embeddings_per_identity',
-        default_value='250',
+        default_value='150',
         description='Maximum embeddings to store per identity'
     )
     
@@ -174,13 +167,12 @@ def generate_launch_description():
     
     return LaunchDescription([
         # Launch arguments
-        config_file_arg,
+        # config_file_arg,
         input_topic_arg,
         output_topic_arg,
         image_input_topic_arg,
         device_arg,
         face_embedding_model_arg,
-        weights_path_arg,
         face_embedding_weights_name_arg,
         similarity_threshold_arg,
         clustering_threshold_arg,
