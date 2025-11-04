@@ -29,7 +29,7 @@ except ImportError:
     GazeArray = None
 from geometry_msgs.msg import Vector3
 from std_msgs.msg import Header
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 from cv_bridge import CvBridge
 
 from typing import Dict, List, Optional, Tuple, Any
@@ -67,10 +67,10 @@ class GazeEstimationNode(Node):
         
         # Setup QoS profiles (copied from perception node)
         qos_profile = QoSProfile(
-            depth=10,  # Keep only the latest image
+            depth=1,  # Keep only the latest image
             # reliability=QoSReliabilityPolicy.BEST_EFFORT,
             # durability=DurabilityPolicy.VOLATILE,
-            # history=QoSHistoryPolicy.KEEP_LAST,
+            # # history=QoSHistoryPolicy.KEEP_LAST,
         )
         # Create subscriber and publisher
         self.facial_landmarks_sub = self.create_subscription(
@@ -91,15 +91,31 @@ class GazeEstimationNode(Node):
         # Initialize CV bridge for image handling
         self.bridge = CvBridge()
         
-        # Create RGB-only subscriber (copied from perception node RGB-only pattern)
+        # Create RGB subscriber - choose between compressed and regular image
         if self.enable_image_output:
-            self.get_logger().info("Setting up RGB-only processing for gaze visualization")
-            self.color_sub = self.create_subscription(
-                Image, 
-                self.image_input_topic, 
-                self._store_latest_rgb, 
-                qos_profile
-            )
+            self.get_logger().info("Setting up RGB processing for gaze visualization")
+            if self.compressed_topic and self.compressed_topic.strip():
+                self.get_logger().info(f"Using compressed image topic: {self.compressed_topic}")
+                real_time_qos = QoSProfile(
+                    depth=1,  # Keep only latest image
+                    reliability=QoSReliabilityPolicy.BEST_EFFORT,  # No retransmissions
+                    history=QoSHistoryPolicy.KEEP_LAST,
+                    durability=DurabilityPolicy.VOLATILE  # Don't persist messages
+                )
+                self.color_sub = self.create_subscription(
+                    CompressedImage, 
+                    self.compressed_topic, 
+                    self._store_latest_compressed_rgb, 
+                    real_time_qos
+                )
+            else:
+                self.get_logger().info(f"Using regular image topic: {self.image_input_topic}")
+                self.color_sub = self.create_subscription(
+                    Image, 
+                    self.image_input_topic, 
+                    self._store_latest_rgb, 
+                    qos_profile
+                )
             
             self.image_pub = self.create_publisher(
                 Image,
@@ -163,6 +179,20 @@ class GazeEstimationNode(Node):
         self.latest_color_image_timestamp = self.get_clock().now()
         # self.get_logger().info("Color image received.")
 
+    def _store_latest_compressed_rgb(self, color_msg):
+        """
+        Stores the latest compressed color image.
+
+        Simple callback for compressed RGB image storage.
+
+        Args:
+            color_msg: ROS CompressedImage message containing RGB data
+        """
+        self.latest_color_image_msg = color_msg
+        self.color_image_processed = False
+        self.latest_color_image_timestamp = self.get_clock().now()
+        # self.get_logger().info("Compressed color image received.")
+
     # -------------------------------------------------------------------------
     #                         Timer Callback for Inference
     # -------------------------------------------------------------------------
@@ -194,8 +224,23 @@ class GazeEstimationNode(Node):
             if color_image_processed is True:
                 return
             
-            # Convert ROS Image to OpenCV format (copied from perception node pattern)
-            cv_image = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
+            # Convert image to OpenCV format
+            try:
+                if self.compressed_topic and self.compressed_topic.strip():
+                    # Handle compressed image
+                    np_arr = np.frombuffer(color_msg.data, np.uint8)
+                    cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                    
+                    if cv_image is None:
+                        self.get_logger().error('Failed to decode compressed image')
+                        return
+                else:
+                    # Handle regular image  
+                    cv_image = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
+            except Exception as e:
+                self.get_logger().error(f'Error converting image: {e}')
+                return
+            
             self.color_image_processed = True
             
             if cv_image is None or cv_image.size == 0:
@@ -303,8 +348,10 @@ class GazeEstimationNode(Node):
     def declare_and_get_parameters(self):
         """Declare and get all ROS2 parameters."""
         # Declare and get topic parameters
+        self.declare_parameter('compressed_topic', '')
         self.declare_parameter('input_topic', '/humans/faces/detected')
         self.declare_parameter('output_topic', '/humans/faces/gaze')
+        self.compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
         self.input_topic = self.get_parameter('input_topic').get_parameter_value().string_value
         self.output_topic = self.get_parameter('output_topic').get_parameter_value().string_value
         

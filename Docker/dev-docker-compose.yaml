@@ -23,6 +23,7 @@ services:
     tty: true
     stdin_open: true
     environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
       # - USER_ID=${USER_ID}
       # - GROUP_ID=${GROUP_ID}
       # - USERNAME=${USERNAME}

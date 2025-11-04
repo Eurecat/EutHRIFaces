@@ -52,6 +52,7 @@ def _setup_face_recognition(context, *args, **kwargs):
                 'identity_database_path': LaunchConfiguration('identity_database_path'),
                 'enable_debug_output': LaunchConfiguration('enable_debug_output'),
                 'receiver_id': LaunchConfiguration('receiver_id'),
+                'compressed_topic': LaunchConfiguration('compressed_topic'),
             }
         ],
         output='screen',
@@ -79,6 +80,12 @@ def generate_launch_description():
     #     ]),
     #     description='Path to the face recognition configuration file'
     # )
+    
+    compressed_topic_arg = DeclareLaunchArgument(
+        'compressed_topic',
+        default_value='',
+        description='Compressed image topic (if provided, uses compressed images instead of regular images)'
+    )
     
     input_topic_arg = DeclareLaunchArgument(
         'input_topic',
@@ -168,6 +175,7 @@ def generate_launch_description():
     return LaunchDescription([
         # Launch arguments
         # config_file_arg,
+        compressed_topic_arg,
         input_topic_arg,
         output_topic_arg,
         image_input_topic_arg,

@@ -30,7 +30,7 @@ except ImportError:
     FacialRecognitionArray = None
 
 from std_msgs.msg import Header
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 from cv_bridge import CvBridge
 
 from .face_embedding_extractor import create_face_embedding_extractor
@@ -83,12 +83,31 @@ class FaceRecognitionNode(Node):
         # Create RGB-only subscriber (copied from perception node RGB-only pattern)
         if self.enable_image_output:
             self.get_logger().debug("Setting up RGB-only processing for face recognition")
-            self.color_sub = self.create_subscription(
-                Image, 
-                self.image_input_topic, 
-                self._store_latest_rgb, 
-                self.qos_profile
-            )
+            
+            # Create image subscribers - choose between compressed and regular image
+            compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
+            if compressed_topic and compressed_topic.strip():
+                self.get_logger().info(f"Using compressed image topic: {compressed_topic}")
+                real_time_qos = QoSProfile(
+                    depth=1,  # Keep only latest image
+                    reliability=QoSReliabilityPolicy.BEST_EFFORT,  # No retransmissions
+                    history=QoSHistoryPolicy.KEEP_LAST,
+                    durability=DurabilityPolicy.VOLATILE  # Don't persist messages
+                )
+                self.color_sub = self.create_subscription(
+                    CompressedImage, 
+                    compressed_topic, 
+                    self._store_latest_compressed_rgb, 
+                    real_time_qos
+                )
+            else:
+                self.get_logger().info(f"Using regular image topic: {self.image_input_topic}")
+                self.color_sub = self.create_subscription(
+                    Image, 
+                    self.image_input_topic, 
+                    self._store_latest_rgb, 
+                    self.qos_profile
+                )
 
         # Store latest landmarks for processing
         self.latest_landmarks_array = None
@@ -124,6 +143,20 @@ class FaceRecognitionNode(Node):
         self.latest_color_image_timestamp = self.get_clock().now()
         # self.get_logger().debug("Color image received.")
 
+    def _store_latest_compressed_rgb(self, color_msg):
+        """
+        Stores the latest compressed color image.
+
+        Simple callback for compressed RGB image storage.
+
+        Args:
+            color_msg: ROS CompressedImage message containing RGB data
+        """
+        self.latest_color_image_msg = color_msg
+        self.color_image_processed = False
+        self.latest_color_image_timestamp = self.get_clock().now()
+        # self.get_logger().debug("Compressed color image received.")
+
     # -------------------------------------------------------------------------
     #                         Timer Callback for Inference
     # -------------------------------------------------------------------------
@@ -155,8 +188,24 @@ class FaceRecognitionNode(Node):
             if color_image_processed is True:
                 return
             
-            # Convert ROS Image to OpenCV format (copied from perception node pattern)
-            cv_image = self.cv_bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
+            # Convert image to OpenCV format
+            try:
+                compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
+                if compressed_topic and compressed_topic.strip():
+                    # Handle compressed image
+                    np_arr = np.frombuffer(color_msg.data, np.uint8)
+                    cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                    
+                    if cv_image is None:
+                        self.get_logger().error('Failed to decode compressed image')
+                        return
+                else:
+                    # Handle regular image
+                    cv_image = self.cv_bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
+            except Exception as e:
+                self.get_logger().error(f'Error converting image: {e}')
+                return
+            
             self.color_image_processed = True
             
             if cv_image is None or cv_image.size == 0:
@@ -250,6 +299,7 @@ class FaceRecognitionNode(Node):
     def _declare_parameters(self):
         """Declare ROS2 parameters."""
         # Input/Output topics
+        self.declare_parameter('compressed_topic', '')
         self.declare_parameter('input_topic', '/humans/faces/detected')
         self.declare_parameter('output_topic', '/humans/faces/recognized')
         self.declare_parameter('image_input_topic', '/camera/color/image_rect_raw')

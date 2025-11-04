@@ -1,4 +1,4 @@
-name: coghri_faces
+name: coghri_faces_raspy
 
 services:
   eut_face_detection:
@@ -21,26 +21,15 @@ services:
     stdin_open: true
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
-      # - USER_ID=${USER_ID}
-      # - GROUP_ID=${GROUP_ID}
-      # - USERNAME=${USERNAME}
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
       - XAUTHORITY=/tmp/xauth/.docker.xauth     
-      # - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}  
-      # - PULSE_SERVER=unix:/run/user/${USER_ID}/pulse/native
-      # - PULSE_COOKIE=/home/coghri/.config/pulse/cookie
-      # - ALSA_CARD=${ALSA_CARD}  # Set to the card number for your speaker
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
-    # cap_add:
-    #   - NET_RAW
-    #   - NET_ADMIN
-    # security_opt:
-    #   - seccomp:unconfined
-    command: bash -c "source /workspace/install/setup.bash && ros2 launch face_detection face_detection.launch.py"
+    # Compressed image topic parameter added to launch
+    command: bash -c "source /workspace/install/setup.bash && ros2 launch face_detection face_detection.launch.py compressed_topic:=/camera/image_raw/compressed"
     entrypoint: ["/entrypoint.sh"]
   
   eut_face_recognition:
@@ -63,26 +52,15 @@ services:
     stdin_open: true
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
-      # - USER_ID=${USER_ID}
-      # - GROUP_ID=${GROUP_ID}
-      # - USERNAME=${USERNAME}
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
       - XAUTHORITY=/tmp/xauth/.docker.xauth     
-      # - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}  
-      # - PULSE_SERVER=unix:/run/user/${USER_ID}/pulse/native
-      # - PULSE_COOKIE=/home/coghri/.config/pulse/cookie
-      # - ALSA_CARD=${ALSA_CARD}  # Set to the card number for your speaker
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
-    # cap_add:
-    #   - NET_RAW
-    #   - NET_ADMIN
-    # security_opt:
-    #   - seccomp:unconfined
-    command: bash -c "source /workspace/install/setup.bash && ros2 launch face_recognition face_recognition.launch.py"
+    # Compressed image topic parameter added to launch
+    command: bash -c "source /workspace/install/setup.bash && ros2 launch face_recognition face_recognition.launch.py compressed_topic:=/camera/image_raw/compressed"
     # entrypoint: ["/entrypoint.sh"]
 
   eut_gaze_estimation:
@@ -105,25 +83,13 @@ services:
     stdin_open: true
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
-      # - USER_ID=${USER_ID}
-      # - GROUP_ID=${GROUP_ID}
-      # - USERNAME=${USERNAME}
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
       - XAUTHORITY=/tmp/xauth/.docker.xauth     
-      # - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}  
-      # - PULSE_SERVER=unix:/run/user/${USER_ID}/pulse/native
-      # - PULSE_COOKIE=/home/coghri/.config/pulse/cookie
-      # - ALSA_CARD=${ALSA_CARD}  # Set to the card number for your speaker
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
-    # cap_add:
-    #   - NET_RAW
-    #   - NET_ADMIN
-    # security_opt:
-    #   - seccomp:unconfined
-    command: bash -c "source /workspace/install/setup.bash && ros2 launch gaze_estimation gaze_estimation.launch.py"
+    # Compressed image topic parameter added to launch
+    command: bash -c "source /workspace/install/setup.bash && ros2 launch gaze_estimation gaze_estimation.launch.py compressed_topic:=/camera/image_raw/compressed"
     # entrypoint: ["/entrypoint.sh"]
-

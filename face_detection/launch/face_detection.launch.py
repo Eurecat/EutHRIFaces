@@ -52,6 +52,7 @@ def _setup_face_detection(context, *args, **kwargs):
                 'use_boxmot': LaunchConfiguration('use_boxmot'),
                 'boxmot_tracker_type': LaunchConfiguration('boxmot_tracker_type'),
                 'boxmot_reid_model': LaunchConfiguration('boxmot_reid_model'),
+                'compressed_topic': LaunchConfiguration('compressed_topic'),
             }
         ],
         output='screen',
@@ -79,6 +80,12 @@ def generate_launch_description():
     #     ]),
     #     description='Path to the face detection configuration file'
     # )
+    
+    compressed_topic_arg = DeclareLaunchArgument(
+        'compressed_topic',
+        default_value='',
+        description='Compressed image topic (if provided, uses compressed images instead of regular images)'
+    )
     
     input_topic_arg = DeclareLaunchArgument(
         'input_topic',
@@ -194,6 +201,7 @@ def generate_launch_description():
     
     return LaunchDescription([
         # config_file_arg,
+        compressed_topic_arg,
         input_topic_arg,
         output_topic_arg,
         output_image_topic_arg,

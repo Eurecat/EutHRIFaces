@@ -44,6 +44,7 @@ def _setup_gaze_estimation(context, *args, **kwargs):
                 'image_input_topic': LaunchConfiguration('image_input_topic'),
                 'output_image_topic': LaunchConfiguration('output_image_topic'),
                 'enable_debug_output': LaunchConfiguration('enable_debug_output'),
+                'compressed_topic': LaunchConfiguration('compressed_topic'),
             }
         ],
         output='screen',
@@ -72,6 +73,12 @@ def generate_launch_description():
     #     ]),
     #     description='Path to the config file'
     # )
+    
+    compressed_topic_arg = DeclareLaunchArgument(
+        'compressed_topic',
+        default_value='',
+        description='Compressed image topic (if provided, uses compressed images instead of regular images)'
+    )
     
     input_topic_arg = DeclareLaunchArgument(
         'input_topic',
@@ -144,6 +151,7 @@ def generate_launch_description():
     
     return LaunchDescription([
         # config_file_arg,
+        compressed_topic_arg,
         input_topic_arg,
         output_topic_arg,
         enable_debug_output_arg,
