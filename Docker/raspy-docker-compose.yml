@@ -20,11 +20,14 @@ services:
     tty: true
     stdin_open: true
     environment:
+      - RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS
+      - FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp      
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
-      - XAUTHORITY=/tmp/xauth/.docker.xauth     
+      - XAUTHORITY=/tmp/xauth/.docker.xauth
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
@@ -51,11 +54,14 @@ services:
     tty: true
     stdin_open: true
     environment:
+      - RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS
+      - FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp      
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
-      - XAUTHORITY=/tmp/xauth/.docker.xauth     
+      - XAUTHORITY=/tmp/xauth/.docker.xauth
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
@@ -82,11 +88,15 @@ services:
     tty: true
     stdin_open: true
     environment:
+      - RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS
+      - FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
-      - XAUTHORITY=/tmp/xauth/.docker.xauth     
+      - XAUTHORITY=/tmp/xauth/.docker.xauth
+
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
