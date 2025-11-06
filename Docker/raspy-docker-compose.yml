@@ -20,9 +20,9 @@ services:
     tty: true
     stdin_open: true
     environment:
-      - RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS
-      - FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA
-      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp      
+      # - RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS
+      # - FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA
+      # - RMW_IMPLEMENTATION=rmw_fastrtps_cpp      
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
@@ -54,9 +54,9 @@ services:
     tty: true
     stdin_open: true
     environment:
-      - RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS
-      - FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA
-      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp      
+      # - RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS
+      # - FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA
+      # - RMW_IMPLEMENTATION=rmw_fastrtps_cpp      
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
@@ -88,9 +88,9 @@ services:
     tty: true
     stdin_open: true
     environment:
-      - RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS
-      - FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA
-      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      # - RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS
+      # - FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA
+      # - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
