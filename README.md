@@ -161,6 +161,21 @@ EutHRIFaces/
 3. Make your changes
 4. Submit a pull request
 
+
+### Managing the Speaker Recognition Database
+
+To query the database:
+```bash
+mongosh
+use face_recognition_db
+db.identity_database.find()
+```
+
+To delete the database, remove the associated Docker volume.
+
+You can also manage entries via the web interface at [http://0.0.0.0:8081/db/face_recognition_db/identity_database/](http://0.0.0.0:8081/db/face_recognition_db/identity_database/).
+
+
 ## License
 
 Apache-2.0

@@ -41,3 +41,6 @@ open3d>=0.19.0
 
 #GPU and resources monitoring
 pynvml>=12.0.0
+
+# MongoDB -----------------------------------
+pymongo>=4.5

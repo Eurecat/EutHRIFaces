@@ -329,9 +329,13 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('identity_timeout', 60.0)
         self.declare_parameter('min_detections_for_stable_identity', 5)
         self.declare_parameter('enable_debug_output', True)  # Temporarily enable for debugging
-        self.declare_parameter('identity_database_path', '')
         self.declare_parameter('use_ewma_for_mean', False)
         self.declare_parameter('ewma_alpha', 0.6)
+        
+        # MongoDB parameters for identity storage
+        self.declare_parameter('mongo_uri', 'mongodb://localhost:27017/')#'mongodb://eurecat:cerdanyola@mongodb:27017/?authSource=admin&serverSelectionTimeoutMS=5000')
+        self.declare_parameter('mongo_db_name', 'face_recognition_db')
+        self.declare_parameter('mongo_collection_name', 'identity_database')
         
         # Processing parameters
         self.declare_parameter('gaze_identity_exclusion_threshold', 0.5)
@@ -435,9 +439,13 @@ class FaceRecognitionNode(Node):
             identity_timeout = self.get_parameter('identity_timeout').get_parameter_value().double_value
             min_detections = self.get_parameter('min_detections_for_stable_identity').get_parameter_value().integer_value
             debug_prints = self.get_parameter('enable_debug_output').get_parameter_value().bool_value
-            database_path = self.get_parameter('identity_database_path').get_parameter_value().string_value
             use_ewma = self.get_parameter('use_ewma_for_mean').get_parameter_value().bool_value
             ewma_alpha = self.get_parameter('ewma_alpha').get_parameter_value().double_value
+            
+            # MongoDB parameters
+            mongo_uri = self.get_parameter('mongo_uri').get_parameter_value().string_value
+            mongo_db_name = self.get_parameter('mongo_db_name').get_parameter_value().string_value
+            mongo_collection_name = self.get_parameter('mongo_collection_name').get_parameter_value().string_value
             
             # Set debug prints flag
             self.enable_debug_output = debug_prints
@@ -452,13 +460,15 @@ class FaceRecognitionNode(Node):
                 identity_timeout=identity_timeout,
                 min_detections_for_stable_identity=min_detections,
                 enable_debug_output=debug_prints,
-                identity_database_path=database_path if database_path else None,
+                mongo_uri=mongo_uri,
+                mongo_db_name=mongo_db_name,
+                mongo_collection_name=mongo_collection_name,
                 use_ewma_for_mean=use_ewma,
                 ewma_alpha=ewma_alpha
             )
             
-            self.get_logger().debug("Identity manager initialized")
-            self.get_logger().debug(f"Parameters: similarity_threshold={similarity_thresh}, clustering_threshold={clustering_thresh}")
+            self.get_logger().info("Identity manager initialized")
+            self.get_logger().info(f"Parameters: similarity_threshold={similarity_thresh}, clustering_threshold={clustering_thresh}")
             
         except Exception as e:
             self.get_logger().error(f"Failed to initialize identity manager: {e}")
@@ -849,6 +859,7 @@ class FaceRecognitionNode(Node):
     
     def destroy_node(self):
         """Clean up when node is destroyed."""
+        self.get_logger().info("Destroy node")
         # Save identity database before shutdown
         if self.identity_manager and hasattr(self.identity_manager, 'save_identity_database'):
             try:
@@ -856,25 +867,26 @@ class FaceRecognitionNode(Node):
                 self.get_logger().debug("Identity database saved")
             except Exception as e:
                 self.get_logger().error(f"Failed to save identity database: {e}")
-        
+        else:
+            self.get_logger().info("No identity manager to save database from")
         super().destroy_node()
 
 
 def main(args=None):
     """Main function."""
     rclpy.init(args=args)
+    node = FaceRecognitionNode()
     
     try:
-        node = FaceRecognitionNode()
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        node.get_logger().info("Shutting down RECOGNITION node.")
     except Exception as e:
         print(f"Error in face recognition node: {e}")
     finally:
-        if 'node' in locals():
-            node.destroy_node()
-        rclpy.shutdown()
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

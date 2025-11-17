@@ -9,7 +9,8 @@ services:
     runtime: ${DOCKER_RUNTIME:-runc}
     image: ${BUILT_IMAGE}
     privileged: true
-    # user: "root"  # User
+    depends_on:
+      - mongodb_service
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.xauth_docker/share/:/tmp/xauth/
@@ -21,27 +22,17 @@ services:
     stdin_open: true
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
-      # - USER_ID=${USER_ID}
-      # - GROUP_ID=${GROUP_ID}
-      # - USERNAME=${USERNAME}
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
       - XAUTHORITY=/tmp/xauth/.docker.xauth     
-      # - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}  
-      # - PULSE_SERVER=unix:/run/user/${USER_ID}/pulse/native
-      # - PULSE_COOKIE=/home/coghri/.config/pulse/cookie
-      # - ALSA_CARD=${ALSA_CARD}  # Set to the card number for your speaker
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
-    # cap_add:
-    #   - NET_RAW
-    #   - NET_ADMIN
-    # security_opt:
-    #   - seccomp:unconfined
     command: bash -c "source /workspace/install/setup.bash && ros2 launch face_detection face_detection.launch.py"
     entrypoint: ["/entrypoint.sh"]
+    stop_signal: SIGINT
+    stop_grace_period: 30s
   
   eut_face_recognition:
     container_name: "eut_face_recognition"
@@ -51,7 +42,8 @@ services:
     runtime: ${DOCKER_RUNTIME:-runc}
     image: ${BUILT_IMAGE}
     privileged: true
-    # user: "root"  # User
+    depends_on:
+      - mongodb_service
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.xauth_docker/share/:/tmp/xauth/
@@ -63,27 +55,16 @@ services:
     stdin_open: true
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
-      # - USER_ID=${USER_ID}
-      # - GROUP_ID=${GROUP_ID}
-      # - USERNAME=${USERNAME}
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
       - XAUTHORITY=/tmp/xauth/.docker.xauth     
-      # - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}  
-      # - PULSE_SERVER=unix:/run/user/${USER_ID}/pulse/native
-      # - PULSE_COOKIE=/home/coghri/.config/pulse/cookie
-      # - ALSA_CARD=${ALSA_CARD}  # Set to the card number for your speaker
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
-    # cap_add:
-    #   - NET_RAW
-    #   - NET_ADMIN
-    # security_opt:
-    #   - seccomp:unconfined
     command: bash -c "source /workspace/install/setup.bash && ros2 launch face_recognition face_recognition.launch.py"
-    # entrypoint: ["/entrypoint.sh"]
+    stop_signal: SIGINT
+    stop_grace_period: 30s
 
   eut_gaze_estimation:
     container_name: "eut_gaze_estimation"
@@ -93,7 +74,8 @@ services:
     runtime: ${DOCKER_RUNTIME:-runc}
     image: ${BUILT_IMAGE}
     privileged: true
-    # user: "root"  # User
+    depends_on:
+      - mongodb_service
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.xauth_docker/share/:/tmp/xauth/
@@ -105,25 +87,48 @@ services:
     stdin_open: true
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
-      # - USER_ID=${USER_ID}
-      # - GROUP_ID=${GROUP_ID}
-      # - USERNAME=${USERNAME}
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
       - XAUTHORITY=/tmp/xauth/.docker.xauth     
-      # - ROS_DOMAIN_ID=${ROS_DOMAIN_ID}  
-      # - PULSE_SERVER=unix:/run/user/${USER_ID}/pulse/native
-      # - PULSE_COOKIE=/home/coghri/.config/pulse/cookie
-      # - ALSA_CARD=${ALSA_CARD}  # Set to the card number for your speaker
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
-    # cap_add:
-    #   - NET_RAW
-    #   - NET_ADMIN
-    # security_opt:
-    #   - seccomp:unconfined
     command: bash -c "source /workspace/install/setup.bash && ros2 launch gaze_estimation gaze_estimation.launch.py"
-    # entrypoint: ["/entrypoint.sh"]
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+
+  mongodb_service:
+    image: mongo:7
+    container_name: "mongodb"
+    restart: unless-stopped
+    ports:
+      - "27017:27017" 
+    volumes:
+      - mongodb_faces_data:/data/db
+    environment:
+      - MONGODB_INITDB_ROOT_USERNAME=eurecat
+      - MONGODB_INITDB_ROOT_PASSWORD=cerdanyola
+    stop_signal: SIGTERM
+    stop_grace_period: 60s
+
+  mongo_express_faces:
+    image: mongo-express:latest
+    container_name: "mongo-express-faces"
+    restart: unless-stopped
+    depends_on:
+      - mongodb_service
+    ports:
+      - "8081:8081"  
+    environment:
+      - ME_CONFIG_MONGODB_ENABLE_ADMIN=true
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=eurecat
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=cerdanyola
+      - ME_CONFIG_MONGODB_SERVER=mongodb
+      - ME_CONFIG_MONGODB_URL=mongodb://eurecat:cerdanyola@mongodb:27017/?authSource=admin
+
+volumes:
+  mongodb_faces_data:
+    name: coghri_faces_mongodb_data
+    driver: local
 
