@@ -333,7 +333,7 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('ewma_alpha', 0.6)
         
         # MongoDB parameters for identity storage
-        self.declare_parameter('mongo_uri', 'mongodb://localhost:27017/')#'mongodb://eurecat:cerdanyola@mongodb:27017/?authSource=admin&serverSelectionTimeoutMS=5000')
+        self.declare_parameter('mongo_uri', 'mongodb://localhost:27018/')#'mongodb://eurecat:cerdanyola@mongodb:27017/?authSource=admin&serverSelectionTimeoutMS=5000')
         self.declare_parameter('mongo_db_name', 'face_recognition_db')
         self.declare_parameter('mongo_collection_name', 'identity_database')
         

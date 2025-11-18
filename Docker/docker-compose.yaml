@@ -10,7 +10,7 @@ services:
     image: ${BUILT_IMAGE}
     privileged: true
     depends_on:
-      - mongodb_service
+      - mongodb_faces_service
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.xauth_docker/share/:/tmp/xauth/
@@ -43,7 +43,7 @@ services:
     image: ${BUILT_IMAGE}
     privileged: true
     depends_on:
-      - mongodb_service
+      - mongodb_faces_service
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.xauth_docker/share/:/tmp/xauth/
@@ -75,7 +75,7 @@ services:
     image: ${BUILT_IMAGE}
     privileged: true
     depends_on:
-      - mongodb_service
+      - mongodb_faces_service
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.xauth_docker/share/:/tmp/xauth/
@@ -98,12 +98,12 @@ services:
     stop_signal: SIGINT
     stop_grace_period: 30s
 
-  mongodb_service:
+  mongodb_faces_service:
     image: mongo:7
-    container_name: "mongodb"
+    container_name: "mongodb_faces"
     restart: unless-stopped
     ports:
-      - "27017:27017" 
+      - "27018:27017" 
     volumes:
       - mongodb_faces_data:/data/db
     environment:
@@ -117,15 +117,15 @@ services:
     container_name: "mongo-express-faces"
     restart: unless-stopped
     depends_on:
-      - mongodb_service
+      - mongodb_faces_service
     ports:
-      - "8081:8081"  
+      - "8082:8081"  
     environment:
       - ME_CONFIG_MONGODB_ENABLE_ADMIN=true
       - ME_CONFIG_MONGODB_ADMINUSERNAME=eurecat
       - ME_CONFIG_MONGODB_ADMINPASSWORD=cerdanyola
-      - ME_CONFIG_MONGODB_SERVER=mongodb
-      - ME_CONFIG_MONGODB_URL=mongodb://eurecat:cerdanyola@mongodb:27017/?authSource=admin
+      - ME_CONFIG_MONGODB_SERVER=mongodb_faces_service
+      - ME_CONFIG_MONGODB_URL=mongodb://eurecat:cerdanyola@mongodb_faces_service:27017/?authSource=admin
 
 volumes:
   mongodb_faces_data:

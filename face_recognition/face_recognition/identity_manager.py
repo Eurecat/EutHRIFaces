@@ -1073,6 +1073,10 @@ class IdentityManager:
             saved_count = 0
             for unique_id, cluster in self.identity_clusters.items():
                 # Convert identity cluster to MongoDB document format
+                # Only save last embedding, last confidence, and mean embedding to reduce storage
+                last_embedding = cluster.all_embeddings[-1].tolist() if cluster.all_embeddings else None
+                last_confidence = cluster.embedding_confidences[-1] if cluster.embedding_confidences else None
+                
                 doc = {
                     "unique_id": unique_id,
                     "creation_timestamp": cluster.creation_timestamp,
@@ -1081,8 +1085,8 @@ class IdentityManager:
                     "quality_score": cluster.quality_score,
                     "custom_name": cluster.custom_name,
                     "metadata": cluster.metadata,
-                    "embeddings": [emb.tolist() for emb in cluster.all_embeddings],
-                    "embedding_confidences": cluster.embedding_confidences,
+                    "last_embedding": last_embedding,
+                    "last_embedding_confidence": last_confidence,
                     "mean_embedding": cluster.mean_embedding.tolist() if cluster.mean_embedding is not None else None,
                     "updated_at": time.time()
                 }
@@ -1138,9 +1142,16 @@ class IdentityManager:
                     metadata=doc.get("metadata", {})
                 )
                 
-                # Restore embeddings
-                cluster.all_embeddings = [np.array(emb) for emb in doc["embeddings"]]
-                cluster.embedding_confidences = doc["embedding_confidences"]
+                # Restore embeddings - only load last embedding if available
+                if doc.get("last_embedding"):
+                    cluster.all_embeddings = [np.array(doc["last_embedding"])]
+                    cluster.embedding_confidences = [doc.get("last_embedding_confidence", 0.0)]
+                else:
+                    # Fallback for old format with full embeddings array
+                    if doc.get("embeddings"):
+                        cluster.all_embeddings = [np.array(emb) for emb in doc["embeddings"]]
+                        cluster.embedding_confidences = doc.get("embedding_confidences", [])
+                
                 if doc.get("mean_embedding"):
                     cluster.mean_embedding = np.array(doc["mean_embedding"])
                 
