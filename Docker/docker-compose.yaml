@@ -29,7 +29,7 @@ services:
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
-    command: bash -c "source /workspace/install/setup.bash && ros2 launch face_detection face_detection.launch.py"
+    command: bash -c "source /workspace/install/setup.bash && ros2 launch face_detection face_detection.launch.py compressed_topic:=/camera/image_raw/compressed"
     entrypoint: ["/entrypoint.sh"]
     stop_signal: SIGINT
     stop_grace_period: 30s
@@ -62,7 +62,7 @@ services:
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
-    command: bash -c "source /workspace/install/setup.bash && ros2 launch face_recognition face_recognition.launch.py"
+    command: bash -c "source /workspace/install/setup.bash && ros2 launch face_recognition face_recognition.launch.py compressed_topic:=/camera/image_raw/compressed"
     stop_signal: SIGINT
     stop_grace_period: 30s
 
@@ -94,7 +94,7 @@ services:
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
-    command: bash -c "source /workspace/install/setup.bash && ros2 launch gaze_estimation gaze_estimation.launch.py"
+    command: bash -c "source /workspace/install/setup.bash && ros2 launch gaze_estimation gaze_estimation.launch.py compressed_topic:=/camera/image_raw/compressed"
     stop_signal: SIGINT
     stop_grace_period: 30s
 
