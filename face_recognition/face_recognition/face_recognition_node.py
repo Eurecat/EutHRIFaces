@@ -245,7 +245,7 @@ class FaceRecognitionNode(Node):
             self.min_processing_time = min(self.min_processing_time, processing_time)
         
         # Log timing every 100 frames or when debug is enabled
-        if self.processed_messages % 100 == 0 or self.enable_debug_output:
+        if self.processed_messages % 100 == 0:
             avg_time = self.total_processing_time / self.processed_messages
             faces_count = len(landmarks_msg.ids) if landmarks_msg and landmarks_msg.ids else 0
             self.get_logger().info(
@@ -678,9 +678,42 @@ class FaceRecognitionNode(Node):
                 
                 if w > 0 and h > 0:
                     face_crop = self.last_image[y:y+h, x:x+w]
-                    if self.enable_debug_output:
-                        self.get_logger().debug(f"Extracted face crop from normalized bbox: {face_crop.shape}")
-                    return face_crop
+                    
+                    # Apply histogram equalization for color balancing while maintaining compatibility
+                    if face_crop.size > 0:
+                        # Save original face crop for debugging
+                        # if self.enable_debug_output:
+                        #     debug_filename_original = f"/workspace/src/face_recognition/weights/imgs/face_crop_original_{msg.face_id}.jpg"
+                        #     cv2.imwrite(debug_filename_original, face_crop)
+                        #     self.get_logger().debug(f"Saved original face crop: {debug_filename_original}")
+                        
+                        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) for better lighting robustness
+                        # Convert BGR to LAB color space for better color preservation
+                        lab = cv2.cvtColor(face_crop, cv2.COLOR_BGR2LAB)
+                        l_channel, a_channel, b_channel = cv2.split(lab)
+                        
+                        # Apply CLAHE to the L (lightness) channel only to preserve color information
+                        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                        l_channel_clahe = clahe.apply(l_channel)
+                        
+                        # Merge channels back and convert to BGR
+                        lab_clahe = cv2.merge([l_channel_clahe, a_channel, b_channel])
+                        face_crop_balanced = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
+                        
+                        # Save processed face crop for debugging
+                        # if self.enable_debug_output:
+                        #     debug_filename_processed = f"/workspace/src/face_recognition/weights/imgs/face_crop_processed_{msg.face_id}.jpg"
+                        #     cv2.imwrite(debug_filename_processed, face_crop_balanced)
+                        #     self.get_logger().debug(f"Saved processed face crop: {debug_filename_processed}")
+                        
+                        if self.enable_debug_output:
+                            self.get_logger().debug(f"Extracted and processed face crop from normalized bbox: {face_crop_balanced.shape}")
+                        
+                        return face_crop_balanced
+                    else:
+                        if self.enable_debug_output:
+                            self.get_logger().debug("Face crop is empty")
+                        return face_crop
                 else:
                     if self.enable_debug_output:
                         self.get_logger().debug(f"Invalid bbox dimensions after bounds check: w={w}, h={h}")
@@ -724,9 +757,30 @@ class FaceRecognitionNode(Node):
                 
                 if w > 0 and h > 0:
                     face_crop = self.last_image[y:y+h, x:x+w]
-                    if self.enable_debug_output:
-                        self.get_logger().debug(f"Extracted face crop from landmarks: {face_crop.shape}")
-                    return face_crop
+                    
+                    # Apply histogram equalization for color balancing while maintaining compatibility
+                    if face_crop.size > 0:
+                        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) for better lighting robustness
+                        # Convert BGR to LAB color space for better color preservation
+                        lab = cv2.cvtColor(face_crop, cv2.COLOR_BGR2LAB)
+                        l_channel, a_channel, b_channel = cv2.split(lab)
+                        
+                        # Apply CLAHE to the L (lightness) channel only to preserve color information
+                        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                        l_channel_clahe = clahe.apply(l_channel)
+                        
+                        # Merge channels back and convert to BGR
+                        lab_clahe = cv2.merge([l_channel_clahe, a_channel, b_channel])
+                        face_crop_balanced = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
+                                                
+                        if self.enable_debug_output:
+                            self.get_logger().debug(f"Extracted and processed face crop from landmarks: {face_crop_balanced.shape}")
+                        
+                        return face_crop_balanced
+                    else:
+                        if self.enable_debug_output:
+                            self.get_logger().debug("Landmark-based face crop is empty")
+                        return face_crop
                 else:
                     if self.enable_debug_output:
                         self.get_logger().debug(f"Invalid landmark-based dimensions: w={w}, h={h}")

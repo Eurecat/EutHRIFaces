@@ -30,6 +30,15 @@ def _setup_face_recognition(context, *args, **kwargs):
     existing = os.environ.get("PYTHONPATH", "")
     new_py_path = site_pkgs if not existing else f"{site_pkgs}{os.pathsep}{existing}"
 
+    # Check if debug output is enabled
+    enable_debug = LaunchConfiguration('enable_debug_output').perform(context).lower() == 'true'
+    
+    # Prepare arguments - add debug log level if debug output is enabled
+    node_arguments = []
+    if enable_debug:
+        # Set debug level only for this specific node, not globally
+        node_arguments = ['--ros-args', '--log-level', 'face_recognition_node:=debug']
+
     # Face recognition node
     face_recognition_node = Node(
         package='face_recognition',
@@ -55,6 +64,7 @@ def _setup_face_recognition(context, *args, **kwargs):
                 'compressed_topic': LaunchConfiguration('compressed_topic'),
             }
         ],
+        arguments=node_arguments,
         output='screen',
         emulate_tty=True,
     )
@@ -62,6 +72,7 @@ def _setup_face_recognition(context, *args, **kwargs):
     return [
         LogInfo(msg=f"[face_recognition] Using AI venv: {VENV_PATH}"),
         LogInfo(msg=f"[face_recognition] Injecting site-packages: {site_pkgs}"),
+        LogInfo(msg=f"[face_recognition] Debug logging: {'enabled' if enable_debug else 'disabled'}"),
         SetEnvironmentVariable("PYTHONPATH", new_py_path),
         face_recognition_node,
     ]
