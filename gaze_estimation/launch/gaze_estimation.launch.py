@@ -152,7 +152,7 @@ def generate_launch_description():
     
     ros4hri_with_id_arg = DeclareLaunchArgument(
         'ros4hri_with_id',
-        default_value='false',
+        default_value='true',
         description='Enable ROS4HRI with ID mode: subscribe to individual FacialLandmarks messages and publish individual Gaze messages per ID (default: ROS4HRI array mode)'
     )
     

@@ -104,8 +104,8 @@ class FaceDetectorNode(Node):
         # (ros4hri_with_id is already set in _get_parameters())
         if self.ros4hri_with_id:
             # ROS4HRI with ID mode: Create per-ID publishers dynamically
-            # Dictionary to store publishers for each face ID: {face_id: publisher}
-            self.facial_landmarks_publishers = {}  # {face_id: Publisher}
+            # Dictionary to store publishers for each face ID: {face_id: {'roi': Publisher, ...}}
+            self.facial_landmarks_publishers = {}  # {face_id: {'roi': Publisher, ...}}
             self.tracked_face_ids = set()  # Set of currently tracked face IDs
             
             # Publisher for tracked faces list
@@ -281,7 +281,8 @@ class FaceDetectorNode(Node):
         # Publish faces based on mode
         if facial_landmarks_msgs:
             if self.ros4hri_with_id:
-                # ROS4HRI with ID mode: Publish to per-ID topics /humans/faces/<faceID>/detected
+                # ROS4HRI with ID mode: Publish individual fields to per-ID topics
+                # Following ROS4HRI standard: /humans/faces/<faceID>/roi, etc.
                 # All messages from the same frame share the same timestamp for synchronization
                 frame_timestamp = color_msg.header.stamp
                 current_frame_face_ids = set()
@@ -290,24 +291,49 @@ class FaceDetectorNode(Node):
                     face_id = facial_landmarks_msg.face_id
                     current_frame_face_ids.add(face_id)
                     
-                    # Create publisher for this face ID if it doesn't exist
+                    # Create publishers for this face ID if they don't exist
                     if face_id not in self.facial_landmarks_publishers:
-                        topic_name = f'/humans/faces/{face_id}/detected'
-                        self.facial_landmarks_publishers[face_id] = self.create_publisher(
+                        self.facial_landmarks_publishers[face_id] = {}
+                        
+                        # Publisher for full FacialLandmarks message
+                        detected_topic = f'/humans/faces/{face_id}/detected'
+                        self.facial_landmarks_publishers[face_id]['detected'] = self.create_publisher(
                             FacialLandmarks,
-                            topic_name,
+                            detected_topic,
                             10
                         )
-                        self.get_logger().info(f"Created publisher for face ID: {topic_name}")
+                        self.get_logger().info(f"Created FacialLandmarks publisher for face ID: {detected_topic}")
+                        
+                        # Publisher for ROI (bounding box) - individual field
+                        roi_topic = f'/humans/faces/{face_id}/roi'
+                        self.facial_landmarks_publishers[face_id]['roi'] = self.create_publisher(
+                            NormalizedRegionOfInterest2D,
+                            roi_topic,
+                            10
+                        )
+                        self.get_logger().info(f"Created ROI publisher for face ID: {roi_topic}")
                     
                     # Ensure all messages from the same frame have the same timestamp
                     facial_landmarks_msg.header.stamp = frame_timestamp
                     
-                    # Publish to the per-ID topic
-                    self.facial_landmarks_publishers[face_id].publish(facial_landmarks_msg)
+                    # Publish full FacialLandmarks message to /humans/faces/<faceID>/detected
+                    self.facial_landmarks_publishers[face_id]['detected'].publish(facial_landmarks_msg)
+                    
+                    # Publish ROI (bounding box) to /humans/faces/<faceID>/roi (individual field)
+                    roi_msg = NormalizedRegionOfInterest2D()
+                    roi_msg.header = facial_landmarks_msg.header
+                    roi_msg.header.stamp = frame_timestamp  # Same timestamp for all messages from same frame
+                    roi_msg.xmin = facial_landmarks_msg.bbox_xyxy.xmin
+                    roi_msg.ymin = facial_landmarks_msg.bbox_xyxy.ymin
+                    roi_msg.xmax = facial_landmarks_msg.bbox_xyxy.xmax
+                    roi_msg.ymax = facial_landmarks_msg.bbox_xyxy.ymax
+                    roi_msg.c = facial_landmarks_msg.bbox_confidence
+                    
+                    self.facial_landmarks_publishers[face_id]['roi'].publish(roi_msg)
                     
                     if self.enable_debug_output:
                         self.get_logger().debug(f"[ROS PUBLISH] Published FacialLandmarks for face_id={face_id} to /humans/faces/{face_id}/detected with timestamp={frame_timestamp}")
+                        self.get_logger().debug(f"[ROS PUBLISH] Published ROI for face_id={face_id} to /humans/faces/{face_id}/roi with timestamp={frame_timestamp}")
                 
                 # Update tracked faces list
                 # Remove face IDs that are no longer present
