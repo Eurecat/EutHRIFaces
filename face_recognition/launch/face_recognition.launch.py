@@ -62,6 +62,7 @@ def _setup_face_recognition(context, *args, **kwargs):
                 'enable_debug_output': LaunchConfiguration('enable_debug_output'),
                 'receiver_id': LaunchConfiguration('receiver_id'),
                 'compressed_topic': LaunchConfiguration('compressed_topic'),
+                'ros4hri_with_id': LaunchConfiguration('ros4hri_with_id'),
             }
         ],
         arguments=node_arguments,
@@ -183,6 +184,12 @@ def generate_launch_description():
         description='Processing rate in Hz'
     )
     
+    ros4hri_with_id_arg = DeclareLaunchArgument(
+        'ros4hri_with_id',
+        default_value='false',
+        description='Enable ROS4HRI with ID mode: subscribe to individual FacialLandmarks messages and publish individual FacialRecognition messages per ID (default: ROS4HRI array mode)'
+    )
+    
     return LaunchDescription([
         # Launch arguments
         # config_file_arg,
@@ -201,6 +208,7 @@ def generate_launch_description():
         enable_debug_output_arg,
         receiver_id_arg,
         processing_rate_hz_arg,
+        ros4hri_with_id_arg,
         
         # Node with virtual environment setup
         OpaqueFunction(function=_setup_face_recognition),

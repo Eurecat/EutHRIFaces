@@ -45,6 +45,7 @@ def _setup_gaze_estimation(context, *args, **kwargs):
                 'output_image_topic': LaunchConfiguration('output_image_topic'),
                 'enable_debug_output': LaunchConfiguration('enable_debug_output'),
                 'compressed_topic': LaunchConfiguration('compressed_topic'),
+                'ros4hri_with_id': LaunchConfiguration('ros4hri_with_id'),
             }
         ],
         output='screen',
@@ -149,6 +150,12 @@ def generate_launch_description():
         description='Enable debug output'
     )
     
+    ros4hri_with_id_arg = DeclareLaunchArgument(
+        'ros4hri_with_id',
+        default_value='false',
+        description='Enable ROS4HRI with ID mode: subscribe to individual FacialLandmarks messages and publish individual Gaze messages per ID (default: ROS4HRI array mode)'
+    )
+    
     return LaunchDescription([
         # config_file_arg,
         compressed_topic_arg,
@@ -163,5 +170,6 @@ def generate_launch_description():
         image_input_topic_arg,
         output_image_topic_arg,
         processing_rate_hz_arg,
+        ros4hri_with_id_arg,
         OpaqueFunction(function=_setup_gaze_estimation),
     ])

@@ -13,6 +13,7 @@ providing persistent identity tracking across changing track IDs.
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy, QoSReliabilityPolicy, QoSHistoryPolicy
+from rclpy.time import Time
 
 import numpy as np
 import cv2
@@ -21,7 +22,7 @@ import os
 from typing import Dict, List, Optional, Tuple, Any
 
 try:
-    from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, FacialRecognition, FacialRecognitionArray
+    from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, FacialRecognition, FacialRecognitionArray, IdsList
 except ImportError:
     print("Warning: hri_msgs not found. Please install hri_msgs package.")
     FacialLandmarks = None
@@ -109,9 +110,15 @@ class FaceRecognitionNode(Node):
                     self.qos_profile
                 )
 
-        # Store latest landmarks for processing
+        # Store latest landmarks for processing (array mode)
         self.latest_landmarks_array = None
         self.landmarks_processed = False
+        
+        # Message buffer for ROS4HRI with ID mode (sync by timestamp)
+        # Will be initialized in _setup_topics after parameter is available
+        self.landmarks_buffer = {}  # {timestamp: [FacialLandmarks, ...]}
+        self.buffer_timeout = 0.1  # 100ms timeout for frame synchronization
+        self.last_processed_timestamp = None
 
         # Timer for periodic inference (copied from perception node pattern)
         timer_period = 1.0 / self.processing_rate_hz  # Use processing_rate_hz parameter
@@ -122,6 +129,15 @@ class FaceRecognitionNode(Node):
         
         # Initialize face embedding extractor and identity manager
         self._initialize_components()
+        
+        # Timer for processing buffered frames in ROS4HRI with ID mode (after _setup_topics sets ros4hri_with_id)
+        # Note: ros4hri_with_id is set in _setup_topics which is called earlier
+        if hasattr(self, 'ros4hri_with_id') and self.ros4hri_with_id:
+            buffer_timer_period = 0.05  # Check buffer every 50ms
+            self.buffer_timer = self.create_timer(
+                buffer_timer_period,
+                self.process_buffered_frames
+            )
         
         self.get_logger().debug("Face Recognition Node initialized")
         self.get_logger().debug(f"Processing rate: {self.processing_rate_hz} Hz")
@@ -275,12 +291,16 @@ class FaceRecognitionNode(Node):
             self.get_logger().warning("No image available for face recognition")
             return
             
+        # Handle empty messages
         if not msg.ids:
             if self.enable_debug_output:
                 self.get_logger().debug('Received empty FacialLandmarksArray - publishing clean image')
             # Publish clean image when no faces detected
             if self.enable_image_output and self.image_output_publisher:
                 self._publish_clean_image()
+            # In ROS4HRI with ID mode, we don't publish recognition messages for empty frames
+            if not self.ros4hri_with_id:
+                self._publish_recognition_array([])
             return
         
         if self.enable_debug_output:
@@ -342,6 +362,9 @@ class FaceRecognitionNode(Node):
         
         # Receiver ID for hri_msgs
         self.declare_parameter('receiver_id', 'face_recognition')
+        
+        # ROS4HRI mode parameter - when enabled, subscribes to per-ID messages and publishes per-ID
+        self.declare_parameter('ros4hri_with_id', False)  # Default to array mode (ROS4HRI array)
     
     def _setup_topics(self):
         """Setup ROS2 subscribers and publishers."""
@@ -350,20 +373,51 @@ class FaceRecognitionNode(Node):
         output_topic = self.get_parameter('output_topic').get_parameter_value().string_value
         self.image_input_topic = self.get_parameter('image_input_topic').get_parameter_value().string_value
         
-        # Subscriber for facial landmarks array
-        self.landmarks_subscriber = self.create_subscription(
-            FacialLandmarksArray,
-            input_topic,
-            self.landmarks_array_callback,
-            self.qos_profile
-        )
+        # Get ROS4HRI mode parameter
+        self.ros4hri_with_id = self.get_parameter('ros4hri_with_id').get_parameter_value().bool_value
         
-        # Publisher for facial recognition array results
-        self.recognition_publisher = self.create_publisher(
-            FacialRecognitionArray,
-            output_topic,
-            self.qos_profile
-        )
+        if self.ros4hri_with_id:
+            # ROS4HRI with ID mode: Subscribe to tracked faces list and per-ID topics
+            # Dictionary to store subscribers for each face ID: {face_id: subscriber}
+            self.landmarks_subscribers = {}  # {face_id: Subscription}
+            self.recognition_publishers = {}  # {face_id: Publisher}
+            self.tracked_face_ids = set()  # Set of currently tracked face IDs
+            
+            # Subscribe to tracked faces list
+            self.tracked_faces_subscriber = self.create_subscription(
+                IdsList,
+                '/humans/faces/tracked',
+                self.tracked_faces_callback,
+                self.qos_profile
+            )
+            self.get_logger().info("ROS4HRI with ID mode enabled: Subscribing to /humans/faces/tracked and per-ID topics")
+            self.landmarks_subscriber = None
+        else:
+            # ROS4HRI array mode: Subscribe to FacialLandmarksArray messages
+            self.landmarks_subscriber = self.create_subscription(
+                FacialLandmarksArray,
+                input_topic,
+                self.landmarks_array_callback,
+                self.qos_profile
+            )
+            self.get_logger().info("ROS4HRI array mode enabled: Subscribing to FacialLandmarksArray messages")
+            self.landmarks_subscribers = {}
+            self.recognition_publishers = {}
+            self.tracked_face_ids = set()
+            self.tracked_faces_subscriber = None
+        
+        # Create publisher based on mode - only one publisher per topic
+        if self.ros4hri_with_id:
+            # ROS4HRI with ID mode: Publishers will be created dynamically per face ID
+            # (recognition_publishers dictionary is already initialized above)
+            self.recognition_publisher = None
+        else:
+            # ROS4HRI array mode: Publish FacialRecognitionArray
+            self.recognition_publisher = self.create_publisher(
+                FacialRecognitionArray,
+                output_topic,
+                self.qos_profile
+            )
         
         # Image output publisher (optional)
         self.enable_image_output = self.get_parameter('enable_image_output').get_parameter_value().bool_value
@@ -380,13 +434,29 @@ class FaceRecognitionNode(Node):
         
         self.get_logger().debug(f"Subscribed to: {input_topic}")
         self.get_logger().debug(f"Publishing to: {output_topic}")
-        self.get_logger().debug("Publishing FacialRecognitionArray messages")
+        if self.ros4hri_with_id:
+            self.get_logger().debug("Publishing individual FacialRecognition messages")
+        else:
+            self.get_logger().debug("Publishing FacialRecognitionArray messages")
     
     def _initialize_components(self):
         """Initialize face embedding extractor and identity manager."""
         # Get parameters
         face_embedding_model = self.get_parameter('face_embedding_model').get_parameter_value().string_value
-        device = self.get_parameter('device').get_parameter_value().string_value
+        device_param = self.get_parameter('device').get_parameter_value().string_value
+        
+        # Handle device parameter: if cuda is requested but not available, fall back to cpu
+        device = device_param
+        if 'cuda' in device_param.lower():
+            try:
+                import torch
+                if not torch.cuda.is_available():
+                    self.get_logger().warn(f"CUDA requested but not available. Falling back to CPU.")
+                    device = 'cpu'
+            except ImportError:
+                self.get_logger().warn(f"PyTorch not available. Using CPU.")
+                device = 'cpu'
+        
         face_embedding_weights_name = self.get_parameter('face_embedding_weights_name').get_parameter_value().string_value
         
         # Build full weights path similar to YOLO approach
@@ -485,6 +555,106 @@ class FaceRecognitionNode(Node):
         self.latest_landmarks_array = msg
         self.landmarks_processed = False
     
+    def tracked_faces_callback(self, msg):
+        """
+        Callback for tracked faces list in ROS4HRI with ID mode.
+        Manages dynamic subscriptions to per-ID topics.
+        
+        Args:
+            msg: IdsList message containing currently tracked face IDs
+        """
+        new_tracked_ids = set(msg.ids)
+        
+        # Add new face IDs - create subscribers and publishers
+        for face_id in new_tracked_ids:
+            if face_id not in self.tracked_face_ids:
+                # Create subscriber for this face ID
+                topic_name = f'/humans/faces/{face_id}/detected'
+                self.landmarks_subscribers[face_id] = self.create_subscription(
+                    FacialLandmarks,
+                    topic_name,
+                    lambda m, fid=face_id: self.landmarks_individual_callback(m, fid),
+                    self.qos_profile
+                )
+                
+                # Create publisher for this face ID
+                output_topic_name = f'/humans/faces/{face_id}/recognized'
+                self.recognition_publishers[face_id] = self.create_publisher(
+                    FacialRecognition,
+                    output_topic_name,
+                    self.qos_profile
+                )
+                
+                self.get_logger().debug(f"Subscribed to {topic_name} and publishing to {output_topic_name}")
+        
+        # Remove old face IDs (cleanup - ROS2 doesn't allow destroying subscriptions, but we can track them)
+        removed_ids = self.tracked_face_ids - new_tracked_ids
+        for face_id in removed_ids:
+            if self.enable_debug_output:
+                self.get_logger().debug(f"Face ID {face_id} no longer tracked")
+        
+        # Update tracked face IDs
+        self.tracked_face_ids = new_tracked_ids
+    
+    def landmarks_individual_callback(self, msg, face_id):
+        """
+        Callback for processing individual FacialLandmarks messages from per-ID topics in ROS4HRI with ID mode.
+        Messages are buffered by timestamp and processed in batch when a complete frame is received.
+        
+        Args:
+            msg: FacialLandmarks message for a single face
+            face_id: Face ID (for compatibility with lambda)
+        """
+        # Get timestamp as a key for frame synchronization
+        timestamp_key = (msg.header.stamp.sec, msg.header.stamp.nanosec)
+        
+        # Add message to buffer
+        if timestamp_key not in self.landmarks_buffer:
+            self.landmarks_buffer[timestamp_key] = []
+        self.landmarks_buffer[timestamp_key].append(msg)
+        
+        if self.enable_debug_output:
+            self.get_logger().debug(f"Buffered FacialLandmarks for face_id={msg.face_id}, timestamp={timestamp_key}, buffer_size={len(self.landmarks_buffer[timestamp_key])}")
+    
+    def process_buffered_frames(self):
+        """
+        Process buffered frames that are ready (older than buffer_timeout or complete frame detected).
+        This is called periodically by a timer in ROS4HRI with ID mode.
+        """
+        if not self.ros4hri_with_id or not self.landmarks_buffer:
+            return
+        
+        current_time = self.get_clock().now()
+        current_ns = current_time.nanoseconds
+        frames_to_process = []
+        
+        # Find frames that are ready to process (older than buffer_timeout)
+        for ts_key, messages in list(self.landmarks_buffer.items()):
+            # Calculate time difference manually to avoid clock type issues
+            ts_ns = int(ts_key[0]) * int(1e9) + int(ts_key[1])
+            ts_diff = (current_ns - ts_ns) / 1e9  # Convert to seconds
+            
+            # Process if frame is old enough (all messages from same frame should have arrived)
+            if ts_diff > self.buffer_timeout:
+                frames_to_process.append((ts_key, messages))
+        
+        # Process ready frames
+        for ts_key, messages in frames_to_process:
+            # Create a virtual FacialLandmarksArray from buffered messages
+            landmarks_array_msg = FacialLandmarksArray()
+            landmarks_array_msg.header = messages[0].header  # Use header from first message
+            landmarks_array_msg.ids = messages
+            
+            # Process as if it were an array message
+            self.latest_landmarks_array = landmarks_array_msg
+            self.landmarks_processed = False
+            
+            # Remove from buffer
+            del self.landmarks_buffer[ts_key]
+            
+            if self.enable_debug_output:
+                self.get_logger().debug(f"Processing buffered frame with {len(messages)} faces (timestamp: {ts_key})")
+    
     def _process_landmarks_array_batch(self, msg):
         """Process array of facial landmarks in batch mode for better performance."""
         if not msg.ids:
@@ -571,11 +741,48 @@ class FaceRecognitionNode(Node):
                 
                 recognition_results.append((landmarks_msg, unique_id, confidence))
             
-            # Publish recognition array for all faces
+            # Publish recognition results based on mode
             if self.enable_debug_output:
                 publish_start_time = time.time()
             
-            self._publish_recognition_array(recognition_results)
+            if self.ros4hri_with_id:
+                # ROS4HRI with ID mode: Publish to per-ID topics /humans/faces/<faceID>/recognized
+                # All messages from the same frame share the same timestamp for synchronization
+                frame_timestamp = recognition_results[0][0].header.stamp if recognition_results else None
+                for landmarks_msg, unique_id, confidence in recognition_results:
+                    face_id = landmarks_msg.face_id
+                    
+                    # Create publisher for this face ID if it doesn't exist
+                    if face_id not in self.recognition_publishers:
+                        topic_name = f'/humans/faces/{face_id}/recognized'
+                        self.recognition_publishers[face_id] = self.create_publisher(
+                            FacialRecognition,
+                            topic_name,
+                            self.qos_profile
+                        )
+                        if self.enable_debug_output:
+                            self.get_logger().debug(f"Created publisher for face ID: {topic_name}")
+                    
+                    recognition_msg = FacialRecognition()
+                    recognition_msg.header = landmarks_msg.header
+                    # Ensure all messages from the same frame have the same timestamp
+                    if frame_timestamp:
+                        recognition_msg.header.stamp = frame_timestamp
+                    recognition_msg.face_id = face_id
+                    if unique_id is not None:
+                        recognition_msg.recognized_face_id = unique_id
+                        recognition_msg.confidence = float(confidence)
+                    else:
+                        recognition_msg.recognized_face_id = "unknown"
+                        recognition_msg.confidence = 0.0
+                    
+                    # Publish to the per-ID topic
+                    self.recognition_publishers[face_id].publish(recognition_msg)
+                    if self.enable_debug_output:
+                        self.get_logger().debug(f"Published FacialRecognition for face_id={face_id} to /humans/faces/{face_id}/recognized, recognized_id={unique_id}")
+            else:
+                # ROS4HRI array mode: Publish FacialRecognitionArray
+                self._publish_recognition_array(recognition_results)
             
             # Publish annotated image with all recognitions if enabled
             if self.enable_image_output and self.image_output_publisher and valid_indices:
@@ -587,8 +794,10 @@ class FaceRecognitionNode(Node):
                 self.get_logger().debug(f"Publishing results took: {publish_time:.2f}ms for {len(valid_indices)} faces")
         else:
             self.get_logger().warning("No valid embeddings extracted for identity processing")
-            # Publish empty array when no valid embeddings
-            self._publish_recognition_array([])
+            # Publish empty results when no valid embeddings
+            if not self.ros4hri_with_id:
+                self._publish_recognition_array([])
+            # Note: In ROS4HRI with ID mode, we don't publish anything if no valid embeddings
             self._publish_batch_annotated_image(None)
     
     def _publish_recognition_array(self, recognition_results: List):

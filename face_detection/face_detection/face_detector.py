@@ -19,7 +19,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy, QoSReliabilityPolicy, QoSHistoryPolicy
 from sensor_msgs.msg import Image, CompressedImage
-from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, NormalizedPointOfInterest2D, NormalizedRegionOfInterest2D
+from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, NormalizedPointOfInterest2D, NormalizedRegionOfInterest2D, IdsList
 from std_msgs.msg import Header
 from cv_bridge import CvBridge
 from typing import Dict, List, Optional, Tuple, Any
@@ -100,11 +100,30 @@ class FaceDetectorNode(Node):
         # Add a counter for received images
         self.image_count = 0
         
-        # Create publisher for FacialLandmarksArray (all faces in one message)
-        self.facial_landmarks_publisher = self.create_publisher(
-            FacialLandmarksArray,
-            self.output_topic,
-            10)
+        # Create publisher based on mode - only one publisher per topic
+        # (ros4hri_with_id is already set in _get_parameters())
+        if self.ros4hri_with_id:
+            # ROS4HRI with ID mode: Create per-ID publishers dynamically
+            # Dictionary to store publishers for each face ID: {face_id: publisher}
+            self.facial_landmarks_publishers = {}  # {face_id: Publisher}
+            self.tracked_face_ids = set()  # Set of currently tracked face IDs
+            
+            # Publisher for tracked faces list
+            self.tracked_faces_publisher = self.create_publisher(
+                IdsList,
+                '/humans/faces/tracked',
+                10
+            )
+            self.facial_landmarks_publisher = None
+        else:
+            # ROS4HRI array mode: Publish all faces in one FacialLandmarksArray message
+            self.facial_landmarks_publisher = self.create_publisher(
+                FacialLandmarksArray,
+                self.output_topic,
+                10)
+            self.facial_landmarks_publishers = {}
+            self.tracked_face_ids = set()
+            self.tracked_faces_publisher = None
         
         # Create image publisher for visualization
         self.image_publisher = None
@@ -259,15 +278,67 @@ class FaceDetectorNode(Node):
         if self.enable_debug_output and num_faces > 0:
             self.get_logger().debug(f"[DEBUG] Converted {len(facial_landmarks_msgs)} faces to ROS messages")
         
-        # Publish all faces in one FacialLandmarksArray message
+        # Publish faces based on mode
         if facial_landmarks_msgs:
-            facial_landmarks_array = FacialLandmarksArray()
-            facial_landmarks_array.header = color_msg.header
-            facial_landmarks_array.ids = facial_landmarks_msgs
-            
-            self.facial_landmarks_publisher.publish(facial_landmarks_array)
-            if self.enable_debug_output:
-                self.get_logger().debug(f"[ROS PUBLISH] Published FacialLandmarksArray with {len(facial_landmarks_msgs)} faces")
+            if self.ros4hri_with_id:
+                # ROS4HRI with ID mode: Publish to per-ID topics /humans/faces/<faceID>/detected
+                # All messages from the same frame share the same timestamp for synchronization
+                frame_timestamp = color_msg.header.stamp
+                current_frame_face_ids = set()
+                
+                for facial_landmarks_msg in facial_landmarks_msgs:
+                    face_id = facial_landmarks_msg.face_id
+                    current_frame_face_ids.add(face_id)
+                    
+                    # Create publisher for this face ID if it doesn't exist
+                    if face_id not in self.facial_landmarks_publishers:
+                        topic_name = f'/humans/faces/{face_id}/detected'
+                        self.facial_landmarks_publishers[face_id] = self.create_publisher(
+                            FacialLandmarks,
+                            topic_name,
+                            10
+                        )
+                        self.get_logger().info(f"Created publisher for face ID: {topic_name}")
+                    
+                    # Ensure all messages from the same frame have the same timestamp
+                    facial_landmarks_msg.header.stamp = frame_timestamp
+                    
+                    # Publish to the per-ID topic
+                    self.facial_landmarks_publishers[face_id].publish(facial_landmarks_msg)
+                    
+                    if self.enable_debug_output:
+                        self.get_logger().debug(f"[ROS PUBLISH] Published FacialLandmarks for face_id={face_id} to /humans/faces/{face_id}/detected with timestamp={frame_timestamp}")
+                
+                # Update tracked faces list
+                # Remove face IDs that are no longer present
+                removed_ids = self.tracked_face_ids - current_frame_face_ids
+                for face_id in removed_ids:
+                    if face_id in self.facial_landmarks_publishers:
+                        # Note: ROS2 doesn't allow destroying publishers, but we can stop using them
+                        # The topic will remain but won't receive new messages
+                        if self.enable_debug_output:
+                            self.get_logger().debug(f"Face ID {face_id} no longer tracked")
+                
+                # Update tracked face IDs set
+                self.tracked_face_ids = current_frame_face_ids
+                
+                # Publish tracked faces list
+                tracked_list_msg = IdsList()
+                tracked_list_msg.header = color_msg.header
+                tracked_list_msg.ids = list(self.tracked_face_ids)
+                self.tracked_faces_publisher.publish(tracked_list_msg)
+                
+                if self.enable_debug_output:
+                    self.get_logger().debug(f"[ROS PUBLISH] Published tracked faces list: {list(self.tracked_face_ids)}")
+            else:
+                # ROS4HRI array mode: Publish all faces in one FacialLandmarksArray message
+                facial_landmarks_array = FacialLandmarksArray()
+                facial_landmarks_array.header = color_msg.header
+                facial_landmarks_array.ids = facial_landmarks_msgs
+                
+                self.facial_landmarks_publisher.publish(facial_landmarks_array)
+                if self.enable_debug_output:
+                    self.get_logger().debug(f"[ROS PUBLISH] Published FacialLandmarksArray with {len(facial_landmarks_msgs)} faces")
         
         # Error logging (always log errors)
         if len(facial_landmarks_msgs) == 0 and num_faces > 0:
@@ -319,6 +390,9 @@ class FaceDetectorNode(Node):
         # General parameters  
         self.declare_parameter('enable_debug_output', False)  # Disable debug by default
         self.declare_parameter('face_id_prefix', 'face_')
+        
+        # ROS4HRI mode parameter - when enabled, publishes per-ID messages instead of arrays
+        self.declare_parameter('ros4hri_with_id', False)  # Default to array mode (ROS4HRI array)
         
         # BOXMOT tracking parameters
         self.declare_parameter('use_boxmot', False)
@@ -389,6 +463,15 @@ class FaceDetectorNode(Node):
         
         # Get processing rate parameter
         self.processing_rate_hz = self.get_parameter('processing_rate_hz').get_parameter_value().double_value
+        
+        # Get ROS4HRI mode parameter
+        self.ros4hri_with_id = self.get_parameter('ros4hri_with_id').get_parameter_value().bool_value
+        
+        # Log mode (ros4hri_with_id already set before creating publishers)
+        if self.ros4hri_with_id:
+            self.get_logger().info("ROS4HRI with ID mode enabled: Publishing individual FacialLandmarks messages per face ID")
+        else:
+            self.get_logger().info("ROS4HRI array mode enabled: Publishing FacialLandmarksArray messages")
         
     def _initialize_detector(self):
         """Initialize the face detection backend."""

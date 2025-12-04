@@ -53,6 +53,7 @@ def _setup_face_detection(context, *args, **kwargs):
                 'boxmot_tracker_type': LaunchConfiguration('boxmot_tracker_type'),
                 'boxmot_reid_model': LaunchConfiguration('boxmot_reid_model'),
                 'compressed_topic': LaunchConfiguration('compressed_topic'),
+                'ros4hri_with_id': LaunchConfiguration('ros4hri_with_id'),
             }
         ],
         output='screen',
@@ -195,8 +196,15 @@ def generate_launch_description():
     
     processing_rate_hz_arg = DeclareLaunchArgument(
         'processing_rate_hz',
-        default_value='30.0',
+        default_value='1.0',
         description='Processing rate in Hz'
+    )
+
+
+    ros4hri_with_id_arg = DeclareLaunchArgument(
+        'ros4hri_with_id',
+        default_value='false',
+        description='Enable ROS4HRI with ID mode: publish individual FacialLandmarks messages per ID instead of arrays (default: ROS4HRI array mode)'
     )
     
     return LaunchDescription([
@@ -220,5 +228,6 @@ def generate_launch_description():
         boxmot_tracker_type_arg,
         boxmot_reid_model_arg,
         processing_rate_hz_arg,
+        ros4hri_with_id_arg,
         OpaqueFunction(function=_setup_face_detection),
     ])

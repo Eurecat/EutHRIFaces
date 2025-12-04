@@ -13,13 +13,14 @@ to avoid code duplication and improve maintainability.
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy, QoSReliabilityPolicy, QoSHistoryPolicy
+from rclpy.time import Time
 
 import numpy as np
 import cv2
 import time
 
 try:
-    from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, Gaze, GazeArray
+    from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, Gaze, GazeArray, IdsList
 except ImportError:
     # Fallback in case hri_msgs is not available
     print("Warning: hri_msgs not found. Please install hri_msgs package.")
@@ -66,27 +67,60 @@ class GazeEstimationNode(Node):
         self.latest_color_image_timestamp = None
         
         # Setup QoS profiles (copied from perception node)
-        qos_profile = QoSProfile(
+        self.qos_profile = QoSProfile(
             depth=1,  # Keep only the latest image
             # reliability=QoSReliabilityPolicy.BEST_EFFORT,
             # durability=DurabilityPolicy.VOLATILE,
             # # history=QoSHistoryPolicy.KEEP_LAST,
         )
-        # Create subscriber and publisher
-        self.facial_landmarks_sub = self.create_subscription(
-            FacialLandmarksArray,
-            self.input_topic,
-            self.facial_landmarks_array_callback,
-            qos_profile
-        )
+        # Create subscriber and publisher based on mode
+        if self.ros4hri_with_id:
+            # ROS4HRI with ID mode: Subscribe to tracked faces list and per-ID topics
+            # Dictionary to store subscribers and publishers for each face ID
+            self.landmarks_subscribers = {}  # {face_id: Subscription}
+            self.gaze_publishers = {}  # {face_id: Publisher}
+            self.tracked_face_ids = set()  # Set of currently tracked face IDs
+            
+            # Subscribe to tracked faces list
+            self.tracked_faces_sub = self.create_subscription(
+                IdsList,
+                '/humans/faces/tracked',
+                self.tracked_faces_callback,
+                self.qos_profile
+            )
+            self.get_logger().info("ROS4HRI with ID mode enabled: Subscribing to /humans/faces/tracked and per-ID topics")
+            self.facial_landmarks_sub = None
+        else:
+            # ROS4HRI array mode: Subscribe to FacialLandmarksArray messages
+            self.facial_landmarks_sub = self.create_subscription(
+                FacialLandmarksArray,
+                self.input_topic,
+                self.facial_landmarks_array_callback,
+                self.qos_profile
+            )
+            self.get_logger().info("ROS4HRI array mode enabled: Subscribing to FacialLandmarksArray messages")
+            self.landmarks_subscribers = {}
+            self.gaze_publishers = {}
+            self.tracked_face_ids = set()
+            self.tracked_faces_sub = None
         
-        self.gaze_pub = self.create_publisher(
-            GazeArray,
-            self.output_topic,
-            qos_profile
-        )
+        # Create publisher based on mode - only one publisher per topic
+        if self.ros4hri_with_id:
+            # ROS4HRI with ID mode: Publishers will be created dynamically per face ID
+            # (gaze_publishers dictionary is already initialized above)
+            self.gaze_pub = None
+        else:
+            # ROS4HRI array mode: Publish GazeArray
+            self.gaze_pub = self.create_publisher(
+                GazeArray,
+                self.output_topic,
+                self.qos_profile
+            )
         
-        self.get_logger().info("Publishing GazeArray messages")
+        if self.ros4hri_with_id:
+            self.get_logger().info("Publishing individual Gaze messages")
+        else:
+            self.get_logger().info("Publishing GazeArray messages")
         
         # Initialize CV bridge for image handling
         self.bridge = CvBridge()
@@ -130,6 +164,14 @@ class GazeEstimationNode(Node):
             self.inference_timer_callback
         )
         
+        # Timer for processing buffered frames in ROS4HRI with ID mode
+        if self.ros4hri_with_id:
+            buffer_timer_period = 0.05  # Check buffer every 50ms
+            self.buffer_timer = self.create_timer(
+                buffer_timer_period,
+                self.process_buffered_frames
+            )
+        
         # Initialize gaze computer utility
         self.gaze_computer = GazeComputer(
             focal_length=self.focal_length,
@@ -145,9 +187,13 @@ class GazeEstimationNode(Node):
         self.last_publish_time = self.get_clock().now()
         self.min_publish_interval = 1.0 / self.publish_rate
 
-        # Store latest landmarks for processing
+        # Store latest landmarks for processing (array mode)
         self.latest_landmarks_array = None
         self.landmarks_processed = False
+        
+        # Message buffer for ROS4HRI with ID mode (sync by timestamp)
+        self.landmarks_buffer = {}  # {timestamp: [FacialLandmarks, ...]}
+        self.buffer_timeout = 0.1  # 100ms timeout for frame synchronization
         
         self.get_logger().info(f'Gaze Estimation Node started')
         self.get_logger().info(f'Processing rate: {self.processing_rate_hz} Hz')
@@ -322,8 +368,38 @@ class GazeEstimationNode(Node):
                 except Exception as e:
                     self.get_logger().error(f'Error processing face {facial_landmarks_msg.face_id}: {str(e)}')
             
-            # Publish the GazeArray message
-            self.gaze_pub.publish(gaze_array_msg)
+            # Publish gaze results based on mode
+            if self.ros4hri_with_id:
+                # ROS4HRI with ID mode: Publish to per-ID topics /humans/faces/<faceID>/gaze
+                # All messages from the same frame share the same timestamp for synchronization
+                frame_timestamp = landmarks_msg.header.stamp if landmarks_msg.header is not None else None
+                for gaze_msg, gaze_data in zip(gaze_array_msg.gaze_array, gaze_visualization_data):
+                    face_id = gaze_msg.sender
+                    
+                    # Create publisher for this face ID if it doesn't exist
+                    if face_id not in self.gaze_publishers:
+                        topic_name = f'/humans/faces/{face_id}/gaze'
+                        self.gaze_publishers[face_id] = self.create_publisher(
+                            Gaze,
+                            topic_name,
+                            self.qos_profile
+                        )
+                        if self.enable_debug_output:
+                            self.get_logger().debug(f"Created publisher for face ID: {topic_name}")
+                    
+                    # Ensure all messages from the same frame have the same timestamp
+                    if frame_timestamp:
+                        gaze_msg.header.stamp = frame_timestamp
+                    
+                    # Publish to the per-ID topic
+                    self.gaze_publishers[face_id].publish(gaze_msg)
+                    if self.enable_debug_output:
+                        self.get_logger().debug(f"Published Gaze for face_id={face_id} to /humans/faces/{face_id}/gaze with timestamp={frame_timestamp}")
+            else:
+                # ROS4HRI array mode: Publish GazeArray message
+                self.gaze_pub.publish(gaze_array_msg)
+                if self.enable_debug_output:
+                    self.get_logger().debug(f"Published GazeArray with {len(gaze_array_msg.gaze_array)} faces")
             
             # Handle image visualization outside the per-face processing
             if self.enable_image_output and cv_image is not None and gaze_visualization_data:
@@ -338,9 +414,6 @@ class GazeEstimationNode(Node):
                 
                 if self.enable_debug_output:
                     self.get_logger().debug(f'Published gaze visualization with {len(gaze_visualization_data)} faces')
-            
-            if self.enable_debug_output:
-                self.get_logger().debug(f"Published GazeArray with {len(gaze_array_msg.gaze_array)} faces")
         
         except Exception as e:
             self.get_logger().error(f'Error in facial landmarks array processing: {e}')
@@ -400,11 +473,16 @@ class GazeEstimationNode(Node):
         self.declare_parameter('enable_image_output', True)
         self.declare_parameter('image_input_topic', '/camera/color/image_rect_raw')
         self.declare_parameter('output_image_topic', '/humans/faces/gaze/annotated_img')
+        
+        # ROS4HRI mode parameter - when enabled, subscribes to per-ID messages and publishes per-ID
+        self.declare_parameter('ros4hri_with_id', False)  # Default to array mode (ROS4HRI array)
+        
         self.enable_debug_output = self.get_parameter('enable_debug_output').get_parameter_value().bool_value
         self.publish_rate = self.get_parameter('publish_rate').get_parameter_value().double_value
         self.enable_image_output = self.get_parameter('enable_image_output').get_parameter_value().bool_value
         self.image_input_topic = self.get_parameter('image_input_topic').get_parameter_value().string_value
         self.output_image_topic = self.get_parameter('output_image_topic').get_parameter_value().string_value
+        self.ros4hri_with_id = self.get_parameter('ros4hri_with_id').get_parameter_value().bool_value
 
     
     def setup_camera_matrix(self):
@@ -451,6 +529,106 @@ class GazeEstimationNode(Node):
         # Store the latest landmarks array for processing
         self.latest_landmarks_array = msg
         self.landmarks_processed = False
+    
+    def tracked_faces_callback(self, msg):
+        """
+        Callback for tracked faces list in ROS4HRI with ID mode.
+        Manages dynamic subscriptions to per-ID topics.
+        
+        Args:
+            msg: IdsList message containing currently tracked face IDs
+        """
+        new_tracked_ids = set(msg.ids)
+        
+        # Add new face IDs - create subscribers and publishers
+        for face_id in new_tracked_ids:
+            if face_id not in self.tracked_face_ids:
+                # Create subscriber for this face ID
+                topic_name = f'/humans/faces/{face_id}/detected'
+                self.landmarks_subscribers[face_id] = self.create_subscription(
+                    FacialLandmarks,
+                    topic_name,
+                    lambda m, fid=face_id: self.facial_landmarks_individual_callback(m, fid),
+                    self.qos_profile
+                )
+                
+                # Create publisher for this face ID
+                output_topic_name = f'/humans/faces/{face_id}/gaze'
+                self.gaze_publishers[face_id] = self.create_publisher(
+                    Gaze,
+                    output_topic_name,
+                    self.qos_profile
+                )
+                
+                self.get_logger().debug(f"Subscribed to {topic_name} and publishing to {output_topic_name}")
+        
+        # Remove old face IDs (cleanup - ROS2 doesn't allow destroying subscriptions, but we can track them)
+        removed_ids = self.tracked_face_ids - new_tracked_ids
+        for face_id in removed_ids:
+            if self.enable_debug_output:
+                self.get_logger().debug(f"Face ID {face_id} no longer tracked")
+        
+        # Update tracked face IDs
+        self.tracked_face_ids = new_tracked_ids
+    
+    def facial_landmarks_individual_callback(self, msg, face_id):
+        """
+        Callback for processing individual FacialLandmarks messages from per-ID topics in ROS4HRI with ID mode.
+        Messages are buffered by timestamp and processed in batch when a complete frame is received.
+        
+        Args:
+            msg: FacialLandmarks message for a single face
+            face_id: Face ID (for compatibility with lambda)
+        """
+        # Get timestamp as a key for frame synchronization
+        timestamp_key = (msg.header.stamp.sec, msg.header.stamp.nanosec)
+        
+        # Add message to buffer
+        if timestamp_key not in self.landmarks_buffer:
+            self.landmarks_buffer[timestamp_key] = []
+        self.landmarks_buffer[timestamp_key].append(msg)
+        
+        if self.enable_debug_output:
+            self.get_logger().debug(f"Buffered FacialLandmarks for face_id={msg.face_id}, timestamp={timestamp_key}, buffer_size={len(self.landmarks_buffer[timestamp_key])}")
+    
+    def process_buffered_frames(self):
+        """
+        Process buffered frames that are ready (older than buffer_timeout or complete frame detected).
+        This is called periodically by a timer in ROS4HRI with ID mode.
+        """
+        if not self.ros4hri_with_id or not self.landmarks_buffer:
+            return
+        
+        current_time = self.get_clock().now()
+        current_ns = current_time.nanoseconds
+        frames_to_process = []
+        
+        # Find frames that are ready to process (older than buffer_timeout)
+        for ts_key, messages in list(self.landmarks_buffer.items()):
+            # Calculate time difference manually to avoid clock type issues
+            ts_ns = int(ts_key[0]) * int(1e9) + int(ts_key[1])
+            ts_diff = (current_ns - ts_ns) / 1e9  # Convert to seconds
+            
+            # Process if frame is old enough (all messages from same frame should have arrived)
+            if ts_diff > self.buffer_timeout:
+                frames_to_process.append((ts_key, messages))
+        
+        # Process ready frames
+        for ts_key, messages in frames_to_process:
+            # Create a virtual FacialLandmarksArray from buffered messages
+            landmarks_array_msg = FacialLandmarksArray()
+            landmarks_array_msg.header = messages[0].header  # Use header from first message
+            landmarks_array_msg.ids = messages
+            
+            # Process as if it were an array message
+            self.latest_landmarks_array = landmarks_array_msg
+            self.landmarks_processed = False
+            
+            # Remove from buffer
+            del self.landmarks_buffer[ts_key]
+            
+            if self.enable_debug_output:
+                self.get_logger().debug(f"Processing buffered frame with {len(messages)} faces (timestamp: {ts_key})")
 
     def process_single_face_landmarks(self, msg):
         """
