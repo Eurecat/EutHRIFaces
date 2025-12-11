@@ -194,7 +194,8 @@ class YoloFaceDetector:
                 self._initialize_boxmot()
             
             self.is_initialized = True
-            self.logger.info(f"[INFO] YOLO face detector initialized successfully")
+           
+            self.logger.info(f"\033[92m[INFO] YOLO face detector initialized successfully\033[0m")
             return True
             
         except Exception as e:

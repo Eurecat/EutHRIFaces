@@ -1,0 +1,40 @@
+# ROS2 Parameters for Face Detection Node
+# This file contains all the configurable parameters for the FaceDetectorNode
+
+face_detector:
+  ros__parameters:
+    # Topic Configuration
+    input_topic: "/camera/color/image_rect_raw"
+    output_topic: "/humans/faces/detected"
+    output_image_topic: "/humans/faces/detected/annotated_img"
+    compressed_topic: ""
+    
+    # Processing Configuration
+    processing_rate_hz: 30.0
+    device: "cuda:0"
+    
+    # Model Configuration
+    model_path: "yolov8n-face.onnx"
+    confidence_threshold: 0.1
+    iou_threshold: 0.4
+    
+    # Face ID Configuration
+    face_id_prefix: "face_"
+    
+    # Image Output Configuration
+    enable_image_output: true
+    face_bbox_thickness: 2
+    face_landmark_radius: 3
+    face_bbox_color: [0, 255, 0]
+    face_landmark_color: [255, 0, 0]
+    
+    # BOXMOT Tracking Configuration
+    use_boxmot: true
+    boxmot_tracker_type: "bytetrack"
+    boxmot_reid_model: ""
+    
+    # Debug Configuration
+    enable_debug_output: false
+    
+    # ROS4HRI Configuration
+    ros4hri_with_id: true

@@ -89,7 +89,7 @@ class FaceEmbeddingExtractor:
             self.model = InceptionResnetV1(pretrained=self.model_name).eval().to(self.device)
             self.model.eval()
             
-            print(f"[INFO] Face embedding model loaded successfully on {self.device}")
+            print(f"\033[92m[INFO] Face embedding model loaded successfully on {self.device}\033[0m")
             
             # Copy weights to configured path if specified
             if self.face_embedding_weights_path:

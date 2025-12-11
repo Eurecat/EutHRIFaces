@@ -1,0 +1,34 @@
+# ROS2 Parameters for Face Recognition Node
+# This file contains all the configurable parameters for the FaceRecognitionNode
+
+face_recognition_node:
+  ros__parameters:
+    # Topic Configuration
+    input_topic: "/humans/faces/detected"
+    output_topic: "/humans/faces/recognized"
+    image_input_topic: "/camera/color/image_rect_raw"
+    compressed_topic: ""
+    
+    # Processing Configuration
+    processing_rate_hz: 30.0
+    device: "cuda:0"
+    
+    # Face Embedding Model Configuration
+    face_embedding_model: "vggface2"
+    face_embedding_weights_name: "20180402-114759-vggface2.pt"
+    
+    # Identity Management Configuration
+    similarity_threshold: 0.3
+    clustering_threshold: 0.3
+    max_embeddings_per_identity: 150
+    identity_timeout: 60.0
+    identity_database_path: "src/face_recognition/database/identity_database.json"
+    
+    # Debug Configuration
+    enable_debug_output: false
+    
+    # Receiver Configuration
+    receiver_id: "face_recognition"
+    
+    # ROS4HRI Configuration
+    ros4hri_with_id: true

@@ -195,6 +195,7 @@ class GazeEstimationNode(Node):
         self.landmarks_buffer = {}  # {timestamp: [FacialLandmarks, ...]}
         self.buffer_timeout = 0.1  # 100ms timeout for frame synchronization
         
+        self.get_logger().info(f'\033[92m[INFO] Gaze estimation model initialized successfully\033[0m')
         self.get_logger().info(f'Gaze Estimation Node started')
         self.get_logger().info(f'Processing rate: {self.processing_rate_hz} Hz')
         self.get_logger().info(f'Subscribing to: {self.input_topic}')

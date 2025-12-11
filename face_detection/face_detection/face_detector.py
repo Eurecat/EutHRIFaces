@@ -135,6 +135,7 @@ class FaceDetectorNode(Node):
 
         # Timer for periodic inference (copied from perception node pattern)
         timer_period = 1.0 / self.processing_rate_hz  # Use processing_rate_hz parameter
+        self.get_logger().info(f"[INFO] processing rate: {self.processing_rate_hz}")
         self.inference_timer = self.create_timer(
             timer_period, 
             self.inference_timer_callback

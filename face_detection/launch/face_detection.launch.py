@@ -4,6 +4,9 @@ Launch file for face detection node.
 """
 import os
 import subprocess
+import yaml
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, LogInfo, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -26,36 +29,52 @@ def _setup_face_detection(context, *args, **kwargs):
     existing = os.environ.get("PYTHONPATH", "")
     new_py_path = site_pkgs if not existing else f"{site_pkgs}{os.pathsep}{existing}"
 
+    # Get config file
+    config_dir = get_package_share_directory("face_detection")
+    config_file = os.path.join(config_dir, "config", "face_detection_params.yaml")
+
+    # Load defaults from YAML
+    with open(config_file, 'r') as f:
+        params_yaml = yaml.safe_load(f)
+        
+    defaults = params_yaml['face_detector']['ros__parameters']
+
+    # Build node_params dict with LaunchConfiguration overrides
+    node_params = {}
+    params_to_expose = [
+        'input_topic',
+        'output_topic',
+        'output_image_topic',
+        'compressed_topic',
+        'processing_rate_hz',
+        'device',
+        'model_path',
+        'confidence_threshold',
+        'iou_threshold',
+        'enable_debug_output',
+        'face_id_prefix',
+        'enable_image_output',
+        'face_bbox_thickness',
+        'face_landmark_radius',
+        'face_bbox_color',
+        'face_landmark_color',
+        'use_boxmot',
+        'boxmot_tracker_type',
+        'boxmot_reid_model',
+        'ros4hri_with_id'
+    ]
+
+    for param in params_to_expose:
+        if param in defaults:
+            node_params[param] = LaunchConfiguration(param)
+
     # Face detection node
     face_detection_node = Node(
         package='face_detection',
         executable='face_detector',
         name='face_detector',
-        parameters=[
-            # LaunchConfiguration('config_file'),
-            {
-                'input_topic': LaunchConfiguration('input_topic'),
-                'output_topic': LaunchConfiguration('output_topic'),
-                'output_image_topic': LaunchConfiguration('output_image_topic'),
-                'processing_rate_hz': LaunchConfiguration('processing_rate_hz'),
-                'device': LaunchConfiguration('device'),
-                'model_path': LaunchConfiguration('model_path'),
-                'confidence_threshold': LaunchConfiguration('confidence_threshold'),
-                'iou_threshold': LaunchConfiguration('iou_threshold'),
-                'enable_debug_output': LaunchConfiguration('enable_debug_output'),
-                'face_id_prefix': LaunchConfiguration('face_id_prefix'),
-                'enable_image_output': LaunchConfiguration('enable_image_output'),
-                'face_bbox_thickness': LaunchConfiguration('face_bbox_thickness'),
-                'face_landmark_radius': LaunchConfiguration('face_landmark_radius'),
-                'face_bbox_color': LaunchConfiguration('face_bbox_color'),
-                'face_landmark_color': LaunchConfiguration('face_landmark_color'),
-                'use_boxmot': LaunchConfiguration('use_boxmot'),
-                'boxmot_tracker_type': LaunchConfiguration('boxmot_tracker_type'),
-                'boxmot_reid_model': LaunchConfiguration('boxmot_reid_model'),
-                'compressed_topic': LaunchConfiguration('compressed_topic'),
-                'ros4hri_with_id': LaunchConfiguration('ros4hri_with_id'),
-            }
-        ],
+        # Pass config file first, then overrides
+        parameters=[config_file, node_params],
         output='screen',
         emulate_tty=True,
     )
@@ -63,6 +82,7 @@ def _setup_face_detection(context, *args, **kwargs):
     return [
         LogInfo(msg=f"[face_detection] Using AI venv: {VENV_PATH}"),
         LogInfo(msg=f"[face_detection] Injecting site-packages: {site_pkgs}"),
+        LogInfo(msg=f"[face_detection] Loading config from: {config_file}"),
         SetEnvironmentVariable("PYTHONPATH", new_py_path),
         face_detection_node,
     ]
@@ -71,163 +91,54 @@ def _setup_face_detection(context, *args, **kwargs):
 def generate_launch_description():
     """Generate launch description for face detection."""
     
+    # Get config file
+    config_dir = get_package_share_directory("face_detection")
+    config_file = os.path.join(config_dir, "config", "face_detection_params.yaml")
+
+    # Load defaults from YAML
+    with open(config_file, 'r') as f:
+        params_yaml = yaml.safe_load(f)
+        
+    defaults = params_yaml['face_detector']['ros__parameters']
+
     # Declare launch arguments
-    # config_file_arg = DeclareLaunchArgument(
-    #     'config_file',
-    #     default_value=PathJoinSubstitution([
-    #         FindPackageShare('face_detection'),
-    #         'config',
-    #         'face_detection.yaml'
-    #     ]),
-    #     description='Path to the face detection configuration file'
-    # )
-    
-    compressed_topic_arg = DeclareLaunchArgument(
-        'compressed_topic',
-        default_value='',
-        description='Compressed image topic (if provided, uses compressed images instead of regular images)'
-    )
-    
-    input_topic_arg = DeclareLaunchArgument(
+    launch_args = []
+    params_to_expose = [
         'input_topic',
-        default_value='/camera/color/image_rect_raw',
-        description='Input image topic'
-    )
-    
-    output_topic_arg = DeclareLaunchArgument(
-        'output_topic', 
-        default_value='/humans/faces/detected',
-        description='Output facial landmarks topic'
-    )
-    
-    device_arg = DeclareLaunchArgument(
-        'device',
-        default_value='cuda:0',
-        description='Device to run inference on (cpu/cuda)'
-    )
-    
-    enable_debug_output_arg = DeclareLaunchArgument(
-        'enable_debug_output',
-        default_value='false',
-        description='Enable debug output'
-    )
-    
-    # YOLO Face Detection Parameters
-    model_path_arg = DeclareLaunchArgument( #it will be inside src/pkg_name/weights/
-        'model_path',
-        default_value='yolov8n-face.onnx',
-        description='Path to YOLO face detection model'
-    )
-    
-    confidence_threshold_arg = DeclareLaunchArgument(
-        'confidence_threshold',
-        default_value='0.1',
-        description='Confidence threshold for face detection'
-    )
-    
-    iou_threshold_arg = DeclareLaunchArgument(
-        'iou_threshold',
-        default_value='0.4',
-        description='IoU threshold for non-maximum suppression'
-    )
-    
-    # General parameters
-    face_id_prefix_arg = DeclareLaunchArgument(
-        'face_id_prefix',
-        default_value='face_',
-        description='Prefix for face IDs'
-    )
-    
-    # BOXMOT tracking parameters
-    use_boxmot_arg = DeclareLaunchArgument(
-        'use_boxmot',
-        default_value='true',
-        description='Enable BOXMOT tracking for face detection'
-    )
-    
-    boxmot_tracker_type_arg = DeclareLaunchArgument(
-        'boxmot_tracker_type',
-        default_value='bytetrack',
-        description='Type of BOXMOT tracker (bytetrack, botsort, strongsort, etc.)'
-    )
-    
-    boxmot_reid_model_arg = DeclareLaunchArgument(
-        'boxmot_reid_model',
-        default_value='',
-        description='Path to ReID model for BOXMOT tracking'
-    )
-    
-    # Image visualization parameters  
-    output_image_topic_arg = DeclareLaunchArgument(
+        'output_topic',
         'output_image_topic',
-        default_value='/humans/faces/detected/annotated_img',
-        description='Output topic for visualization images'
-    )
-    
-    enable_image_output_arg = DeclareLaunchArgument(
-        'enable_image_output',
-        default_value='true',
-        description='Enable image visualization output'
-    )
-    
-    face_bbox_thickness_arg = DeclareLaunchArgument(
-        'face_bbox_thickness',
-        default_value='2',
-        description='Thickness of face bounding box lines'
-    )
-    
-    face_landmark_radius_arg = DeclareLaunchArgument(
-        'face_landmark_radius',
-        default_value='3',
-        description='Radius of facial landmark circles'
-    )
-    
-    face_bbox_color_arg = DeclareLaunchArgument(
-        'face_bbox_color',
-        default_value='[0, 255, 0]',
-        description='Color of face bounding boxes (BGR format)'
-    )
-    
-    face_landmark_color_arg = DeclareLaunchArgument(
-        'face_landmark_color',
-        default_value='[255, 0, 0]',
-        description='Color of facial landmarks (BGR format)'
-    )
-    
-    processing_rate_hz_arg = DeclareLaunchArgument(
+        'compressed_topic',
         'processing_rate_hz',
-        default_value='1.0',
-        description='Processing rate in Hz'
-    )
+        'device',
+        'model_path',
+        'confidence_threshold',
+        'iou_threshold',
+        'enable_debug_output',
+        'face_id_prefix',
+        'enable_image_output',
+        'face_bbox_thickness',
+        'face_landmark_radius',
+        'face_bbox_color',
+        'face_landmark_color',
+        'use_boxmot',
+        'boxmot_tracker_type',
+        'boxmot_reid_model',
+        'ros4hri_with_id'
+    ]
 
-
-    ros4hri_with_id_arg = DeclareLaunchArgument(
-        'ros4hri_with_id',
-        default_value='true',
-        description='Enable ROS4HRI with ID mode: publish individual FacialLandmarks messages per ID instead of arrays (default: ROS4HRI array mode)'
-    )
+    for param in params_to_expose:
+        if param in defaults:
+            launch_args.append(
+                DeclareLaunchArgument(
+                    param,
+                    default_value=str(defaults[param]),
+                    description=f'Parameter {param} from face_detection_params.yaml'
+                )
+            )
     
-    return LaunchDescription([
-        # config_file_arg,
-        compressed_topic_arg,
-        input_topic_arg,
-        output_topic_arg,
-        output_image_topic_arg,
-        device_arg,
-        model_path_arg,
-        confidence_threshold_arg,
-        iou_threshold_arg,
-        enable_debug_output_arg,
-        face_id_prefix_arg,
-        enable_image_output_arg,
-        face_bbox_thickness_arg,
-        face_landmark_radius_arg,
-        face_bbox_color_arg,
-        face_landmark_color_arg,
-        use_boxmot_arg,
-        boxmot_tracker_type_arg,
-        boxmot_reid_model_arg,
-        processing_rate_hz_arg,
-        ros4hri_with_id_arg,
-        OpaqueFunction(function=_setup_face_detection),
-    ])
+    return LaunchDescription(
+        launch_args +
+        [
+            OpaqueFunction(function=_setup_face_detection),
+        ]
+    )

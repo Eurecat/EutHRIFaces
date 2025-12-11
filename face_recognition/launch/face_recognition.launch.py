@@ -8,6 +8,9 @@ for face embedding extraction and identity management based on the EUT YOLO appr
 
 import os
 import subprocess
+import yaml
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, LogInfo, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -30,6 +33,16 @@ def _setup_face_recognition(context, *args, **kwargs):
     existing = os.environ.get("PYTHONPATH", "")
     new_py_path = site_pkgs if not existing else f"{site_pkgs}{os.pathsep}{existing}"
 
+    # Get config file
+    config_dir = get_package_share_directory("face_recognition")
+    config_file = os.path.join(config_dir, "config", "face_recognition_params.yaml")
+
+    # Load defaults from YAML
+    with open(config_file, 'r') as f:
+        params_yaml = yaml.safe_load(f)
+        
+    defaults = params_yaml['face_recognition_node']['ros__parameters']
+
     # Check if debug output is enabled
     enable_debug = LaunchConfiguration('enable_debug_output').perform(context).lower() == 'true'
     
@@ -39,32 +52,38 @@ def _setup_face_recognition(context, *args, **kwargs):
         # Set debug level only for this specific node, not globally
         node_arguments = ['--ros-args', '--log-level', 'face_recognition_node:=debug']
 
+    # Build node_params dict with LaunchConfiguration overrides
+    node_params = {}
+    params_to_expose = [
+        'input_topic',
+        'output_topic',
+        'image_input_topic',
+        'compressed_topic',
+        'processing_rate_hz',
+        'device',
+        'face_embedding_model',
+        'face_embedding_weights_name',
+        'similarity_threshold',
+        'clustering_threshold',
+        'max_embeddings_per_identity',
+        'identity_timeout',
+        'identity_database_path',
+        'enable_debug_output',
+        'receiver_id',
+        'ros4hri_with_id'
+    ]
+
+    for param in params_to_expose:
+        if param in defaults:
+            node_params[param] = LaunchConfiguration(param)
+
     # Face recognition node
     face_recognition_node = Node(
         package='face_recognition',
         executable='face_recognition_node',
         name='face_recognition_node',
-        parameters=[
-            # LaunchConfiguration('config_file'),
-            {
-                'input_topic': LaunchConfiguration('input_topic'),
-                'output_topic': LaunchConfiguration('output_topic'),
-                'image_input_topic': LaunchConfiguration('image_input_topic'),
-                'processing_rate_hz': LaunchConfiguration('processing_rate_hz'),
-                'device': LaunchConfiguration('device'),
-                'face_embedding_model': LaunchConfiguration('face_embedding_model'),
-                'face_embedding_weights_name': LaunchConfiguration('face_embedding_weights_name'),
-                'similarity_threshold': LaunchConfiguration('similarity_threshold'),
-                'clustering_threshold': LaunchConfiguration('clustering_threshold'),
-                'max_embeddings_per_identity': LaunchConfiguration('max_embeddings_per_identity'),
-                'identity_timeout': LaunchConfiguration('identity_timeout'),
-                'identity_database_path': LaunchConfiguration('identity_database_path'),
-                'enable_debug_output': LaunchConfiguration('enable_debug_output'),
-                'receiver_id': LaunchConfiguration('receiver_id'),
-                'compressed_topic': LaunchConfiguration('compressed_topic'),
-                'ros4hri_with_id': LaunchConfiguration('ros4hri_with_id'),
-            }
-        ],
+        # Pass config file first, then overrides
+        parameters=[config_file, node_params],
         arguments=node_arguments,
         output='screen',
         emulate_tty=True,
@@ -73,6 +92,7 @@ def _setup_face_recognition(context, *args, **kwargs):
     return [
         LogInfo(msg=f"[face_recognition] Using AI venv: {VENV_PATH}"),
         LogInfo(msg=f"[face_recognition] Injecting site-packages: {site_pkgs}"),
+        LogInfo(msg=f"[face_recognition] Loading config from: {config_file}"),
         LogInfo(msg=f"[face_recognition] Debug logging: {'enabled' if enable_debug else 'disabled'}"),
         SetEnvironmentVariable("PYTHONPATH", new_py_path),
         face_recognition_node,
@@ -82,134 +102,50 @@ def _setup_face_recognition(context, *args, **kwargs):
 def generate_launch_description():
     """Generate launch description for face recognition."""
     
-    # Declare launch arguments
-    # config_file_arg = DeclareLaunchArgument(
-    #     'config_file',
-    #     default_value=PathJoinSubstitution([
-    #         FindPackageShare('face_recognition'),
-    #         'config',
-    #         'face_recognition.yaml'
-    #     ]),
-    #     description='Path to the face recognition configuration file'
-    # )
-    
-    compressed_topic_arg = DeclareLaunchArgument(
-        'compressed_topic',
-        default_value='',
-        description='Compressed image topic (if provided, uses compressed images instead of regular images)'
-    )
-    
-    input_topic_arg = DeclareLaunchArgument(
-        'input_topic',
-        default_value='/humans/faces/detected',
-        description='Input topic for facial landmarks'
-    )
-    
-    output_topic_arg = DeclareLaunchArgument(
-        'output_topic', 
-        default_value='/humans/faces/recognized',
-        description='Output topic for facial recognition results'
-    )
-    
-    image_input_topic_arg = DeclareLaunchArgument(
-        'image_input_topic',
-        default_value='/camera/color/image_rect_raw',
-        description='Input RGB image topic'
-    )
-    
-    device_arg = DeclareLaunchArgument(
-        'device',
-        default_value='cuda:0',
-        description='Device to run inference on (cpu/cuda)'
-    )
-    
-    # Face embedding parameters
-    face_embedding_model_arg = DeclareLaunchArgument(
-        'face_embedding_model',
-        default_value='vggface2',
-        description='Face embedding model to use (vggface2, casia-webface)'
-    )
-    
-    face_embedding_weights_name_arg = DeclareLaunchArgument(
-        'face_embedding_weights_name',
-        default_value='20180402-114759-vggface2.pt',
-        description='Specific filename of face embedding weights'
-    )
-    
-    # Identity management parameters
-    similarity_threshold_arg = DeclareLaunchArgument(
-        'similarity_threshold',
-        default_value='0.3',
-        description='Minimum similarity threshold for identity assignment'
-    )
-    
-    clustering_threshold_arg = DeclareLaunchArgument(
-        'clustering_threshold',
-        default_value='0.3',
-        description='Threshold for clustering embeddings into identities'
-    )
-    
-    max_embeddings_per_identity_arg = DeclareLaunchArgument(
-        'max_embeddings_per_identity',
-        default_value='150',
-        description='Maximum embeddings to store per identity'
-    )
-    
-    identity_timeout_arg = DeclareLaunchArgument(
-        'identity_timeout',
-        default_value='60.0',
-        description='Time (seconds) after which inactive identity is removed'
-    )
-    
-    identity_database_path_arg = DeclareLaunchArgument(
-        'identity_database_path',
-        default_value='src/face_recognition/database/identity_database.json',
-        description='Path to persistent identity database JSON file'
-    )
-    enable_debug_output_arg = DeclareLaunchArgument(
-        'enable_debug_output',
-        default_value='false',
-        description='Enable detailed debug output'
-    )
+    # Get config file
+    config_dir = get_package_share_directory("face_recognition")
+    config_file = os.path.join(config_dir, "config", "face_recognition_params.yaml")
 
-    receiver_id_arg = DeclareLaunchArgument(
-        'receiver_id',
-        default_value='face_recognition',
-        description='Receiver ID for hri_msgs'
-    )
-    
-    processing_rate_hz_arg = DeclareLaunchArgument(
-        'processing_rate_hz',
-        default_value='30.0',
-        description='Processing rate in Hz'
-    )
-    
-    ros4hri_with_id_arg = DeclareLaunchArgument(
-        'ros4hri_with_id',
-        default_value='true',
-        description='Enable ROS4HRI with ID mode: subscribe to individual FacialLandmarks messages and publish individual FacialRecognition messages per ID (default: ROS4HRI array mode)'
-    )
-    
-    return LaunchDescription([
-        # Launch arguments
-        # config_file_arg,
-        compressed_topic_arg,
-        input_topic_arg,
-        output_topic_arg,
-        image_input_topic_arg,
-        device_arg,
-        face_embedding_model_arg,
-        face_embedding_weights_name_arg,
-        similarity_threshold_arg,
-        clustering_threshold_arg,
-        max_embeddings_per_identity_arg,
-        identity_timeout_arg,
-        identity_database_path_arg,
-        enable_debug_output_arg,
-        receiver_id_arg,
-        processing_rate_hz_arg,
-        ros4hri_with_id_arg,
+    # Load defaults from YAML
+    with open(config_file, 'r') as f:
+        params_yaml = yaml.safe_load(f)
         
-        # Node with virtual environment setup
-        OpaqueFunction(function=_setup_face_recognition),
-    ])
+    defaults = params_yaml['face_recognition_node']['ros__parameters']
+
+    # Declare launch arguments
+    launch_args = []
+    params_to_expose = [
+        'input_topic',
+        'output_topic',
+        'image_input_topic',
+        'compressed_topic',
+        'processing_rate_hz',
+        'device',
+        'face_embedding_model',
+        'face_embedding_weights_name',
+        'similarity_threshold',
+        'clustering_threshold',
+        'max_embeddings_per_identity',
+        'identity_timeout',
+        'identity_database_path',
+        'enable_debug_output',
+        'receiver_id',
+        'ros4hri_with_id'
+    ]
+
+    for param in params_to_expose:
+        if param in defaults:
+            launch_args.append(
+                DeclareLaunchArgument(
+                    param,
+                    default_value=str(defaults[param]),
+                    description=f'Parameter {param} from face_recognition_params.yaml'
+                )
+            )
+    
+    return LaunchDescription(
+        launch_args +
+        [
+            OpaqueFunction(function=_setup_face_recognition),
+        ]
+    )
