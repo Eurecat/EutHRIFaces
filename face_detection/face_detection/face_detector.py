@@ -29,6 +29,7 @@ from ament_index_python.packages import get_package_share_directory
 
 from .yolo_face_detector import YoloFaceDetector
 from .dlib_landmark_detector import DlibLandmarkDetector
+from .mediapipe_landmark_detector import MediaPipeLandmarkDetector
 
 
 class FaceDetectorNode(Node):
@@ -60,6 +61,7 @@ class FaceDetectorNode(Node):
         # Initialize detector backend
         self.detector = None
         self.dlib_detector = None
+        self.mediapipe_detector = None
         self._initialize_detector()
 
         # Initialize image storage variables (copied from perception node)
@@ -255,6 +257,22 @@ class FaceDetectorNode(Node):
                     successful_dlib = sum(1 for lm in dlib_landmarks_batch if lm is not None)
                     self.get_logger().debug(
                         f"Dlib enhanced {successful_dlib}/{num_faces} faces with 68-point landmarks"
+                    )
+        
+        # Enhance with MediaPipe 478-point landmarks if enabled (takes priority over dlib)
+        if self.mediapipe_detector is not None and self.mediapipe_detector.is_available():
+            num_faces = len(detection_results.get('faces', []))
+            if num_faces > 0:
+                mediapipe_landmarks_batch = self.mediapipe_detector.detect_landmarks_batch(
+                    cv_image,
+                    detection_results.get('faces', [])
+                )
+                # Replace with MediaPipe landmarks where available (overrides dlib if both enabled)
+                detection_results['mediapipe_landmarks'] = mediapipe_landmarks_batch
+                if self.enable_debug_output:
+                    successful_mediapipe = sum(1 for lm in mediapipe_landmarks_batch if lm is not None)
+                    self.get_logger().debug(
+                        f"MediaPipe enhanced {successful_mediapipe}/{num_faces} faces with 478->68-point landmarks"
                     )
         
         # Debug the detection results structure
@@ -453,7 +471,13 @@ class FaceDetectorNode(Node):
         
         # Dlib 68-point landmark detection parameters
         self.declare_parameter('enable_dlib_landmarks', False)
-        self.declare_parameter('dlib_model_path', 'weights/shape_predictor_68_face_landmarks.dat')
+        self.declare_parameter('dlib_model_path', 'shape_predictor_68_face_landmarks.dat')
+        
+        # MediaPipe 478-point landmark detection parameters
+        self.declare_parameter('enable_mediapipe_landmarks', False)
+        self.declare_parameter('mediapipe_model_path', 'face_landmarker.task')
+        self.declare_parameter('mediapipe_min_detection_confidence', 0.5)
+        self.declare_parameter('mediapipe_min_tracking_confidence', 0.5)
         
     def _get_parameters(self):
         """Get parameter values from ROS2 parameter server."""
@@ -545,6 +569,35 @@ class FaceDetectorNode(Node):
         else:
             self.dlib_model_path = dlib_model_path_param
         
+        # Get MediaPipe landmark detection parameters
+        self.enable_mediapipe_landmarks = self.get_parameter('enable_mediapipe_landmarks').get_parameter_value().bool_value
+        mediapipe_model_path_param = self.get_parameter('mediapipe_model_path').get_parameter_value().string_value
+        self.mediapipe_min_detection_confidence = self.get_parameter('mediapipe_min_detection_confidence').get_parameter_value().double_value
+        self.mediapipe_min_tracking_confidence = self.get_parameter('mediapipe_min_tracking_confidence').get_parameter_value().double_value
+        
+        # If model path is relative, make it relative to package source directory
+        if not os.path.isabs(mediapipe_model_path_param):
+            # Try to find the package source directory dynamically
+            try:
+                # Get the current file's directory and navigate to package root
+                current_file_dir = os.path.dirname(os.path.abspath(__file__))
+                # Navigate up from face_detection/face_detection/ to face_detection/
+                package_src_dir = os.path.dirname(current_file_dir)
+                package_src_dir = package_src_dir.replace('build', 'src') #save it in docker volume of ros2 package
+                self.mediapipe_model_path = os.path.join(package_src_dir, "weights", mediapipe_model_path_param)
+
+                if self.enable_debug_output:
+                    self.get_logger().debug(f"MediaPipe model path resolved to: {self.mediapipe_model_path}")
+                    
+            except Exception as e:
+                # Fallback to share directory if source directory detection fails
+                self.get_logger().warn(f"Could not determine package source directory: {e}")
+                self.get_logger().warn("Falling back to package share directory")
+                package_share_directory = get_package_share_directory('face_detection')
+                self.mediapipe_model_path = os.path.join(package_share_directory, mediapipe_model_path_param)
+        else:
+            self.mediapipe_model_path = mediapipe_model_path_param
+        
         # Log mode (ros4hri_with_id already set before creating publishers)
         if self.ros4hri_with_id:
             self.get_logger().info("ROS4HRI with ID mode enabled: Publishing individual FacialLandmarks messages per face ID")
@@ -588,6 +641,30 @@ class FaceDetectorNode(Node):
                     self.dlib_detector = None
             else:
                 self.get_logger().info("Dlib landmark detection disabled - using YOLO 5-point landmarks")
+            
+            # Initialize MediaPipe landmark detector if enabled
+            if self.enable_mediapipe_landmarks:
+                self.get_logger().info("Initializing MediaPipe 478-point landmark detector (mapped to ros4hri 68-point)...")
+                self.mediapipe_detector = MediaPipeLandmarkDetector(
+                    model_path=self.mediapipe_model_path,
+                    logger=self.get_logger(),
+                    min_detection_confidence=self.mediapipe_min_detection_confidence,
+                    min_tracking_confidence=self.mediapipe_min_tracking_confidence
+                )
+                if self.mediapipe_detector.is_available():
+                    self.get_logger().info("MediaPipe landmark detector initialized successfully")
+                    self.get_logger().info("Face detection will use YOLO + MediaPipe (478->68-point landmarks)")
+                    if self.enable_dlib_landmarks:
+                        self.get_logger().warning("Both dlib and MediaPipe enabled - MediaPipe will take priority")
+                else:
+                    self.get_logger().warning("MediaPipe landmark detector initialization failed")
+                    if self.enable_dlib_landmarks and self.dlib_detector is not None:
+                        self.get_logger().info("Falling back to dlib landmarks")
+                    else:
+                        self.get_logger().warning("Falling back to YOLO 5-point landmarks only")
+                    self.mediapipe_detector = None
+            else:
+                self.get_logger().info("MediaPipe landmark detection disabled")
                 
         except Exception as e:
             self.get_logger().error(f"Failed to initialize face detector: {e}")
@@ -614,9 +691,10 @@ class FaceDetectorNode(Node):
         confidences = detection_results.get('confidences', [])
         landmarks = detection_results.get('landmarks', [])
         dlib_landmarks = detection_results.get('dlib_landmarks', [None] * len(faces))  # dlib 68-point landmarks if available
+        mediapipe_landmarks = detection_results.get('mediapipe_landmarks', [None] * len(faces))  # MediaPipe landmarks if available
         track_ids = detection_results.get('track_ids', list(range(len(faces))))  # Use track IDs if available, fallback to indices
         
-        for i, (face_bbox, confidence, face_landmarks, dlib_lm, track_id) in enumerate(zip(faces, confidences, landmarks, dlib_landmarks, track_ids)):
+        for i, (face_bbox, confidence, face_landmarks, dlib_lm, mediapipe_lm, track_id) in enumerate(zip(faces, confidences, landmarks, dlib_landmarks, mediapipe_landmarks, track_ids)):
             try:
                 # Create FacialLandmarks message
                 facial_landmarks_msg = FacialLandmarks()
@@ -658,8 +736,13 @@ class FaceDetectorNode(Node):
                 facial_landmarks_msg.bbox_centroid = [float(x + w/2.0), float(y + h/2.0)]
                 
                 # Convert landmarks to ros4hri format
-                # Use dlib 68-point landmarks if available, otherwise fall back to YOLO 5-point
-                if dlib_lm is not None:
+                # Priority: MediaPipe > dlib > YOLO
+                if mediapipe_lm is not None:
+                    facial_landmarks_msg.landmarks = self._convert_dlib_landmarks_to_ros4hri(
+                        mediapipe_lm, width, height)
+                    if self.enable_debug_output:
+                        self.get_logger().debug(f"Using MediaPipe 478->68-point landmarks for face {i}")
+                elif dlib_lm is not None:
                     facial_landmarks_msg.landmarks = self._convert_dlib_landmarks_to_ros4hri(
                         dlib_lm, width, height)
                     if self.enable_debug_output:
@@ -856,11 +939,12 @@ class FaceDetectorNode(Node):
             confidences = detection_results.get('confidences', [])
             landmarks = detection_results.get('landmarks', [])  # YOLO 5-point landmarks
             dlib_landmarks = detection_results.get('dlib_landmarks', [None] * len(faces))  # dlib 68-point landmarks if available
+            mediapipe_landmarks = detection_results.get('mediapipe_landmarks', [None] * len(faces))  # MediaPipe 68-point landmarks if available
             track_ids = detection_results.get('track_ids', list(range(len(faces))))  # Fallback to enumeration
             
             # Draw faces
-            for i, (face_bbox, confidence, face_landmarks, dlib_lm, track_id) in enumerate(zip(faces, confidences, landmarks, dlib_landmarks, track_ids)):
-                self._draw_face_on_image(annotated_image, face_bbox, face_landmarks, confidence, track_id, dlib_lm)
+            for i, (face_bbox, confidence, face_landmarks, dlib_lm, mediapipe_lm, track_id) in enumerate(zip(faces, confidences, landmarks, dlib_landmarks, mediapipe_landmarks, track_ids)):
+                self._draw_face_on_image(annotated_image, face_bbox, face_landmarks, confidence, track_id, dlib_lm, mediapipe_lm)
             
             # Convert back to ROS Image and publish
             annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
@@ -872,7 +956,8 @@ class FaceDetectorNode(Node):
     
     def _draw_face_on_image(self, image: np.ndarray, face_bbox: List[int], 
                            face_landmarks: List[float], confidence: float, face_id: int, 
-                           dlib_landmarks: Optional[List[Tuple[float, float]]] = None):
+                           dlib_landmarks: Optional[List[Tuple[float, float]]] = None,
+                           mediapipe_landmarks: Optional[List[Tuple[float, float]]] = None):
         """
         Draw a single face on the image with adaptive sizing.
         
@@ -883,6 +968,7 @@ class FaceDetectorNode(Node):
             confidence: Face detection confidence
             face_id: ID of the face for labeling
             dlib_landmarks: Optional dlib 68-point landmarks as list of (x, y) tuples
+            mediapipe_landmarks: Optional MediaPipe 68-point landmarks as list of (x, y) tuples
         """
         # Calculate adaptive sizes based on image dimensions
         img_height, img_width = image.shape[:2]
@@ -919,11 +1005,21 @@ class FaceDetectorNode(Node):
                    (0, 0, 0), 
                    adaptive_font_thickness)
         
-        # Draw landmarks - prioritize dlib 68-point landmarks if available, fallback to YOLO 5-point
+        # Draw landmarks - Priority: MediaPipe > dlib > YOLO 5-point
         landmark_color = tuple(int(c) for c in self.face_landmark_color)
         
-        if dlib_landmarks is not None and len(dlib_landmarks) == 68:
-            # Draw all 68 dlib landmarks
+        # Choose which landmarks to use (MediaPipe takes priority)
+        landmarks_68 = None
+        landmark_source = "YOLO"
+        if mediapipe_landmarks is not None and len(mediapipe_landmarks) == 68:
+            landmarks_68 = mediapipe_landmarks
+            landmark_source = "MediaPipe"
+        elif dlib_landmarks is not None and len(dlib_landmarks) == 68:
+            landmarks_68 = dlib_landmarks
+            landmark_source = "dlib"
+        
+        if landmarks_68 is not None:
+            # Draw all 68 landmarks (from MediaPipe or dlib)
             smaller_radius = max(1, int(adaptive_landmark_radius * 0.6))  # Smaller radius for 68 points
             
             # Define colors for different facial parts
@@ -934,7 +1030,7 @@ class FaceDetectorNode(Node):
             mouth_color = (0, 0, 255)      # Red for mouth (48-67)
             
             # Draw landmarks with different colors for facial parts
-            for i, (lm_x, lm_y) in enumerate(dlib_landmarks):
+            for i, (lm_x, lm_y) in enumerate(landmarks_68):
                 lm_x, lm_y = int(lm_x), int(lm_y)
                 
                 # Choose color based on landmark index
@@ -957,7 +1053,7 @@ class FaceDetectorNode(Node):
             line_thickness = max(1, int(adaptive_line_thickness * 0.7))
             
             # Draw jaw line (0-16)
-            jaw_points = [dlib_landmarks[i] for i in range(17)]  # 0-16 inclusive
+            jaw_points = [landmarks_68[i] for i in range(17)]  # 0-16 inclusive
             for i in range(len(jaw_points) - 1):
                 pt1 = (int(jaw_points[i][0]), int(jaw_points[i][1]))
                 pt2 = (int(jaw_points[i + 1][0]), int(jaw_points[i + 1][1]))
@@ -966,34 +1062,34 @@ class FaceDetectorNode(Node):
             # Draw eyebrows
             # Right eyebrow (17-21)
             for i in range(17, 21):
-                pt1 = (int(dlib_landmarks[i][0]), int(dlib_landmarks[i][1]))
-                pt2 = (int(dlib_landmarks[i + 1][0]), int(dlib_landmarks[i + 1][1]))
+                pt1 = (int(landmarks_68[i][0]), int(landmarks_68[i][1]))
+                pt2 = (int(landmarks_68[i + 1][0]), int(landmarks_68[i + 1][1]))
                 cv2.line(image, pt1, pt2, eyebrow_color, line_thickness)
             
             # Left eyebrow (22-26)
             for i in range(22, 26):
-                pt1 = (int(dlib_landmarks[i][0]), int(dlib_landmarks[i][1]))
-                pt2 = (int(dlib_landmarks[i + 1][0]), int(dlib_landmarks[i + 1][1]))
+                pt1 = (int(landmarks_68[i][0]), int(landmarks_68[i][1]))
+                pt2 = (int(landmarks_68[i + 1][0]), int(landmarks_68[i + 1][1]))
                 cv2.line(image, pt1, pt2, eyebrow_color, line_thickness)
             
             # Draw nose bridge and tip (27-35)
             for i in range(27, 35):
-                pt1 = (int(dlib_landmarks[i][0]), int(dlib_landmarks[i][1]))
-                pt2 = (int(dlib_landmarks[i + 1][0]), int(dlib_landmarks[i + 1][1]))
+                pt1 = (int(landmarks_68[i][0]), int(landmarks_68[i][1]))
+                pt2 = (int(landmarks_68[i + 1][0]), int(landmarks_68[i + 1][1]))
                 cv2.line(image, pt1, pt2, nose_color, line_thickness)
             
             # Draw eyes
             # Right eye (36-41)
-            right_eye_points = [dlib_landmarks[i] for i in range(36, 42)]
-            right_eye_points.append(dlib_landmarks[36])  # Close the loop
+            right_eye_points = [landmarks_68[i] for i in range(36, 42)]
+            right_eye_points.append(landmarks_68[36])  # Close the loop
             for i in range(len(right_eye_points) - 1):
                 pt1 = (int(right_eye_points[i][0]), int(right_eye_points[i][1]))
                 pt2 = (int(right_eye_points[i + 1][0]), int(right_eye_points[i + 1][1]))
                 cv2.line(image, pt1, pt2, eye_color, line_thickness)
             
             # Left eye (42-47)
-            left_eye_points = [dlib_landmarks[i] for i in range(42, 48)]
-            left_eye_points.append(dlib_landmarks[42])  # Close the loop
+            left_eye_points = [landmarks_68[i] for i in range(42, 48)]
+            left_eye_points.append(landmarks_68[42])  # Close the loop
             for i in range(len(left_eye_points) - 1):
                 pt1 = (int(left_eye_points[i][0]), int(left_eye_points[i][1]))
                 pt2 = (int(left_eye_points[i + 1][0]), int(left_eye_points[i + 1][1]))
@@ -1001,26 +1097,36 @@ class FaceDetectorNode(Node):
             
             # Draw mouth outer contour (48-59)
             for i in range(48, 59):
-                pt1 = (int(dlib_landmarks[i][0]), int(dlib_landmarks[i][1]))
-                pt2 = (int(dlib_landmarks[i + 1][0]), int(dlib_landmarks[i + 1][1]))
+                pt1 = (int(landmarks_68[i][0]), int(landmarks_68[i][1]))
+                pt2 = (int(landmarks_68[i + 1][0]), int(landmarks_68[i + 1][1]))
                 cv2.line(image, pt1, pt2, mouth_color, line_thickness)
             # Close mouth outer contour
-            pt1 = (int(dlib_landmarks[59][0]), int(dlib_landmarks[59][1]))
-            pt2 = (int(dlib_landmarks[48][0]), int(dlib_landmarks[48][1]))
+            pt1 = (int(landmarks_68[59][0]), int(landmarks_68[59][1]))
+            pt2 = (int(landmarks_68[48][0]), int(landmarks_68[48][1]))
             cv2.line(image, pt1, pt2, mouth_color, line_thickness)
             
             # Draw mouth inner contour (60-67)
             for i in range(60, 67):
-                pt1 = (int(dlib_landmarks[i][0]), int(dlib_landmarks[i][1]))
-                pt2 = (int(dlib_landmarks[i + 1][0]), int(dlib_landmarks[i + 1][1]))
+                pt1 = (int(landmarks_68[i][0]), int(landmarks_68[i][1]))
+                pt2 = (int(landmarks_68[i + 1][0]), int(landmarks_68[i + 1][1]))
                 cv2.line(image, pt1, pt2, mouth_color, line_thickness)
             # Close mouth inner contour
-            pt1 = (int(dlib_landmarks[67][0]), int(dlib_landmarks[67][1]))
-            pt2 = (int(dlib_landmarks[60][0]), int(dlib_landmarks[60][1]))
+            pt1 = (int(landmarks_68[67][0]), int(landmarks_68[67][1]))
+            pt2 = (int(landmarks_68[60][0]), int(landmarks_68[60][1]))
             cv2.line(image, pt1, pt2, mouth_color, line_thickness)
             
+            # Add a small label to indicate landmark source
+            if self.enable_debug_output:
+                source_label = f"Landmarks: {landmark_source}"
+                cv2.putText(image, source_label,
+                           (x, y + h + 20),
+                           cv2.FONT_HERSHEY_SIMPLEX,
+                           adaptive_font_scale * 0.6,
+                           landmark_color,
+                           max(1, adaptive_font_thickness - 1))
+            
         elif len(face_landmarks) == 10:
-            # Fallback to YOLO 5-point landmarks if dlib not available
+            # Fallback to YOLO 5-point landmarks if neither MediaPipe nor dlib available
             # Draw the 5 key points with adaptive radius
             landmark_names = ["Left Eye", "Right Eye", "Nose", "Left Mouth", "Right Mouth"]
             for i in range(0, 10, 2):
