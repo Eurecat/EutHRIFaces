@@ -19,6 +19,7 @@ services:
       - ../face_detection:/workspace/src/face_detection
       - ../face_recognition:/workspace/src/face_recognition
       - ../gaze_estimation:/workspace/src/gaze_estimation
+      - ../visual_speech_activity:/workspace/src/visual_speech_activity
 
     tty: true
     stdin_open: true
