@@ -28,6 +28,7 @@ import numpy as np
 from ament_index_python.packages import get_package_share_directory
 
 from .yolo_face_detector import YoloFaceDetector
+from .dlib_landmark_detector import DlibLandmarkDetector
 
 
 class FaceDetectorNode(Node):
@@ -58,6 +59,7 @@ class FaceDetectorNode(Node):
         
         # Initialize detector backend
         self.detector = None
+        self.dlib_detector = None
         self._initialize_detector()
 
         # Initialize image storage variables (copied from perception node)
@@ -238,6 +240,22 @@ class FaceDetectorNode(Node):
         
         # Run face detection
         detection_results = self.detector.detect(cv_image)
+        
+        # Enhance with dlib 68-point landmarks if enabled
+        if self.dlib_detector is not None and self.dlib_detector.is_available():
+            num_faces = len(detection_results.get('faces', []))
+            if num_faces > 0:
+                dlib_landmarks_batch = self.dlib_detector.detect_landmarks_batch(
+                    cv_image,
+                    detection_results.get('faces', [])
+                )
+                # Replace YOLO landmarks with dlib landmarks where available
+                detection_results['dlib_landmarks'] = dlib_landmarks_batch
+                if self.enable_debug_output:
+                    successful_dlib = sum(1 for lm in dlib_landmarks_batch if lm is not None)
+                    self.get_logger().debug(
+                        f"Dlib enhanced {successful_dlib}/{num_faces} faces with 68-point landmarks"
+                    )
         
         # Debug the detection results structure
         if self.enable_debug_output:
@@ -433,6 +451,10 @@ class FaceDetectorNode(Node):
         self.declare_parameter('face_bbox_color', [0, 255, 0])  # Green
         self.declare_parameter('face_landmark_color', [255, 0, 0])  # Blue
         
+        # Dlib 68-point landmark detection parameters
+        self.declare_parameter('enable_dlib_landmarks', False)
+        self.declare_parameter('dlib_model_path', 'weights/shape_predictor_68_face_landmarks.dat')
+        
     def _get_parameters(self):
         """Get parameter values from ROS2 parameter server."""
         self.compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
@@ -494,6 +516,35 @@ class FaceDetectorNode(Node):
         # Get ROS4HRI mode parameter
         self.ros4hri_with_id = self.get_parameter('ros4hri_with_id').get_parameter_value().bool_value
         
+        # Get dlib landmark detection parameters
+        self.enable_dlib_landmarks = self.get_parameter('enable_dlib_landmarks').get_parameter_value().bool_value
+        dlib_model_path_param = self.get_parameter('dlib_model_path').get_parameter_value().string_value
+        
+
+        # If model path is relative, make it relative to package source directory
+        if not os.path.isabs(dlib_model_path_param):
+            # Try to find the package source directory dynamically
+            try:
+                # Get the current file's directory and navigate to package root
+                current_file_dir = os.path.dirname(os.path.abspath(__file__))
+                # Navigate up from face_detection/face_detection/ to face_detection/
+                package_src_dir = os.path.dirname(current_file_dir)
+                package_src_dir = package_src_dir.replace('build', 'src') #save it in docker volume of ros2 package
+                self.dlib_model_path = os.path.join(package_src_dir,"weights",dlib_model_path_param)
+
+                if self.enable_debug_output:
+                    self.get_logger().debug(f"Using package source directory: {package_src_dir}")
+                    self.get_logger().debug(f"Model path resolved to: {self.dlib_model_path}")
+                    
+            except Exception as e:
+                # Fallback to share directory if source directory detection fails
+                self.get_logger().warn(f"Could not determine package source directory: {e}")
+                self.get_logger().warn("Falling back to package share directory")
+                package_share_directory = get_package_share_directory('face_detection')
+                self.dlib_model_path = os.path.join(package_share_directory, dlib_model_path_param)
+        else:
+            self.dlib_model_path = dlib_model_path_param
+        
         # Log mode (ros4hri_with_id already set before creating publishers)
         if self.ros4hri_with_id:
             self.get_logger().info("ROS4HRI with ID mode enabled: Publishing individual FacialLandmarks messages per face ID")
@@ -520,6 +571,23 @@ class FaceDetectorNode(Node):
             else:
                 self.get_logger().error("Failed to initialize YOLO face detector")
                 self.detector = None
+            
+            # Initialize dlib landmark detector if enabled
+            if self.enable_dlib_landmarks:
+                self.get_logger().info("Initializing dlib 68-point landmark detector...")
+                self.dlib_detector = DlibLandmarkDetector(
+                    model_path=self.dlib_model_path,
+                    logger=self.get_logger()
+                )
+                if self.dlib_detector.is_available():
+                    self.get_logger().info("Dlib landmark detector initialized successfully")
+                    self.get_logger().info("Face detection will use YOLO + dlib (68-point landmarks)")
+                else:
+                    self.get_logger().warning("Dlib landmark detector initialization failed")
+                    self.get_logger().warning("Falling back to YOLO 5-point landmarks only")
+                    self.dlib_detector = None
+            else:
+                self.get_logger().info("Dlib landmark detection disabled - using YOLO 5-point landmarks")
                 
         except Exception as e:
             self.get_logger().error(f"Failed to initialize face detector: {e}")
@@ -545,9 +613,10 @@ class FaceDetectorNode(Node):
         faces = detection_results.get('faces', [])
         confidences = detection_results.get('confidences', [])
         landmarks = detection_results.get('landmarks', [])
+        dlib_landmarks = detection_results.get('dlib_landmarks', [None] * len(faces))  # dlib 68-point landmarks if available
         track_ids = detection_results.get('track_ids', list(range(len(faces))))  # Use track IDs if available, fallback to indices
         
-        for i, (face_bbox, confidence, face_landmarks, track_id) in enumerate(zip(faces, confidences, landmarks, track_ids)):
+        for i, (face_bbox, confidence, face_landmarks, dlib_lm, track_id) in enumerate(zip(faces, confidences, landmarks, dlib_landmarks, track_ids)):
             try:
                 # Create FacialLandmarks message
                 facial_landmarks_msg = FacialLandmarks()
@@ -588,9 +657,18 @@ class FaceDetectorNode(Node):
                 facial_landmarks_msg.bbox_xyxy = bbox_roi
                 facial_landmarks_msg.bbox_centroid = [float(x + w/2.0), float(y + h/2.0)]
                 
-                # Convert YOLO 5-point landmarks to ros4hri format
-                facial_landmarks_msg.landmarks = self._convert_yolo_landmarks_to_ros4hri(
-                    face_landmarks, width, height)
+                # Convert landmarks to ros4hri format
+                # Use dlib 68-point landmarks if available, otherwise fall back to YOLO 5-point
+                if dlib_lm is not None:
+                    facial_landmarks_msg.landmarks = self._convert_dlib_landmarks_to_ros4hri(
+                        dlib_lm, width, height)
+                    if self.enable_debug_output:
+                        self.get_logger().debug(f"Using dlib 68-point landmarks for face {i}")
+                else:
+                    facial_landmarks_msg.landmarks = self._convert_yolo_landmarks_to_ros4hri(
+                        face_landmarks, width, height)
+                    if self.enable_debug_output:
+                        self.get_logger().debug(f"Using YOLO 5-point landmarks for face {i}")
                 
                 if self.enable_debug_output:
                     self.get_logger().debug(f"Created FacialLandmarks message for face {i} with {len(facial_landmarks_msg.landmarks)} landmarks")
@@ -692,6 +770,72 @@ class FaceDetectorNode(Node):
         if self.enable_debug_output:
             valid_landmarks = sum(1 for lm in landmarks if lm.c > 0.0)
             self.get_logger().debug(f"Mapped {valid_landmarks}/70 landmarks from YOLO 5-point detection")
+        
+        return landmarks
+    
+    def _convert_dlib_landmarks_to_ros4hri(
+        self, 
+        dlib_landmarks: List[Tuple[float, float]], 
+        image_width: int, 
+        image_height: int
+    ) -> List[NormalizedPointOfInterest2D]:
+        """
+        Convert dlib 68-point landmarks to ros4hri FacialLandmarks format.
+        
+        Dlib provides 68 landmarks that directly map to ros4hri convention:
+        - Points 0-16: Jaw line
+        - Points 17-21: Right eyebrow  
+        - Points 22-26: Left eyebrow
+        - Points 27-35: Nose
+        - Points 36-41: Right eye
+        - Points 42-47: Left eye
+        - Points 48-67: Mouth (outer and inner contours)
+        
+        Args:
+            dlib_landmarks: List of 68 (x, y) tuples in pixel coordinates
+            image_width: Image width for normalization
+            image_height: Image height for normalization
+            
+        Returns:
+            List of NormalizedPointOfInterest2D messages (70 landmarks)
+        """
+        # Initialize all 70 landmarks
+        landmarks = []
+        for i in range(70):
+            lm = NormalizedPointOfInterest2D()
+            lm.x = 0.0
+            lm.y = 0.0
+            lm.c = 0.0  # Invalid by default
+            landmarks.append(lm)
+        
+        # Validate input
+        if len(dlib_landmarks) != 68:
+            self.get_logger().warning(f"Expected 68 dlib landmarks, got {len(dlib_landmarks)}")
+            return landmarks
+        
+        # Normalize function with bounds checking
+        def normalize_point(x, y):
+            x_clamped = max(0, min(x, image_width - 1))
+            y_clamped = max(0, min(y, image_height - 1))
+            norm_x = x_clamped / image_width
+            norm_y = y_clamped / image_height
+            conf = 1.0  # dlib landmarks are always valid when detected
+            return norm_x, norm_y, conf
+        
+        # Map all 68 dlib landmarks to ros4hri (direct 1:1 mapping)
+        for i in range(68):
+            x, y = dlib_landmarks[i]
+            norm_x, norm_y, conf = normalize_point(x, y)
+            landmarks[i].x = norm_x
+            landmarks[i].y = norm_y
+            landmarks[i].c = conf
+        
+        # Points 68 and 69 are for pupils (not in standard dlib 68-point model)
+        # We could estimate them from eye landmarks, but leaving them invalid for now
+        
+        if self.enable_debug_output:
+            valid_landmarks = sum(1 for lm in landmarks if lm.c > 0.0)
+            self.get_logger().debug(f"Mapped {valid_landmarks}/70 landmarks from dlib 68-point detection")
         
         return landmarks
 

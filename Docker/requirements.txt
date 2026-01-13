@@ -19,6 +19,7 @@ mediapipe>=0.10.7
 # Face embedding extraction-----------------------------------
 facenet-pytorch>=2.5.2  # FaceNet embeddings
 insightface>=0.7.3       # InsightFace/ArcFace embeddings (optional)
+dlib==20.0.0              # 68-point facial landmark detection
 
 # Other-----------------------------------
 clip

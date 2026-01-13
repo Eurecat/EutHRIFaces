@@ -21,6 +21,7 @@ setup(
         'numpy',
         'PyYAML',
         'onnxruntime',
+        'dlib',
     ],
     zip_safe=True,
     maintainer='Josep Bravo',

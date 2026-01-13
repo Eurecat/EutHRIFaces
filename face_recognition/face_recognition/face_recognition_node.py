@@ -776,6 +776,10 @@ class FaceRecognitionNode(Node):
                         recognition_msg.recognized_face_id = "unknown"
                         recognition_msg.confidence = 0.0
                     
+                    # Initialize speaking fields (will be updated by visual_speech_activity node)
+                    recognition_msg.is_speaking = False
+                    recognition_msg.speaking_confidence = 0.0
+                    
                     # Publish to the per-ID topic
                     self.recognition_publishers[face_id].publish(recognition_msg)
                     if self.enable_debug_output:
@@ -833,6 +837,10 @@ class FaceRecognitionNode(Node):
                 else:
                     recognition_msg.recognized_face_id = "unknown"
                     recognition_msg.confidence = 0.0
+                
+                # Initialize speaking fields (will be updated by visual_speech_activity node)
+                recognition_msg.is_speaking = False
+                recognition_msg.speaking_confidence = 0.0
                 
                 facial_recognition_msgs.append(recognition_msg)
             

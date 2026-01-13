@@ -38,3 +38,9 @@ face_detector:
     
     # ROS4HRI Configuration
     ros4hri_with_id: true
+    
+    # Dlib 68-point Landmark Detection (Optional Enhancement)
+    # When enabled, dlib will refine YOLO's 5 landmarks to 68 precise points
+    # This significantly improves lip/mouth landmark quality for speech detection
+    enable_dlib_landmarks: true
+    dlib_model_path: "shape_predictor_68_face_landmarks.dat"
