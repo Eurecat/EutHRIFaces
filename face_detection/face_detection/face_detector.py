@@ -854,12 +854,13 @@ class FaceDetectorNode(Node):
             
             faces = detection_results.get('faces', [])
             confidences = detection_results.get('confidences', [])
-            landmarks = detection_results.get('landmarks', [])
+            landmarks = detection_results.get('landmarks', [])  # YOLO 5-point landmarks
+            dlib_landmarks = detection_results.get('dlib_landmarks', [None] * len(faces))  # dlib 68-point landmarks if available
             track_ids = detection_results.get('track_ids', list(range(len(faces))))  # Fallback to enumeration
             
             # Draw faces
-            for i, (face_bbox, confidence, face_landmarks, track_id) in enumerate(zip(faces, confidences, landmarks, track_ids)):
-                self._draw_face_on_image(annotated_image, face_bbox, face_landmarks, confidence, track_id)
+            for i, (face_bbox, confidence, face_landmarks, dlib_lm, track_id) in enumerate(zip(faces, confidences, landmarks, dlib_landmarks, track_ids)):
+                self._draw_face_on_image(annotated_image, face_bbox, face_landmarks, confidence, track_id, dlib_lm)
             
             # Convert back to ROS Image and publish
             annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
@@ -870,16 +871,18 @@ class FaceDetectorNode(Node):
             self.get_logger().error(f"Error publishing annotated image: {e}")
     
     def _draw_face_on_image(self, image: np.ndarray, face_bbox: List[int], 
-                           face_landmarks: List[float], confidence: float, face_id: int):
+                           face_landmarks: List[float], confidence: float, face_id: int, 
+                           dlib_landmarks: Optional[List[Tuple[float, float]]] = None):
         """
         Draw a single face on the image with adaptive sizing.
         
         Args:
             image: OpenCV image to draw on
             face_bbox: Face bounding box [x, y, w, h]
-            face_landmarks: Face landmarks (10 values: 5 points * 2 coordinates)
+            face_landmarks: Face landmarks (10 values: 5 points * 2 coordinates from YOLO)
             confidence: Face detection confidence
             face_id: ID of the face for labeling
+            dlib_landmarks: Optional dlib 68-point landmarks as list of (x, y) tuples
         """
         # Calculate adaptive sizes based on image dimensions
         img_height, img_width = image.shape[:2]
@@ -916,10 +919,108 @@ class FaceDetectorNode(Node):
                    (0, 0, 0), 
                    adaptive_font_thickness)
         
-        # Draw landmarks if available
-        if len(face_landmarks) == 10:
-            landmark_color = tuple(int(c) for c in self.face_landmark_color)
+        # Draw landmarks - prioritize dlib 68-point landmarks if available, fallback to YOLO 5-point
+        landmark_color = tuple(int(c) for c in self.face_landmark_color)
+        
+        if dlib_landmarks is not None and len(dlib_landmarks) == 68:
+            # Draw all 68 dlib landmarks
+            smaller_radius = max(1, int(adaptive_landmark_radius * 0.6))  # Smaller radius for 68 points
             
+            # Define colors for different facial parts
+            jaw_color = (0, 255, 255)      # Cyan for jaw line (0-16)
+            eyebrow_color = (255, 255, 0)  # Yellow for eyebrows (17-26) 
+            nose_color = (255, 0, 255)     # Magenta for nose (27-35)
+            eye_color = (0, 255, 0)        # Green for eyes (36-47)
+            mouth_color = (0, 0, 255)      # Red for mouth (48-67)
+            
+            # Draw landmarks with different colors for facial parts
+            for i, (lm_x, lm_y) in enumerate(dlib_landmarks):
+                lm_x, lm_y = int(lm_x), int(lm_y)
+                
+                # Choose color based on landmark index
+                if 0 <= i <= 16:  # Jaw line
+                    color = jaw_color
+                elif 17 <= i <= 26:  # Eyebrows
+                    color = eyebrow_color
+                elif 27 <= i <= 35:  # Nose
+                    color = nose_color
+                elif 36 <= i <= 47:  # Eyes
+                    color = eye_color
+                elif 48 <= i <= 67:  # Mouth
+                    color = mouth_color
+                else:
+                    color = landmark_color
+                
+                cv2.circle(image, (lm_x, lm_y), smaller_radius, color, -1)
+            
+            # Draw facial feature contours
+            line_thickness = max(1, int(adaptive_line_thickness * 0.7))
+            
+            # Draw jaw line (0-16)
+            jaw_points = [dlib_landmarks[i] for i in range(17)]  # 0-16 inclusive
+            for i in range(len(jaw_points) - 1):
+                pt1 = (int(jaw_points[i][0]), int(jaw_points[i][1]))
+                pt2 = (int(jaw_points[i + 1][0]), int(jaw_points[i + 1][1]))
+                cv2.line(image, pt1, pt2, jaw_color, line_thickness)
+            
+            # Draw eyebrows
+            # Right eyebrow (17-21)
+            for i in range(17, 21):
+                pt1 = (int(dlib_landmarks[i][0]), int(dlib_landmarks[i][1]))
+                pt2 = (int(dlib_landmarks[i + 1][0]), int(dlib_landmarks[i + 1][1]))
+                cv2.line(image, pt1, pt2, eyebrow_color, line_thickness)
+            
+            # Left eyebrow (22-26)
+            for i in range(22, 26):
+                pt1 = (int(dlib_landmarks[i][0]), int(dlib_landmarks[i][1]))
+                pt2 = (int(dlib_landmarks[i + 1][0]), int(dlib_landmarks[i + 1][1]))
+                cv2.line(image, pt1, pt2, eyebrow_color, line_thickness)
+            
+            # Draw nose bridge and tip (27-35)
+            for i in range(27, 35):
+                pt1 = (int(dlib_landmarks[i][0]), int(dlib_landmarks[i][1]))
+                pt2 = (int(dlib_landmarks[i + 1][0]), int(dlib_landmarks[i + 1][1]))
+                cv2.line(image, pt1, pt2, nose_color, line_thickness)
+            
+            # Draw eyes
+            # Right eye (36-41)
+            right_eye_points = [dlib_landmarks[i] for i in range(36, 42)]
+            right_eye_points.append(dlib_landmarks[36])  # Close the loop
+            for i in range(len(right_eye_points) - 1):
+                pt1 = (int(right_eye_points[i][0]), int(right_eye_points[i][1]))
+                pt2 = (int(right_eye_points[i + 1][0]), int(right_eye_points[i + 1][1]))
+                cv2.line(image, pt1, pt2, eye_color, line_thickness)
+            
+            # Left eye (42-47)
+            left_eye_points = [dlib_landmarks[i] for i in range(42, 48)]
+            left_eye_points.append(dlib_landmarks[42])  # Close the loop
+            for i in range(len(left_eye_points) - 1):
+                pt1 = (int(left_eye_points[i][0]), int(left_eye_points[i][1]))
+                pt2 = (int(left_eye_points[i + 1][0]), int(left_eye_points[i + 1][1]))
+                cv2.line(image, pt1, pt2, eye_color, line_thickness)
+            
+            # Draw mouth outer contour (48-59)
+            for i in range(48, 59):
+                pt1 = (int(dlib_landmarks[i][0]), int(dlib_landmarks[i][1]))
+                pt2 = (int(dlib_landmarks[i + 1][0]), int(dlib_landmarks[i + 1][1]))
+                cv2.line(image, pt1, pt2, mouth_color, line_thickness)
+            # Close mouth outer contour
+            pt1 = (int(dlib_landmarks[59][0]), int(dlib_landmarks[59][1]))
+            pt2 = (int(dlib_landmarks[48][0]), int(dlib_landmarks[48][1]))
+            cv2.line(image, pt1, pt2, mouth_color, line_thickness)
+            
+            # Draw mouth inner contour (60-67)
+            for i in range(60, 67):
+                pt1 = (int(dlib_landmarks[i][0]), int(dlib_landmarks[i][1]))
+                pt2 = (int(dlib_landmarks[i + 1][0]), int(dlib_landmarks[i + 1][1]))
+                cv2.line(image, pt1, pt2, mouth_color, line_thickness)
+            # Close mouth inner contour
+            pt1 = (int(dlib_landmarks[67][0]), int(dlib_landmarks[67][1]))
+            pt2 = (int(dlib_landmarks[60][0]), int(dlib_landmarks[60][1]))
+            cv2.line(image, pt1, pt2, mouth_color, line_thickness)
+            
+        elif len(face_landmarks) == 10:
+            # Fallback to YOLO 5-point landmarks if dlib not available
             # Draw the 5 key points with adaptive radius
             landmark_names = ["Left Eye", "Right Eye", "Nose", "Left Mouth", "Right Mouth"]
             for i in range(0, 10, 2):
@@ -938,22 +1039,21 @@ class FaceDetectorNode(Node):
                                landmark_color, 
                                max(1, adaptive_font_thickness - 1))
             
-            # Draw lines connecting landmarks with adaptive thickness
-            if len(face_landmarks) >= 10:
-                # Connect eyes
-                left_eye = (int(face_landmarks[0]), int(face_landmarks[1]))
-                right_eye = (int(face_landmarks[2]), int(face_landmarks[3]))
-                cv2.line(image, left_eye, right_eye, landmark_color, adaptive_line_thickness)
-                
-                # Connect mouth corners
-                left_mouth = (int(face_landmarks[6]), int(face_landmarks[7]))
-                right_mouth = (int(face_landmarks[8]), int(face_landmarks[9]))
-                cv2.line(image, left_mouth, right_mouth, landmark_color, adaptive_line_thickness)
-                
-                # Connect nose to eyes (optional, creates face structure)
-                nose = (int(face_landmarks[4]), int(face_landmarks[5]))
-                cv2.line(image, nose, left_eye, landmark_color, max(1, adaptive_line_thickness - 1), cv2.LINE_AA)
-                cv2.line(image, nose, right_eye, landmark_color, max(1, adaptive_line_thickness - 1), cv2.LINE_AA)
+            # Draw lines connecting YOLO landmarks
+            # Connect eyes
+            left_eye = (int(face_landmarks[0]), int(face_landmarks[1]))
+            right_eye = (int(face_landmarks[2]), int(face_landmarks[3]))
+            cv2.line(image, left_eye, right_eye, landmark_color, adaptive_line_thickness)
+            
+            # Connect mouth corners
+            left_mouth = (int(face_landmarks[6]), int(face_landmarks[7]))
+            right_mouth = (int(face_landmarks[8]), int(face_landmarks[9]))
+            cv2.line(image, left_mouth, right_mouth, landmark_color, adaptive_line_thickness)
+            
+            # Connect nose to eyes (optional, creates face structure)
+            nose = (int(face_landmarks[4]), int(face_landmarks[5]))
+            cv2.line(image, nose, left_eye, landmark_color, max(1, adaptive_line_thickness - 1), cv2.LINE_AA)
+            cv2.line(image, nose, right_eye, landmark_color, max(1, adaptive_line_thickness - 1), cv2.LINE_AA)
         
 def main(args=None):
     """Main function to run the face detector node."""
