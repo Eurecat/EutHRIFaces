@@ -71,6 +71,12 @@ class VSDLMDetector:
     MOUTH_OUTER_INDICES = list(range(48, 60))  # Outer lip contour (12 points)
     MOUTH_INNER_INDICES = list(range(60, 68))  # Inner lip contour (8 points)
     
+    # YOLO 5-point landmark indices (when using YOLO face detection)
+    # YOLO provides: left_eye, right_eye, nose, left_mouth, right_mouth
+    # In the 68-point array, YOLO landmarks appear at specific indices with c > 0
+    YOLO_LEFT_MOUTH_IDX = 48   # Left mouth corner in YOLO 5-point (index 3)
+    YOLO_RIGHT_MOUTH_IDX = 54  # Right mouth corner in YOLO 5-point (index 4)
+    
     def __init__(
         self,
         model_path: str = "vsdlm_s.onnx",
@@ -82,7 +88,8 @@ class VSDLMDetector:
         crop_margin_right: int = 2,
         speaking_threshold: float = 0.5,
         debug_save_crops: bool = False,
-        logger: Optional[logging.Logger] = None
+        logger: Optional[logging.Logger] = None,
+        mouth_height_ratio: float = 0.35
     ):
         """
         Initialize VSDLM detector.
@@ -98,6 +105,7 @@ class VSDLMDetector:
             speaking_threshold: Probability threshold for classifying as speaking (default: 0.5)
             debug_save_crops: Save mouth crops to /tmp for debugging
             logger: Optional logger for debugging
+            mouth_height_ratio: Ratio of face height to use for mouth crop height (YOLO mode, default: 0.35)
         """
         if ort is None:
             raise ImportError("onnxruntime is required for VSDLM. Install with: pip install onnxruntime")
@@ -112,6 +120,7 @@ class VSDLMDetector:
         self.speaking_threshold = speaking_threshold
         self.debug_save_crops = debug_save_crops
         self.debug_frame_count = 0
+        self.mouth_height_ratio = mouth_height_ratio
         
         # Auto-download model if not found
         if not self.model_path.exists():
@@ -174,9 +183,32 @@ class VSDLMDetector:
         except Exception as e:
             raise RuntimeError(f"Failed to download VSDLM model: {e}")
     
-    def _extract_mouth_bbox(self, landmarks: List[Tuple[float, float]]) -> Optional[Tuple[int, int, int, int]]:
+    def _detect_landmark_type(self, landmarks: List[Tuple[float, float, float]]) -> str:
         """
-        Extract mouth bounding box from facial landmarks.
+        Detect whether we have dlib 68-point landmarks or YOLO 5-point landmarks.
+        
+        Args:
+            landmarks: List of (x, y, c) tuples where c is confidence
+            
+        Returns:
+            'dlib68' or 'yolo5'
+        """
+        if len(landmarks) < 68:
+            return 'yolo5'
+        
+        # Count landmarks with confidence > 0
+        valid_landmarks = sum(1 for lm in landmarks if len(lm) >= 3 and lm[2] > 0.0)
+        
+        # If we have 5-7 valid landmarks, it's YOLO 5-point
+        # If we have more than 60 valid landmarks, it's dlib 68-point
+        if valid_landmarks < 10:
+            return 'yolo5'
+        else:
+            return 'dlib68'
+    
+    def _extract_mouth_bbox_dlib(self, landmarks: List[Tuple[float, float]]) -> Optional[Tuple[int, int, int, int]]:
+        """
+        Extract mouth bounding box from dlib 68-point facial landmarks.
         
         Args:
             landmarks: List of (x, y) tuples for all 68 facial landmarks
@@ -208,6 +240,106 @@ class VSDLMDetector:
         
         return (x1, y1, x2, y2)
     
+    def _extract_mouth_bbox_yolo(
+        self, 
+        landmarks: List[Tuple[float, float, float]], 
+        face_bbox: Tuple[float, float, float, float],
+        image_width: int,
+        image_height: int
+    ) -> Optional[Tuple[int, int, int, int]]:
+        """
+        Extract mouth bounding box from YOLO 5-point landmarks and face bbox.
+        
+        YOLO provides only 5 landmarks, with mouth corners at indices 48 and 54.
+        The mouth WIDTH is determined directly from the distance between the two mouth landmarks.
+        The mouth HEIGHT is estimated as a ratio of the face height.
+        
+        Args:
+            landmarks: List of (x, y, c) tuples (68-point array but only 5 are valid)
+            face_bbox: Face bounding box (xmin, ymin, xmax, ymax) in normalized coordinates
+            image_width: Image width in pixels
+            image_height: Image height in pixels
+            
+        Returns:
+            Tuple of (x1, y1, x2, y2) in pixel coordinates or None if extraction fails
+        """
+        # Try to get mouth corner landmarks from YOLO
+        left_mouth = None
+        right_mouth = None
+        
+        if len(landmarks) > self.YOLO_LEFT_MOUTH_IDX and landmarks[self.YOLO_LEFT_MOUTH_IDX][2] > 0:
+            left_mouth = (landmarks[self.YOLO_LEFT_MOUTH_IDX][0], landmarks[self.YOLO_LEFT_MOUTH_IDX][1])
+        
+        if len(landmarks) > self.YOLO_RIGHT_MOUTH_IDX and landmarks[self.YOLO_RIGHT_MOUTH_IDX][2] > 0:
+            right_mouth = (landmarks[self.YOLO_RIGHT_MOUTH_IDX][0], landmarks[self.YOLO_RIGHT_MOUTH_IDX][1])
+        
+        # We MUST have both mouth corners for YOLO mode
+        if left_mouth is None or right_mouth is None:
+            if self.logger:
+                self.logger.warning("[VSDLM-YOLO] Missing mouth corner landmarks - cannot extract mouth bbox")
+            return None
+        
+        # Calculate mouth center and width from the landmarks
+        mouth_center_x = (left_mouth[0] + right_mouth[0]) / 2
+        mouth_center_y = (left_mouth[1] + right_mouth[1]) / 2
+        
+        # IMPORTANT: Mouth WIDTH comes directly from the landmark distance
+        # This is the EXACT distance between the two mouth corners - DO NOT EXPAND
+        mouth_width = abs(right_mouth[0] - left_mouth[0])
+        
+        # Convert face bbox from normalized to pixel coordinates for height estimation
+        face_ymin = int(face_bbox[1] * image_height)
+        face_ymax = int(face_bbox[3] * image_height)
+        face_height = face_ymax - face_ymin
+        
+        if face_height <= 0:
+            if self.logger:
+                self.logger.warning("[VSDLM-YOLO] Invalid face height")
+            return None
+        
+        # Mouth HEIGHT is estimated as a ratio of face height
+        # Use the ratio directly as configured - no additional expansion
+        mouth_height = face_height * self.mouth_height_ratio
+        
+        # Calculate crop bbox using the EXACT landmark width and estimated height
+        x1 = int(mouth_center_x - mouth_width / 2)
+        y1 = int(mouth_center_y - mouth_height / 2)
+        x2 = int(mouth_center_x + mouth_width / 2)
+        y2 = int(mouth_center_y + mouth_height / 2)
+        
+        # Apply additional margins (same as dlib mode)
+        x1 = max(0, x1 - self.crop_margin_left)
+        y1 = max(0, y1 - self.crop_margin_top)
+        x2 = min(image_width, x2 + self.crop_margin_right)
+        y2 = min(image_height, y2 + self.crop_margin_bottom)
+        
+        if self.logger:
+            self.logger.info(
+                f"[VSDLM-YOLO] Mouth bbox from landmarks: "
+                f"left_mouth=({left_mouth[0]:.1f},{left_mouth[1]:.1f}), right_mouth=({right_mouth[0]:.1f},{right_mouth[1]:.1f}), "
+                f"mouth_width={mouth_width:.1f} (EXACT landmark distance), "
+                f"mouth_height={mouth_height:.1f} (face_height={face_height} * {self.mouth_height_ratio}), "
+                f"mouth_crop=({x1},{y1},{x2},{y2}), final_size={x2-x1}x{y2-y1}"
+            )
+        
+        # Store the bbox for visualization
+        return (x1, y1, x2, y2)
+    
+    def _extract_mouth_bbox(self, landmarks: List[Tuple[float, float]]) -> Optional[Tuple[int, int, int, int]]:
+        """
+        DEPRECATED: Legacy method for backward compatibility.
+        Use _extract_mouth_bbox_dlib() instead.
+        
+        Extract mouth bounding box from facial landmarks.
+        
+        Args:
+            landmarks: List of (x, y) tuples for all 68 facial landmarks
+            
+        Returns:
+            Tuple of (x1, y1, x2, y2) or None if extraction fails
+        """
+        return self._extract_mouth_bbox_dlib(landmarks)
+    
     def _preprocess_crop(self, crop: np.ndarray) -> np.ndarray:
         """
         Preprocess mouth crop for VSDLM inference.
@@ -238,24 +370,48 @@ class VSDLMDetector:
     def detect_speaking(
         self,
         image: np.ndarray,
-        landmarks: List[Tuple[float, float]]
-    ) -> Tuple[bool, float]:
+        landmarks: List[Tuple[float, float]],
+        face_bbox: Optional[Tuple[float, float, float, float]] = None
+    ) -> Tuple[bool, float, Optional[Tuple[int, int, int, int]]]:
         """
         Detect speaking activity from image and facial landmarks.
         
+        Supports both dlib 68-point landmarks and YOLO 5-point landmarks.
+        For YOLO landmarks, face_bbox is required for mouth region estimation.
+        
         Args:
             image: Input BGR image
-            landmarks: List of (x, y) tuples for 68 facial landmarks
+            landmarks: List of (x, y) or (x, y, c) tuples for facial landmarks
+            face_bbox: Face bounding box (xmin, ymin, xmax, ymax) in normalized coords (required for YOLO)
             
         Returns:
-            Tuple of (is_speaking: bool, confidence: float)
+            Tuple of (is_speaking: bool, confidence: float, mouth_bbox: Optional[Tuple[int, int, int, int]])
+            mouth_bbox is (x1, y1, x2, y2) in pixel coordinates for visualization
         """
-        # Extract mouth bounding box
-        bbox = self._extract_mouth_bbox(landmarks)
+        h, w = image.shape[:2]
+        
+        # Detect landmark type
+        landmark_type = self._detect_landmark_type(landmarks)
+        
+        if self.logger:
+            self.logger.info(f"[VSDLM] Detected landmark type: {landmark_type}, landmark count: {len(landmarks)}")
+        
+        # Extract mouth bounding box based on landmark type
+        if landmark_type == 'dlib68':
+            # Convert to simple (x, y) tuples if needed
+            simple_landmarks = [(lm[0], lm[1]) for lm in landmarks]
+            bbox = self._extract_mouth_bbox_dlib(simple_landmarks)
+        else:  # yolo5
+            if face_bbox is None:
+                if self.logger:
+                    self.logger.warning("YOLO landmarks detected but no face_bbox provided")
+                return False, 0.0, None
+            bbox = self._extract_mouth_bbox_yolo(landmarks, face_bbox, w, h)
+        
         if bbox is None:
             if self.logger:
-                self.logger.warning("Failed to extract mouth bounding box from landmarks")
-            return False, 0.0
+                self.logger.warning(f"Failed to extract mouth bounding box from {landmark_type} landmarks")
+            return False, 0.0, None
         
         x1, y1, x2, y2 = bbox
         
@@ -266,7 +422,7 @@ class VSDLMDetector:
         if x2 <= x1 or y2 <= y1:
             if self.logger:
                 self.logger.warning(f"Invalid mouth bbox: {bbox}")
-            return False, 0.0
+            return False, 0.0, None
         
         # Crop mouth region
         h, w = image.shape[:2]
@@ -276,14 +432,14 @@ class VSDLMDetector:
         if x2 <= x1 or y2 <= y1:
             if self.logger:
                 self.logger.warning("Mouth crop outside image bounds")
-            return False, 0.0
+            return False, 0.0, None
         
         crop = image[y1:y2, x1:x2]
         
         if crop.size == 0:
             if self.logger:
                 self.logger.warning("Empty mouth crop")
-            return False, 0.0
+            return False, 0.0, None
         
         if self.logger:
             self.logger.info(f"[VSDLM] Mouth crop size: {crop.shape}, will be resized to {self.input_height}x{self.input_width}")
@@ -291,7 +447,7 @@ class VSDLMDetector:
         # Debug: save crop if enabled
         if self.debug_save_crops and self.debug_frame_count % 30 == 0:  # Save every 30 frames
             try:
-                debug_path = f"/tmp/vsdlm_crop_{self.debug_frame_count:06d}.jpg"
+                debug_path = f"/tmp/.X11-unix/vsdlm_crop_{self.debug_frame_count:06d}.jpg"
                 cv2.imwrite(debug_path, crop)
                 if self.logger:
                     self.logger.info(f"[VSDLM DEBUG] Saved crop to {debug_path}")
@@ -340,9 +496,9 @@ class VSDLMDetector:
             if self.logger:
                 self.logger.info(f"[VSDLM] Final result: prob_open={prob_open:.4f}, threshold={self.speaking_threshold:.4f}, is_speaking={is_speaking}")
             
-            return is_speaking, prob_open
+            return is_speaking, prob_open, bbox
             
         except Exception as e:
             if self.logger:
                 self.logger.error(f"VSDLM inference failed: {e}", exc_info=True)
-            return False, 0.0
+            return False, 0.0, None

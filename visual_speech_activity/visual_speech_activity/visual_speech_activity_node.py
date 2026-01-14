@@ -83,9 +83,11 @@ class VisualSpeechActivityNode(Node):
             providers=self.vsdlm_providers,
             speaking_threshold=self.speaking_threshold,
             debug_save_crops=self.vsdlm_debug_save_crops,
-            logger=self.get_logger()
+            logger=self.get_logger(),
+            mouth_height_ratio=self.vsdlm_mouth_height_ratio
         )
-        self.get_logger().info(f"VSDLM detector initialized: variant={self.vsdlm_model_variant}, threshold={self.speaking_threshold}")
+        self.get_logger().info(f"VSDLM detector initialized: variant={self.vsdlm_model_variant}, threshold={self.speaking_threshold}, "
+                               f"mouth_height_ratio={self.vsdlm_mouth_height_ratio}")
         
         # CV Bridge for image conversion
         self.bridge = CvBridge()
@@ -161,6 +163,7 @@ class VisualSpeechActivityNode(Node):
         self.declare_parameter('vsdlm_weights_name', 'vsdlm_s.onnx')  # Specific VSDLM weights filename
         self.declare_parameter('vsdlm_model_variant', 'S')  # Model variant for auto-download: P/N/S/M/L
         self.declare_parameter('vsdlm_execution_provider', 'cpu')  # ONNX provider: cpu/cuda/tensorrt
+        self.declare_parameter('vsdlm_mouth_height_ratio', 0.35)  # Mouth height as ratio of face height (YOLO mode)
         
         # Image input parameters (same as face_recognition)
         self.declare_parameter('image_topic', '/camera/color/image_raw')  # Camera image topic
@@ -193,6 +196,7 @@ class VisualSpeechActivityNode(Node):
         self.vsdlm_weights_name = self.get_parameter('vsdlm_weights_name').get_parameter_value().string_value
         self.vsdlm_model_variant = self.get_parameter('vsdlm_model_variant').get_parameter_value().string_value
         vsdlm_provider = self.get_parameter('vsdlm_execution_provider').get_parameter_value().string_value
+        self.vsdlm_mouth_height_ratio = self.get_parameter('vsdlm_mouth_height_ratio').get_parameter_value().double_value
         
         # Image topics
         self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
@@ -622,8 +626,11 @@ class VisualSpeechActivityNode(Node):
                 )
             return extended_recognition
         
-        # Convert landmarks to list of (x, y) tuples
+        # Convert landmarks to list of (x, y, c) tuples
         landmarks_list = self._extract_landmark_coordinates(landmarks_msg)
+        
+        # Extract face bounding box for YOLO landmark support
+        face_bbox = self._extract_face_bbox(landmarks_msg)
         
         # Get image that matches the landmarks timestamp (within 100ms slop)
         landmarks_timestamp = _stamp_to_float(landmarks_msg.header.stamp)
@@ -636,21 +643,22 @@ class VisualSpeechActivityNode(Node):
                     f"No synchronized image for landmarks at t={landmarks_timestamp:.3f} "
                     f"for face {recognition.recognized_face_id}"
                 )
-            is_speaking, speaking_confidence = False, 0.0
+            is_speaking, speaking_confidence, mouth_crop_bbox = False, 0.0, None
         else:
             if self.enable_debug_output:
                 self.get_logger().info(
                     f"[NODE] Using synchronized image (t={landmarks_timestamp:.3f}) for face {recognition.recognized_face_id}, "
-                    f"image shape: {cv_image.shape}, landmarks count: {len(landmarks_list)}"
+                    f"image shape: {cv_image.shape}, landmarks count: {len(landmarks_list)}, face_bbox: {face_bbox}"
                 )
             
-            is_speaking, speaking_confidence = self.vsdlm_detector.detect_speaking(
+            is_speaking, speaking_confidence, mouth_crop_bbox = self.vsdlm_detector.detect_speaking(
                 cv_image,
-                landmarks_list
+                landmarks_list,
+                face_bbox
             )
             
             if self.enable_debug_output:
-                self.get_logger().info(f"[NODE] VSDLM returned: is_speaking={is_speaking} (type={type(is_speaking)}), speaking_confidence={speaking_confidence} (type={type(speaking_confidence)})")
+                self.get_logger().info(f"[NODE] VSDLM returned: is_speaking={is_speaking}, speaking_confidence={speaking_confidence}, mouth_bbox={mouth_crop_bbox}")
         
         # Create extended recognition message
         extended_recognition = self._copy_recognition_with_speaking(
@@ -661,7 +669,7 @@ class VisualSpeechActivityNode(Node):
         if self.enable_image_output and self.image_publisher is not None and cv_image is not None:
             self._publish_speaking_visualization(
                 cv_image, landmarks_list, is_speaking, speaking_confidence,
-                recognition.recognized_face_id, landmarks_msg.header
+                recognition.recognized_face_id, landmarks_msg.header, mouth_crop_bbox
             )
         
         if self.enable_debug_output:
@@ -709,6 +717,9 @@ class VisualSpeechActivityNode(Node):
             # Convert landmarks to coordinate list
             landmarks_coords = self._extract_landmark_coordinates(landmarks_msg)
             
+            # Extract face bounding box for YOLO landmark support
+            face_bbox = self._extract_face_bbox(landmarks_msg)
+            
             # Get image that matches the landmarks timestamp
             landmarks_timestamp = _stamp_to_float(landmarks_msg.header.stamp)
             cv_image = self._get_image_by_timestamp(landmarks_timestamp, slop=0.1)
@@ -716,26 +727,27 @@ class VisualSpeechActivityNode(Node):
             if self.enable_debug_output:
                 self.get_logger().info(
                     f"[NODE-ARRAY] Processing face {face_id} at t={landmarks_timestamp:.3f}, "
-                    f"image available: {cv_image is not None}, landmarks: {len(landmarks_coords)}"
+                    f"image available: {cv_image is not None}, landmarks: {len(landmarks_coords)}, face_bbox: {face_bbox}"
                 )
             
             # Detect speaking using VSDLM
             if cv_image is None:
-                is_speaking, speaking_confidence = False, 0.0
+                is_speaking, speaking_confidence, mouth_crop_bbox = False, 0.0, None
             else:
-                is_speaking, speaking_confidence = self.vsdlm_detector.detect_speaking(
+                is_speaking, speaking_confidence, mouth_crop_bbox = self.vsdlm_detector.detect_speaking(
                     cv_image,
-                    landmarks_coords
+                    landmarks_coords,
+                    face_bbox
                 )
                 
                 if self.enable_debug_output:
-                    self.get_logger().info(f"[NODE-ARRAY] VSDLM returned for {face_id}: is_speaking={is_speaking}, confidence={speaking_confidence:.4f}")
+                    self.get_logger().info(f"[NODE-ARRAY] VSDLM returned for {face_id}: is_speaking={is_speaking}, confidence={speaking_confidence:.4f}, mouth_bbox={mouth_crop_bbox}")
             
             # Publish visualization if enabled and image available
             if self.enable_image_output and self.image_publisher is not None and cv_image is not None:
                 self._publish_speaking_visualization(
                     cv_image, landmarks_coords, is_speaking, speaking_confidence,
-                    face_id, landmarks_msg.header
+                    face_id, landmarks_msg.header, mouth_crop_bbox
                 )
             
             # Create a FacialRecognition message using face_id
@@ -779,8 +791,11 @@ class VisualSpeechActivityNode(Node):
         # Convert landmarks to coordinate list
         landmarks_coords = self._extract_landmark_coordinates(landmarks_msg)
         
+        # Extract face bounding box for YOLO landmark support
+        face_bbox = self._extract_face_bbox(landmarks_msg)
+        
         if self.enable_debug_output:
-            self.get_logger().debug(f"Extracted {len(landmarks_coords)} landmark coordinates for face {face_id}")
+            self.get_logger().debug(f"Extracted {len(landmarks_coords)} landmark coordinates for face {face_id}, bbox: {face_bbox}")
         
         # Get image that matches the landmarks timestamp
         landmarks_timestamp = _stamp_to_float(landmarks_msg.header.stamp)
@@ -794,21 +809,22 @@ class VisualSpeechActivityNode(Node):
         
         # Detect speaking using VSDLM
         if cv_image is None:
-            is_speaking, speaking_confidence = False, 0.0
+            is_speaking, speaking_confidence, mouth_crop_bbox = False, 0.0, None
         else:
-            is_speaking, speaking_confidence = self.vsdlm_detector.detect_speaking(
+            is_speaking, speaking_confidence, mouth_crop_bbox = self.vsdlm_detector.detect_speaking(
                 cv_image,
-                landmarks_coords
+                landmarks_coords,
+                face_bbox
             )
             
             if self.enable_debug_output:
-                self.get_logger().info(f"[NODE-PERID] VSDLM returned: is_speaking={is_speaking}, confidence={speaking_confidence:.4f}")
+                self.get_logger().info(f"[NODE-PERID] VSDLM returned: is_speaking={is_speaking}, confidence={speaking_confidence:.4f}, mouth_bbox={mouth_crop_bbox}")
         
         # Publish visualization if enabled and image available
         if self.enable_image_output and self.image_publisher is not None and cv_image is not None:
             self._publish_speaking_visualization(
                 cv_image, landmarks_coords, is_speaking, speaking_confidence,
-                face_id, landmarks_msg.header
+                face_id, landmarks_msg.header, mouth_crop_bbox
             )
         
         # Create a FacialRecognition message using face_id
@@ -854,7 +870,7 @@ class VisualSpeechActivityNode(Node):
         # Show detector status
         self.get_logger().debug(f"Using VSDLM detector (variant: {self.vsdlm_model_variant})")
     
-    def _extract_landmark_coordinates(self, landmarks_msg: FacialLandmarks) -> List[Tuple[float, float]]:
+    def _extract_landmark_coordinates(self, landmarks_msg: FacialLandmarks) -> List[Tuple[float, float, float]]:
         """
         Extract landmark coordinates from FacialLandmarks message.
         
@@ -864,7 +880,7 @@ class VisualSpeechActivityNode(Node):
             landmarks_msg: FacialLandmarks message
             
         Returns:
-            List of (x, y) tuples in pixel coordinates
+            List of (x, y, c) tuples in pixel coordinates with confidence
         """
         width = landmarks_msg.width
         height = landmarks_msg.height
@@ -874,9 +890,25 @@ class VisualSpeechActivityNode(Node):
             # Convert normalized coordinates to pixel coordinates
             x = landmark.x * width
             y = landmark.y * height
-            coordinates.append((x, y))
+            c = landmark.c  # Confidence value
+            coordinates.append((x, y, c))
         
         return coordinates
+    
+    def _extract_face_bbox(self, landmarks_msg: FacialLandmarks) -> Optional[Tuple[float, float, float, float]]:
+        """
+        Extract face bounding box from FacialLandmarks message.
+        
+        Args:
+            landmarks_msg: FacialLandmarks message
+            
+        Returns:
+            Tuple of (xmin, ymin, xmax, ymax) in normalized coordinates or None
+        """
+        if hasattr(landmarks_msg, 'bbox_xyxy'):
+            bbox = landmarks_msg.bbox_xyxy
+            return (bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax)
+        return None
     
     def _copy_recognition_with_speaking(
         self, 
@@ -988,16 +1020,18 @@ class VisualSpeechActivityNode(Node):
     def _publish_speaking_visualization(
         self, 
         cv_image: np.ndarray, 
-        landmarks: List[Tuple[float, float]], 
+        landmarks: List[Tuple[float, float, float]], 
         is_speaking: bool,
         speaking_confidence: float,
         face_id: str,
-        header: Header
+        header: Header,
+        mouth_crop_bbox: Optional[Tuple[int, int, int, int]] = None
     ):
         """
         Publish annotated image with lip visualization.
         
-        Draws mouth landmarks with color coding:
+        Draws mouth landmarks with color coding for dlib mode, or
+        draws mouth crop bbox and YOLO landmarks for YOLO mode.
         - Red: Not speaking (confidence < speaking_threshold)
         - Green: Speaking (confidence >= speaking_threshold)
         
@@ -1005,35 +1039,20 @@ class VisualSpeechActivityNode(Node):
         
         Args:
             cv_image: Original OpenCV image
-            landmarks: List of (x, y) landmark coordinates
+            landmarks: List of (x, y, c) landmark coordinates with confidence
             is_speaking: Speaking detection result
             speaking_confidence: Speaking confidence score
             face_id: Face identifier for labeling
             header: Original image header
+            mouth_crop_bbox: Optional mouth crop bbox (x1, y1, x2, y2) for visualization
         """
         try:
             # Create a copy for annotation
             annotated_image = cv_image.copy()
             
-            # Check if we have at least 68 landmarks (required for mouth visualization)
-            # ros4hri standard has 70 landmarks (68 facial + 2 pupils at indices 68-69)
-            if len(landmarks) < 68:
-                if self.enable_debug_output:
-                    self.get_logger().warn(
-                        f"Expected at least 68 landmarks for visualization, got {len(landmarks)}. "
-                        "Skipping visualization."
-                    )
-                return
-            
-            # Use only the first 68 landmarks (indices 0-67) for facial feature visualization
-            # Landmarks 68-69 are pupils (not needed for mouth visualization)
-            num_original_landmarks = len(landmarks)
-            landmarks = landmarks[:68]
-            
-            if self.enable_debug_output:
-                self.get_logger().debug(
-                    f"Using first 68 of {num_original_landmarks} landmarks for mouth visualization (face_id={face_id})"
-                )
+            # Detect if we have YOLO or dlib landmarks
+            valid_landmarks = sum(1 for lm in landmarks if len(lm) >= 3 and lm[2] > 0.0)
+            is_yolo = valid_landmarks < 10
             
             # Calculate adaptive sizes based on image dimensions
             img_height, img_width = annotated_image.shape[:2]
@@ -1052,37 +1071,78 @@ class VisualSpeechActivityNode(Node):
                 mouth_color = (0, 0, 255)  # Red for not speaking
                 status_text = "NOT SPEAKING"
             
-            # Draw mouth outer contour (landmarks 48-59)
-            for i in range(48, 59):
-                pt1 = (int(landmarks[i][0]), int(landmarks[i][1]))
-                pt2 = (int(landmarks[i + 1][0]), int(landmarks[i + 1][1]))
+            # Visualization based on landmark type
+            if is_yolo:
+                # YOLO mode: Draw the crop rectangle and the 2 mouth landmarks
+                if mouth_crop_bbox is not None:
+                    x1, y1, x2, y2 = mouth_crop_bbox
+                    # Draw thick rectangle for the mouth crop area
+                    cv2.rectangle(annotated_image, (x1, y1), (x2, y2), mouth_color, adaptive_line_thickness * 2)
+                    # Add label on the rectangle
+                    cv2.putText(annotated_image, "MOUTH CROP", (x1, y1 - 5), 
+                               cv2.FONT_HERSHEY_SIMPLEX, adaptive_font_scale * 0.7, mouth_color, adaptive_font_thickness)
+                
+                # Draw YOLO mouth corner landmarks
+                if len(landmarks) > 48 and landmarks[48][2] > 0:  # Left mouth
+                    pt = (int(landmarks[48][0]), int(landmarks[48][1]))
+                    cv2.circle(annotated_image, pt, adaptive_landmark_radius * 2, (255, 0, 0), -1)  # Blue
+                    cv2.putText(annotated_image, "L", (pt[0] + 10, pt[1]), 
+                               cv2.FONT_HERSHEY_SIMPLEX, adaptive_font_scale, (255, 0, 0), adaptive_font_thickness)
+                
+                if len(landmarks) > 54 and landmarks[54][2] > 0:  # Right mouth
+                    pt = (int(landmarks[54][0]), int(landmarks[54][1]))
+                    cv2.circle(annotated_image, pt, adaptive_landmark_radius * 2, (255, 0, 0), -1)  # Blue
+                    cv2.putText(annotated_image, "R", (pt[0] + 10, pt[1]), 
+                               cv2.FONT_HERSHEY_SIMPLEX, adaptive_font_scale, (255, 0, 0), adaptive_font_thickness)
+                
+                # Calculate label position from mouth crop bbox or landmarks
+                if mouth_crop_bbox is not None:
+                    mouth_center_x = (mouth_crop_bbox[0] + mouth_crop_bbox[2]) // 2
+                    mouth_center_y = (mouth_crop_bbox[1] + mouth_crop_bbox[3]) // 2
+                elif len(landmarks) > 54 and landmarks[48][2] > 0 and landmarks[54][2] > 0:
+                    mouth_center_x = int((landmarks[48][0] + landmarks[54][0]) / 2)
+                    mouth_center_y = int((landmarks[48][1] + landmarks[54][1]) / 2)
+                else:
+                    mouth_center_x = img_width // 2
+                    mouth_center_y = img_height // 2
+            else:
+                # dlib mode: Draw full mouth contours
+                if len(landmarks) < 68:
+                    if self.enable_debug_output:
+                        self.get_logger().warn(f"Expected 68 landmarks for dlib visualization, got {len(landmarks)}. Skipping.")
+                    return
+                
+                # Draw mouth outer contour (landmarks 48-59)
+                for i in range(48, 59):
+                    pt1 = (int(landmarks[i][0]), int(landmarks[i][1]))
+                    pt2 = (int(landmarks[i + 1][0]), int(landmarks[i + 1][1]))
+                    cv2.line(annotated_image, pt1, pt2, mouth_color, adaptive_line_thickness)
+                
+                # Close mouth outer contour
+                pt1 = (int(landmarks[59][0]), int(landmarks[59][1]))
+                pt2 = (int(landmarks[48][0]), int(landmarks[48][1]))
                 cv2.line(annotated_image, pt1, pt2, mouth_color, adaptive_line_thickness)
-            
-            # Close mouth outer contour
-            pt1 = (int(landmarks[59][0]), int(landmarks[59][1]))
-            pt2 = (int(landmarks[48][0]), int(landmarks[48][1]))
-            cv2.line(annotated_image, pt1, pt2, mouth_color, adaptive_line_thickness)
-            
-            # Draw mouth inner contour (landmarks 60-67)
-            for i in range(60, 67):
-                pt1 = (int(landmarks[i][0]), int(landmarks[i][1]))
-                pt2 = (int(landmarks[i + 1][0]), int(landmarks[i + 1][1]))
+                
+                # Draw mouth inner contour (landmarks 60-67)
+                for i in range(60, 67):
+                    pt1 = (int(landmarks[i][0]), int(landmarks[i][1]))
+                    pt2 = (int(landmarks[i + 1][0]), int(landmarks[i + 1][1]))
+                    cv2.line(annotated_image, pt1, pt2, mouth_color, adaptive_line_thickness)
+                
+                # Close mouth inner contour
+                pt1 = (int(landmarks[67][0]), int(landmarks[67][1]))
+                pt2 = (int(landmarks[60][0]), int(landmarks[60][1]))
                 cv2.line(annotated_image, pt1, pt2, mouth_color, adaptive_line_thickness)
-            
-            # Close mouth inner contour
-            pt1 = (int(landmarks[67][0]), int(landmarks[67][1]))
-            pt2 = (int(landmarks[60][0]), int(landmarks[60][1]))
-            cv2.line(annotated_image, pt1, pt2, mouth_color, adaptive_line_thickness)
-            
-            # Draw mouth landmarks as circles
-            for i in range(48, 68):  # Mouth landmarks (48-67)
-                lm_x, lm_y = int(landmarks[i][0]), int(landmarks[i][1])
-                cv2.circle(annotated_image, (lm_x, lm_y), adaptive_landmark_radius, mouth_color, -1)
-            
-            # Calculate mouth center for label placement
-            mouth_landmarks = landmarks[48:68]
-            mouth_center_x = int(np.mean([lm[0] for lm in mouth_landmarks]))
-            mouth_center_y = int(np.mean([lm[1] for lm in mouth_landmarks]))
+                
+                # Draw mouth landmarks as circles
+                for i in range(48, 68):  # Mouth landmarks (48-67)
+                    lm_x, lm_y = int(landmarks[i][0]), int(landmarks[i][1])
+                    cv2.circle(annotated_image, (lm_x, lm_y), adaptive_landmark_radius, mouth_color, -1)
+                
+                # Calculate mouth center for label placement
+                mouth_landmarks = landmarks[48:68]
+                mouth_center_x = int(np.mean([lm[0] for lm in mouth_landmarks]))
+                mouth_center_y = int(np.mean([lm[1] for lm in mouth_landmarks]))
             
             # Format speaking threshold to first 2 digits (e.g., 0.5 -> "0.5")
             threshold_str = f"{self.speaking_threshold:.1f}"

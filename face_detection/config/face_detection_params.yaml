@@ -42,7 +42,7 @@ face_detector:
     # Dlib 68-point Landmark Detection (Recommended for Visual Speech Activity Detection)
     # When enabled, dlib will refine YOLO's 5 landmarks to 68 precise points
     # This significantly improves lip/mouth landmark quality for speech detection
-    enable_dlib_landmarks: true
+    enable_dlib_landmarks: false
     dlib_model_path: "shape_predictor_68_face_landmarks.dat"
     
     # MediaPipe 478-point Landmark Detection (Superior precision for lip/mouth tracking)

@@ -22,7 +22,7 @@ visual_speech_activity_node:
     # Probability threshold for classifying as speaking (0.0-1.0)
     # Higher values = fewer false positives but may miss speaking
     # Recommended: 0.4-0.6
-    speaking_threshold: 0.4
+    speaking_threshold: 0.9
     
     # Directory containing VSDLM weights (relative to package source)
     vsdlm_weights_path: "weights"
@@ -44,13 +44,23 @@ visual_speech_activity_node:
     # tensorrt: Requires TensorRT, fastest on NVIDIA GPUs
     vsdlm_execution_provider: "cpu"
     
+    # YOLO Landmark Mode Parameters
+    # When using YOLO 5-point landmarks instead of dlib 68-point landmarks,
+    # the mouth WIDTH is taken directly from the distance between the two mouth corner landmarks.
+    # Only the HEIGHT needs to be estimated as a ratio of the face bbox height.
+    
+    # Mouth crop height as ratio of face bbox height (default: 0.35)
+    # Increase if mouth region is too small vertically, decrease if too large
+    # Typical range: 0.25 - 0.45
+    vsdlm_mouth_height_ratio: 0.10
+    
     # Debug Configuration
     # Enable verbose debug output with logger.info
     enable_debug_output: true
     
     # Save mouth crops to /tmp for debugging (every 30th frame)
     # Useful for verifying what the model sees
-    vsdlm_debug_save_crops: false
+    vsdlm_debug_save_crops: true
     
     # Camera Image Topics (same pattern as face_recognition)
     # Use either regular image topic OR compressed topic (not both)
