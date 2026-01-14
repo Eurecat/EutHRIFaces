@@ -22,7 +22,8 @@ from rclpy.time import Time
 
 import numpy as np
 from typing import Dict, List, Optional, Tuple
-from collections import defaultdict
+from collections import defaultdict, deque
+from threading import Lock
 import time
 import cv2
 import os
@@ -47,6 +48,11 @@ from std_msgs.msg import Header
 from sensor_msgs.msg import Image, CompressedImage
 
 from .vsdlm_detector import VSDLMDetector
+
+
+def _stamp_to_float(stamp) -> float:
+    """Convert ROS timestamp to float seconds."""
+    return float(stamp.sec) + float(stamp.nanosec) * 1e-9
 
 
 class VisualSpeechActivityNode(Node):
@@ -84,7 +90,13 @@ class VisualSpeechActivityNode(Node):
         # CV Bridge for image conversion
         self.bridge = CvBridge()
         
-        # Image storage variables (copied from face_recognition pattern)
+        # Image buffer: store recent images with timestamps for synchronization
+        # Format: deque of (timestamp_float, cv_image_ndarray)
+        # This ensures we use the SAME image that landmarks were detected from
+        self.image_buffer = deque(maxlen=30)  # Keep last 30 images (~1 second at 30 fps)
+        self.image_buffer_lock = Lock()
+        
+        # Legacy variables kept for compatibility (will be deprecated)
         self.latest_color_image_msg = None
         self.color_image_processed = False
         self.latest_color_image_timestamp = None
@@ -110,6 +122,11 @@ class VisualSpeechActivityNode(Node):
             history=QoSHistoryPolicy.KEEP_LAST,
         )
         
+        # Sensor QoS for images (same as face_detection to avoid delays)
+        self.sensor_qos = QoSProfile(
+            depth=1,  # Keep only the latest image
+        )
+        
         # Setup subscribers and publishers
         self._setup_topics()
         
@@ -133,6 +150,7 @@ class VisualSpeechActivityNode(Node):
         self.declare_parameter('recognition_input_topic', '/humans/faces/recognized')
         self.declare_parameter('landmarks_input_topic', '/humans/faces/detected')
         self.declare_parameter('output_topic', '/humans/faces/speaking')
+        self.declare_parameter('output_image_topic', '/humans/faces/speaking/annotated_img')
         
         # ROS4HRI mode parameter
         self.declare_parameter('ros4hri_with_id', False)  # Default to array mode
@@ -151,6 +169,9 @@ class VisualSpeechActivityNode(Node):
         # Face recognition dependency parameter
         self.declare_parameter('use_face_recognition', True)  # Use face recognition for robust tracking
         
+        # Image visualization parameters
+        self.declare_parameter('enable_image_output', True)
+        
         # Debug parameters
         self.declare_parameter('enable_debug_output', False)
         self.declare_parameter('vsdlm_debug_save_crops', False)
@@ -161,6 +182,7 @@ class VisualSpeechActivityNode(Node):
         self.recognition_input_topic = self.get_parameter('recognition_input_topic').get_parameter_value().string_value
         self.landmarks_input_topic = self.get_parameter('landmarks_input_topic').get_parameter_value().string_value
         self.output_topic = self.get_parameter('output_topic').get_parameter_value().string_value
+        self.output_image_topic = self.get_parameter('output_image_topic').get_parameter_value().string_value
         
         # ROS4HRI mode
         self.ros4hri_with_id = self.get_parameter('ros4hri_with_id').get_parameter_value().bool_value
@@ -186,6 +208,9 @@ class VisualSpeechActivityNode(Node):
         
         # Face recognition dependency
         self.use_face_recognition = self.get_parameter('use_face_recognition').get_parameter_value().bool_value
+        
+        # Image visualization
+        self.enable_image_output = self.get_parameter('enable_image_output').get_parameter_value().bool_value
         
         # Debug
         self.enable_debug_output = self.get_parameter('enable_debug_output').get_parameter_value().bool_value
@@ -302,58 +327,122 @@ class VisualSpeechActivityNode(Node):
                 Image,
                 self.image_topic,
                 self._store_latest_rgb,
-                self.qos_profile
+                self.sensor_qos
             )
+        
+        # Create image publisher for visualization
+        self.image_publisher = None
+        if self.enable_image_output:
+            self.image_publisher = self.create_publisher(
+                Image,
+                self.output_image_topic,
+                10
+            )
+            self.get_logger().info(f"Publishing annotated images to {self.output_image_topic}")
     
     def _store_latest_rgb(self, color_msg: Image):
-        """Store latest color image (copied from face_recognition pattern)."""
-        self.latest_color_image_msg = color_msg
-        self.color_image_processed = False
-        self.latest_color_image_timestamp = self.get_clock().now()
-        
-        if self.enable_debug_output and not hasattr(self, '_image_received_logged'):
-            self.get_logger().info(f"[NODE-IMAGE] First image received on topic {self.image_topic}, size: {color_msg.width}x{color_msg.height}")
-            self._image_received_logged = True
+        """Store latest color image with timestamp in buffer."""
+        try:
+            # Convert to OpenCV format
+            cv_image = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
+            timestamp = _stamp_to_float(color_msg.header.stamp)
+            
+            # Add to timestamped buffer
+            with self.image_buffer_lock:
+                self.image_buffer.append((timestamp, cv_image))
+            
+            # Keep legacy variables for compatibility
+            self.latest_color_image_msg = color_msg
+            self.color_image_processed = False
+            self.latest_color_image_timestamp = self.get_clock().now()
+            
+            if self.enable_debug_output and not hasattr(self, '_image_received_logged'):
+                self.get_logger().info(f"[NODE-IMAGE] First image received on topic {self.image_topic}, size: {color_msg.width}x{color_msg.height}")
+                self._image_received_logged = True
+        except Exception as e:
+            self.get_logger().error(f"Error storing RGB image: {e}")
     
     def _store_latest_compressed_rgb(self, color_msg: CompressedImage):
-        """Store latest compressed color image (copied from face_recognition pattern)."""
-        self.latest_color_image_msg = color_msg
-        self.color_image_processed = False
-        self.latest_color_image_timestamp = self.get_clock().now()
-        
-        if self.enable_debug_output and not hasattr(self, '_compressed_image_received_logged'):
-            self.get_logger().info(f"[NODE-IMAGE] First compressed image received on topic {self.compressed_topic}")
-            self._compressed_image_received_logged = True
+        """Store latest compressed color image with timestamp in buffer."""
+        try:
+            # Decode compressed image
+            np_arr = np.frombuffer(color_msg.data, np.uint8)
+            cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            
+            if cv_image is None:
+                self.get_logger().error('Failed to decode compressed image')
+                return
+            
+            timestamp = _stamp_to_float(color_msg.header.stamp)
+            
+            # Add to timestamped buffer
+            with self.image_buffer_lock:
+                self.image_buffer.append((timestamp, cv_image))
+            
+            # Keep legacy variables for compatibility
+            self.latest_color_image_msg = color_msg
+            self.color_image_processed = False
+            self.latest_color_image_timestamp = self.get_clock().now()
+            
+            if self.enable_debug_output and not hasattr(self, '_compressed_image_received_logged'):
+                self.get_logger().info(f"[NODE-IMAGE] First compressed image received on topic {self.compressed_topic}")
+                self._compressed_image_received_logged = True
+        except Exception as e:
+            self.get_logger().error(f"Error storing compressed image: {e}")
     
     def _get_latest_image(self) -> Optional[np.ndarray]:
+        """Get latest image (legacy method for backward compatibility)."""
+        with self.image_buffer_lock:
+            if len(self.image_buffer) == 0:
+                return None
+            # Return most recent image
+            return self.image_buffer[-1][1]
+    
+    def _get_image_by_timestamp(self, target_timestamp: float, slop: float = 0.1) -> Optional[np.ndarray]:
         """
-        Get latest image as OpenCV format (following face_recognition pattern).
+        Get image that matches the target timestamp within slop tolerance.
         
-        Returns:
-            BGR image as numpy array or None if no image available
-        """
-        if self.latest_color_image_msg is None:
-            if self.enable_debug_output and not hasattr(self, '_no_image_warned'):
-                self.get_logger().warn(f"[NODE-IMAGE] No image received yet. Subscribed to: image_topic='{self.image_topic}', compressed_topic='{self.compressed_topic}'")
-                self._no_image_warned = True
-            return None
+        This ensures landmarks are drawn on the SAME image they were detected from.
         
-        try:
-            if self.compressed_topic and self.compressed_topic.strip():
-                # Handle compressed image
-                np_arr = np.frombuffer(self.latest_color_image_msg.data, np.uint8)
-                cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                if cv_image is None:
-                    self.get_logger().error('Failed to decode compressed image')
-                    return None
-            else:
-                # Handle regular image
-                cv_image = self.bridge.imgmsg_to_cv2(self.latest_color_image_msg, desired_encoding='bgr8')
+        Args:
+            target_timestamp: Target timestamp in seconds (from landmarks header)
+            slop: Maximum time difference in seconds (default 100ms)
             
-            return cv_image
-        except Exception as e:
-            self.get_logger().error(f'Error converting image: {e}')
-            return None
+        Returns:
+            BGR image as numpy array or None if no matching image found
+        """
+        with self.image_buffer_lock:
+            if len(self.image_buffer) == 0:
+                if self.enable_debug_output and not hasattr(self, '_no_image_warned'):
+                    self.get_logger().warn(f"[NODE-IMAGE] No images in buffer yet")
+                    self._no_image_warned = True
+                return None
+            
+            # Find image with closest timestamp within slop
+            best_image = None
+            best_dt = float('inf')
+            
+            for img_timestamp, cv_image in self.image_buffer:
+                dt = abs(img_timestamp - target_timestamp)
+                if dt < best_dt:
+                    best_dt = dt
+                    best_image = cv_image
+            
+            # Check if best match is within slop tolerance
+            if best_dt > slop:
+                if self.enable_debug_output:
+                    self.get_logger().warn(
+                        f"[NODE-IMAGE] No image within {slop*1000:.0f}ms slop for timestamp {target_timestamp:.3f}. "
+                        f"Closest: {best_dt*1000:.1f}ms away"
+                    )
+                return None
+            
+            if self.enable_debug_output:
+                self.get_logger().debug(
+                    f"[NODE-IMAGE] Matched image with dt={best_dt*1000:.1f}ms for timestamp {target_timestamp:.3f}"
+                )
+            
+            return best_image
     
     # -------------------------------------------------------------------------
     #                    ROS4HRI with ID Mode Callbacks
@@ -536,17 +625,24 @@ class VisualSpeechActivityNode(Node):
         # Convert landmarks to list of (x, y) tuples
         landmarks_list = self._extract_landmark_coordinates(landmarks_msg)
         
-        # Get current image
-        cv_image = self._get_latest_image()
+        # Get image that matches the landmarks timestamp (within 100ms slop)
+        landmarks_timestamp = _stamp_to_float(landmarks_msg.header.stamp)
+        cv_image = self._get_image_by_timestamp(landmarks_timestamp, slop=0.1)
         
         # Detect speaking using VSDLM
         if cv_image is None:
             if self.enable_debug_output:
-                self.get_logger().warning(f"No image available for VSDLM detection of {recognition.recognized_face_id}")
+                self.get_logger().warning(
+                    f"No synchronized image for landmarks at t={landmarks_timestamp:.3f} "
+                    f"for face {recognition.recognized_face_id}"
+                )
             is_speaking, speaking_confidence = False, 0.0
         else:
             if self.enable_debug_output:
-                self.get_logger().info(f"[NODE] Calling VSDLM detector for face {recognition.recognized_face_id}, image shape: {cv_image.shape}, landmarks count: {len(landmarks_list)}")
+                self.get_logger().info(
+                    f"[NODE] Using synchronized image (t={landmarks_timestamp:.3f}) for face {recognition.recognized_face_id}, "
+                    f"image shape: {cv_image.shape}, landmarks count: {len(landmarks_list)}"
+                )
             
             is_speaking, speaking_confidence = self.vsdlm_detector.detect_speaking(
                 cv_image,
@@ -560,6 +656,13 @@ class VisualSpeechActivityNode(Node):
         extended_recognition = self._copy_recognition_with_speaking(
             recognition, is_speaking, speaking_confidence
         )
+        
+        # Publish visualization if enabled and image available
+        if self.enable_image_output and self.image_publisher is not None and cv_image is not None:
+            self._publish_speaking_visualization(
+                cv_image, landmarks_list, is_speaking, speaking_confidence,
+                recognition.recognized_face_id, landmarks_msg.header
+            )
         
         if self.enable_debug_output:
             ext_is_spk = extended_recognition.is_speaking if hasattr(extended_recognition, 'is_speaking') else 'N/A'
@@ -606,11 +709,15 @@ class VisualSpeechActivityNode(Node):
             # Convert landmarks to coordinate list
             landmarks_coords = self._extract_landmark_coordinates(landmarks_msg)
             
-            # Get current image
-            cv_image = self._get_latest_image()
+            # Get image that matches the landmarks timestamp
+            landmarks_timestamp = _stamp_to_float(landmarks_msg.header.stamp)
+            cv_image = self._get_image_by_timestamp(landmarks_timestamp, slop=0.1)
             
             if self.enable_debug_output:
-                self.get_logger().info(f"[NODE-ARRAY] Processing face {face_id}, image available: {cv_image is not None}, landmarks: {len(landmarks_coords)}")
+                self.get_logger().info(
+                    f"[NODE-ARRAY] Processing face {face_id} at t={landmarks_timestamp:.3f}, "
+                    f"image available: {cv_image is not None}, landmarks: {len(landmarks_coords)}"
+                )
             
             # Detect speaking using VSDLM
             if cv_image is None:
@@ -623,6 +730,13 @@ class VisualSpeechActivityNode(Node):
                 
                 if self.enable_debug_output:
                     self.get_logger().info(f"[NODE-ARRAY] VSDLM returned for {face_id}: is_speaking={is_speaking}, confidence={speaking_confidence:.4f}")
+            
+            # Publish visualization if enabled and image available
+            if self.enable_image_output and self.image_publisher is not None and cv_image is not None:
+                self._publish_speaking_visualization(
+                    cv_image, landmarks_coords, is_speaking, speaking_confidence,
+                    face_id, landmarks_msg.header
+                )
             
             # Create a FacialRecognition message using face_id
             recognition = FacialRecognition()
@@ -668,11 +782,15 @@ class VisualSpeechActivityNode(Node):
         if self.enable_debug_output:
             self.get_logger().debug(f"Extracted {len(landmarks_coords)} landmark coordinates for face {face_id}")
         
-        # Get current image
-        cv_image = self._get_latest_image()
+        # Get image that matches the landmarks timestamp
+        landmarks_timestamp = _stamp_to_float(landmarks_msg.header.stamp)
+        cv_image = self._get_image_by_timestamp(landmarks_timestamp, slop=0.1)
         
         if self.enable_debug_output:
-            self.get_logger().info(f"[NODE-PERID] Processing face {face_id}, image available: {cv_image is not None}")
+            self.get_logger().info(
+                f"[NODE-PERID] Processing face {face_id} at t={landmarks_timestamp:.3f}, "
+                f"image available: {cv_image is not None}"
+            )
         
         # Detect speaking using VSDLM
         if cv_image is None:
@@ -685,6 +803,13 @@ class VisualSpeechActivityNode(Node):
             
             if self.enable_debug_output:
                 self.get_logger().info(f"[NODE-PERID] VSDLM returned: is_speaking={is_speaking}, confidence={speaking_confidence:.4f}")
+        
+        # Publish visualization if enabled and image available
+        if self.enable_image_output and self.image_publisher is not None and cv_image is not None:
+            self._publish_speaking_visualization(
+                cv_image, landmarks_coords, is_speaking, speaking_confidence,
+                face_id, landmarks_msg.header
+            )
         
         # Create a FacialRecognition message using face_id
         recognition = FacialRecognition()
@@ -855,6 +980,180 @@ class VisualSpeechActivityNode(Node):
             # In a production system, you'd want to track last access time
             items = list(self.latest_recognition.items())
             self.latest_recognition = dict(items[-100:])
+    
+    # -------------------------------------------------------------------------
+    #                    Visualization Methods
+    # -------------------------------------------------------------------------
+    
+    def _publish_speaking_visualization(
+        self, 
+        cv_image: np.ndarray, 
+        landmarks: List[Tuple[float, float]], 
+        is_speaking: bool,
+        speaking_confidence: float,
+        face_id: str,
+        header: Header
+    ):
+        """
+        Publish annotated image with lip visualization.
+        
+        Draws mouth landmarks with color coding:
+        - Red: Not speaking (confidence < speaking_threshold)
+        - Green: Speaking (confidence >= speaking_threshold)
+        
+        Also displays the speaking threshold on the image.
+        
+        Args:
+            cv_image: Original OpenCV image
+            landmarks: List of (x, y) landmark coordinates
+            is_speaking: Speaking detection result
+            speaking_confidence: Speaking confidence score
+            face_id: Face identifier for labeling
+            header: Original image header
+        """
+        try:
+            # Create a copy for annotation
+            annotated_image = cv_image.copy()
+            
+            # Check if we have at least 68 landmarks (required for mouth visualization)
+            # ros4hri standard has 70 landmarks (68 facial + 2 pupils at indices 68-69)
+            if len(landmarks) < 68:
+                if self.enable_debug_output:
+                    self.get_logger().warn(
+                        f"Expected at least 68 landmarks for visualization, got {len(landmarks)}. "
+                        "Skipping visualization."
+                    )
+                return
+            
+            # Use only the first 68 landmarks (indices 0-67) for facial feature visualization
+            # Landmarks 68-69 are pupils (not needed for mouth visualization)
+            num_original_landmarks = len(landmarks)
+            landmarks = landmarks[:68]
+            
+            if self.enable_debug_output:
+                self.get_logger().debug(
+                    f"Using first 68 of {num_original_landmarks} landmarks for mouth visualization (face_id={face_id})"
+                )
+            
+            # Calculate adaptive sizes based on image dimensions
+            img_height, img_width = annotated_image.shape[:2]
+            base_size = min(img_width, img_height)
+            
+            adaptive_line_thickness = max(2, int(base_size * 0.003))  # 0.3% of image size
+            adaptive_landmark_radius = max(3, int(base_size * 0.008))  # 0.8% of image size
+            adaptive_font_scale = max(0.6, base_size * 0.0012)  # Adaptive font size
+            adaptive_font_thickness = max(2, int(base_size * 0.002))  # Adaptive font thickness
+            
+            # Choose color based on speaking status
+            if is_speaking:
+                mouth_color = (0, 255, 0)  # Green for speaking
+                status_text = "SPEAKING"
+            else:
+                mouth_color = (0, 0, 255)  # Red for not speaking
+                status_text = "NOT SPEAKING"
+            
+            # Draw mouth outer contour (landmarks 48-59)
+            for i in range(48, 59):
+                pt1 = (int(landmarks[i][0]), int(landmarks[i][1]))
+                pt2 = (int(landmarks[i + 1][0]), int(landmarks[i + 1][1]))
+                cv2.line(annotated_image, pt1, pt2, mouth_color, adaptive_line_thickness)
+            
+            # Close mouth outer contour
+            pt1 = (int(landmarks[59][0]), int(landmarks[59][1]))
+            pt2 = (int(landmarks[48][0]), int(landmarks[48][1]))
+            cv2.line(annotated_image, pt1, pt2, mouth_color, adaptive_line_thickness)
+            
+            # Draw mouth inner contour (landmarks 60-67)
+            for i in range(60, 67):
+                pt1 = (int(landmarks[i][0]), int(landmarks[i][1]))
+                pt2 = (int(landmarks[i + 1][0]), int(landmarks[i + 1][1]))
+                cv2.line(annotated_image, pt1, pt2, mouth_color, adaptive_line_thickness)
+            
+            # Close mouth inner contour
+            pt1 = (int(landmarks[67][0]), int(landmarks[67][1]))
+            pt2 = (int(landmarks[60][0]), int(landmarks[60][1]))
+            cv2.line(annotated_image, pt1, pt2, mouth_color, adaptive_line_thickness)
+            
+            # Draw mouth landmarks as circles
+            for i in range(48, 68):  # Mouth landmarks (48-67)
+                lm_x, lm_y = int(landmarks[i][0]), int(landmarks[i][1])
+                cv2.circle(annotated_image, (lm_x, lm_y), adaptive_landmark_radius, mouth_color, -1)
+            
+            # Calculate mouth center for label placement
+            mouth_landmarks = landmarks[48:68]
+            mouth_center_x = int(np.mean([lm[0] for lm in mouth_landmarks]))
+            mouth_center_y = int(np.mean([lm[1] for lm in mouth_landmarks]))
+            
+            # Format speaking threshold to first 2 digits (e.g., 0.5 -> "0.5")
+            threshold_str = f"{self.speaking_threshold:.1f}"
+            
+            # Create label with status, confidence, and threshold
+            label = f"{status_text} ({speaking_confidence:.2f})"
+            threshold_label = f"Threshold: {threshold_str}"
+            
+            # Draw label background and text near mouth
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 
+                                        adaptive_font_scale, adaptive_font_thickness)[0]
+            threshold_size = cv2.getTextSize(threshold_label, cv2.FONT_HERSHEY_SIMPLEX,
+                                            adaptive_font_scale * 0.8, adaptive_font_thickness)[0]
+            
+            label_padding = max(5, int(base_size * 0.01))
+            label_x = mouth_center_x - label_size[0] // 2
+            label_y = mouth_center_y - max(label_size[1], threshold_size[1]) - label_padding * 3
+            
+            # Draw background for status label
+            cv2.rectangle(
+                annotated_image,
+                (label_x - label_padding, label_y - label_size[1] - label_padding),
+                (label_x + label_size[0] + label_padding, label_y + label_padding),
+                mouth_color, -1
+            )
+            
+            # Draw status text
+            cv2.putText(
+                annotated_image, label,
+                (label_x, label_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                adaptive_font_scale,
+                (255, 255, 255),  # White text
+                adaptive_font_thickness
+            )
+            
+            # Draw threshold label below status
+            threshold_x = mouth_center_x - threshold_size[0] // 2
+            threshold_y = label_y + label_size[1] + label_padding * 2
+            
+            # Draw background for threshold label
+            cv2.rectangle(
+                annotated_image,
+                (threshold_x - label_padding, threshold_y - threshold_size[1] - label_padding),
+                (threshold_x + threshold_size[0] + label_padding, threshold_y + label_padding),
+                (100, 100, 100), -1  # Gray background
+            )
+            
+            # Draw threshold text
+            cv2.putText(
+                annotated_image, threshold_label,
+                (threshold_x, threshold_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                adaptive_font_scale * 0.8,
+                (255, 255, 255),  # White text
+                adaptive_font_thickness
+            )
+            
+            # Convert to ROS Image and publish
+            annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
+            annotated_msg.header = header
+            self.image_publisher.publish(annotated_msg)
+            
+            if self.enable_debug_output:
+                self.get_logger().debug(
+                    f"Published speaking visualization for {face_id}: "
+                    f"{status_text} (confidence={speaking_confidence:.2f}, threshold={threshold_str})"
+                )
+        
+        except Exception as e:
+            self.get_logger().error(f"Error publishing speaking visualization: {e}")
 
 
 def main(args=None):

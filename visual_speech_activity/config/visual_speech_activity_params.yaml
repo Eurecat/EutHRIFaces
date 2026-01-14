@@ -7,6 +7,7 @@ visual_speech_activity_node:
     recognition_input_topic: "/humans/faces/recognized"
     landmarks_input_topic: "/humans/faces/detected"
     output_topic: "/humans/faces/speaking"
+    output_image_topic: "/humans/faces/speaking/annotated_img"
     
     # ROS4HRI Configuration
     # Set to true for per-ID topics (/humans/faces/<id>/speaking)
@@ -21,13 +22,13 @@ visual_speech_activity_node:
     # Probability threshold for classifying as speaking (0.0-1.0)
     # Higher values = fewer false positives but may miss speaking
     # Recommended: 0.4-0.6
-    speaking_threshold: 0.9
+    speaking_threshold: 0.4
     
     # Directory containing VSDLM weights (relative to package source)
     vsdlm_weights_path: "weights"
     
     # Specific VSDLM weights filename
-    vsdlm_weights_name: "vsdlm_s.onnx"
+    vsdlm_weights_name: "vsdlm_l.onnx"
     
     # Model variant for auto-download: P/N/S/M/L
     # P: 112KB, F1=0.9502, latency=0.18ms (ultra-fast)
@@ -35,7 +36,7 @@ visual_speech_activity_node:
     # S: 494KB, F1=0.9696, latency=0.50ms (recommended - good balance)
     # M: 1.7MB, F1=0.9801, latency=0.70ms (high accuracy)
     # L: 6.4MB, F1=0.9891, latency=0.91ms (maximum accuracy)
-    vsdlm_model_variant: "S"
+    vsdlm_model_variant: "L"
     
     # ONNX execution provider: cpu, cuda, tensorrt
     # cpu: Works everywhere, slower
@@ -66,6 +67,10 @@ visual_speech_activity_node:
     # Set to true to use face recognition for robust identity tracking (recommended)
     # Set to false to work with face_id only (fallback when face recognition unavailable)
     use_face_recognition: false
+    
+    # Image Visualization
+    # Enable/disable annotated image output with lip visualization
+    enable_image_output: true
     
     # Debug Configuration
     enable_debug_output: true
