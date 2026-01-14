@@ -24,6 +24,9 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 import time
+import cv2
+import os
+from cv_bridge import CvBridge
 
 try:
     from hri_msgs.msg import (
@@ -41,8 +44,9 @@ except ImportError:
     FacialRecognitionArray = None
 
 from std_msgs.msg import Header
+from sensor_msgs.msg import Image, CompressedImage
 
-from .enhanced_lip_movement_detector import EnhancedLipMovementDetector
+from .vsdlm_detector import VSDLMDetector
 
 
 class VisualSpeechActivityNode(Node):
@@ -60,19 +64,30 @@ class VisualSpeechActivityNode(Node):
         self._declare_parameters()
         self._get_parameters()
         
-        # Initialize enhanced lip movement detector
-        self.lip_detector = EnhancedLipMovementDetector(
-            window_size=self.window_size,
-            movement_threshold=self.movement_threshold,
+        # Build full VSDLM model path (similar to face_recognition approach)
+        vsdlm_weights_dir_path = self._get_weights_directory_path()
+        vsdlm_model_full_path = os.path.join(vsdlm_weights_dir_path, self.vsdlm_weights_name)
+        self.get_logger().info(f"VSDLM weights directory: {vsdlm_weights_dir_path}")
+        self.get_logger().info(f"VSDLM model path: {vsdlm_model_full_path}")
+        
+        # Initialize VSDLM detector for visual speech detection
+        self.vsdlm_detector = VSDLMDetector(
+            model_path=vsdlm_model_full_path,
+            model_variant=self.vsdlm_model_variant,
+            providers=self.vsdlm_providers,
             speaking_threshold=self.speaking_threshold,
-            temporal_smoothing=self.temporal_smoothing,
-            min_frames_for_detection=self.min_frames_for_detection,
-            use_full_landmarks=self.use_full_landmarks,
-            rnn_enabled=self.rnn_enabled,
+            debug_save_crops=self.vsdlm_debug_save_crops,
             logger=self.get_logger()
         )
+        self.get_logger().info(f"VSDLM detector initialized: variant={self.vsdlm_model_variant}, threshold={self.speaking_threshold}")
         
-        self.get_logger().info(f"Enhanced LipMovementDetector initialized: window_size={self.window_size}, movement_threshold={self.movement_threshold}, speaking_threshold={self.speaking_threshold}, use_full_landmarks={self.use_full_landmarks}, rnn_enabled={self.rnn_enabled}")
+        # CV Bridge for image conversion
+        self.bridge = CvBridge()
+        
+        # Image storage variables (copied from face_recognition pattern)
+        self.latest_color_image_msg = None
+        self.color_image_processed = False
+        self.latest_color_image_timestamp = None
         
         # Message buffers for synchronization
         # Store latest facial landmarks per face_id
@@ -109,7 +124,7 @@ class VisualSpeechActivityNode(Node):
         self.get_logger().info("Visual Speech Activity Node initialized")
         self.get_logger().info(f"ROS4HRI mode: {'with_id' if self.ros4hri_with_id else 'array'}")
         self.get_logger().info(f"Face recognition mode: {'enabled' if self.use_face_recognition else 'disabled (face_id only)'}")
-        self.get_logger().info(f"Window size: {self.window_size} frames")
+        self.get_logger().info(f"VSDLM model: {self.vsdlm_model_variant}")
         self.get_logger().info(f"Speaking threshold: {self.speaking_threshold}")
     
     def _declare_parameters(self):
@@ -122,22 +137,23 @@ class VisualSpeechActivityNode(Node):
         # ROS4HRI mode parameter
         self.declare_parameter('ros4hri_with_id', False)  # Default to array mode
         
-        # Lip movement detection parameters
-        self.declare_parameter('window_size', 20)  # Number of frames for temporal analysis
-        self.declare_parameter('movement_threshold', 0.02)  # Minimum MAR variation
-        self.declare_parameter('speaking_threshold', 0.5)  # Confidence threshold for speaking
-        self.declare_parameter('temporal_smoothing', True)  # Apply temporal smoothing
-        self.declare_parameter('min_frames_for_detection', 5)  # Min frames before detection
+        # VSDLM parameters for visual speech detection
+        self.declare_parameter('speaking_threshold', 0.5)  # Probability threshold for speaking classification
+        self.declare_parameter('vsdlm_weights_path', 'weights')  # Directory containing VSDLM weights
+        self.declare_parameter('vsdlm_weights_name', 'vsdlm_s.onnx')  # Specific VSDLM weights filename
+        self.declare_parameter('vsdlm_model_variant', 'S')  # Model variant for auto-download: P/N/S/M/L
+        self.declare_parameter('vsdlm_execution_provider', 'cpu')  # ONNX provider: cpu/cuda/tensorrt
         
-        # Enhanced detector parameters
-        self.declare_parameter('use_full_landmarks', True)  # Use full 68-point landmarks when available
-        self.declare_parameter('rnn_enabled', True)  # Enable RNN-based classification
+        # Image input parameters (same as face_recognition)
+        self.declare_parameter('image_topic', '/camera/color/image_raw')  # Camera image topic
+        self.declare_parameter('compressed_topic', '')  # Compressed image topic (optional)
         
         # Face recognition dependency parameter
         self.declare_parameter('use_face_recognition', True)  # Use face recognition for robust tracking
         
         # Debug parameters
         self.declare_parameter('enable_debug_output', False)
+        self.declare_parameter('vsdlm_debug_save_crops', False)
     
     def _get_parameters(self):
         """Get parameters from ROS2 parameter server."""
@@ -149,22 +165,59 @@ class VisualSpeechActivityNode(Node):
         # ROS4HRI mode
         self.ros4hri_with_id = self.get_parameter('ros4hri_with_id').get_parameter_value().bool_value
         
-        # Detection parameters
-        self.window_size = self.get_parameter('window_size').get_parameter_value().integer_value
-        self.movement_threshold = self.get_parameter('movement_threshold').get_parameter_value().double_value
+        # VSDLM parameters
         self.speaking_threshold = self.get_parameter('speaking_threshold').get_parameter_value().double_value
-        self.temporal_smoothing = self.get_parameter('temporal_smoothing').get_parameter_value().bool_value
-        self.min_frames_for_detection = self.get_parameter('min_frames_for_detection').get_parameter_value().integer_value
+        self.vsdlm_weights_path = self.get_parameter('vsdlm_weights_path').get_parameter_value().string_value
+        self.vsdlm_weights_name = self.get_parameter('vsdlm_weights_name').get_parameter_value().string_value
+        self.vsdlm_model_variant = self.get_parameter('vsdlm_model_variant').get_parameter_value().string_value
+        vsdlm_provider = self.get_parameter('vsdlm_execution_provider').get_parameter_value().string_value
         
-        # Enhanced detector parameters
-        self.use_full_landmarks = self.get_parameter('use_full_landmarks').get_parameter_value().bool_value
-        self.rnn_enabled = self.get_parameter('rnn_enabled').get_parameter_value().bool_value
+        # Image topics
+        self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
+        self.compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
+        
+        # Map provider string to ONNX provider list
+        if vsdlm_provider == 'cuda':
+            self.vsdlm_providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+        elif vsdlm_provider == 'tensorrt':
+            self.vsdlm_providers = ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']
+        else:
+            self.vsdlm_providers = ['CPUExecutionProvider']
         
         # Face recognition dependency
         self.use_face_recognition = self.get_parameter('use_face_recognition').get_parameter_value().bool_value
         
         # Debug
         self.enable_debug_output = self.get_parameter('enable_debug_output').get_parameter_value().bool_value
+        self.vsdlm_debug_save_crops = self.get_parameter('vsdlm_debug_save_crops').get_parameter_value().bool_value
+        
+        # Set logger level based on debug flag
+        if self.enable_debug_output:
+            self.get_logger().set_level(rclpy.logging.LoggingSeverity.INFO)
+            self.get_logger().info("[DEBUG MODE ENABLED] Verbose logging activated")
+        else:
+            self.get_logger().set_level(rclpy.logging.LoggingSeverity.WARN)
+    
+    def _get_weights_directory_path(self) -> str:
+        """
+        Get the full path to the weights directory.
+        Similar to face_recognition approach - navigates from package source to weights folder.
+        
+        Returns:
+            Absolute path to the weights directory
+        """
+        # Get the current file's directory and navigate to package root
+        current_file_dir = os.path.dirname(os.path.abspath(__file__))
+        package_src_dir = os.path.dirname(current_file_dir)
+        package_src_dir = package_src_dir.replace('build', 'src')  # Save it in docker volume of ros2 package
+        weights_dir_path = os.path.join(package_src_dir, self.vsdlm_weights_path)
+        
+        # Create weights dir if not there
+        if not os.path.exists(weights_dir_path):
+            os.makedirs(weights_dir_path)
+            self.get_logger().info(f"Created weights directory: {weights_dir_path}")
+        
+        return weights_dir_path
     
     def _setup_topics(self):
         """Setup ROS2 subscribers and publishers based on ROS4HRI mode."""
@@ -212,6 +265,7 @@ class VisualSpeechActivityNode(Node):
                 self.recognition_array_subscriber = None
                 self.get_logger().info("Face recognition disabled - working with face_id only")
             
+            # Publisher
             self.speaking_array_publisher = self.create_publisher(
                 FacialRecognitionArray,
                 self.output_topic,
@@ -219,13 +273,87 @@ class VisualSpeechActivityNode(Node):
             )
             
             self.get_logger().info(f"Subscribed to {self.landmarks_input_topic} (array mode)")
-            self.get_logger().info(f"Subscribed to {self.recognition_input_topic} (array mode)")
             self.get_logger().info(f"Publishing to {self.output_topic} (array mode)")
             
-            # No per-ID subscribers/publishers
+            # No per-ID structures
             self.landmarks_subscribers = {}
             self.recognition_subscribers = {}
             self.speaking_publishers = {}
+            self.tracked_faces_subscriber = None
+        
+        # Subscribe to camera image (same pattern as face_recognition)
+        if self.compressed_topic and self.compressed_topic.strip():
+            self.get_logger().info(f"Using compressed image topic: {self.compressed_topic}")
+            real_time_qos = QoSProfile(
+                depth=1,
+                reliability=QoSReliabilityPolicy.BEST_EFFORT,
+                history=QoSHistoryPolicy.KEEP_LAST,
+                durability=DurabilityPolicy.VOLATILE
+            )
+            self.color_sub = self.create_subscription(
+                CompressedImage,
+                self.compressed_topic,
+                self._store_latest_compressed_rgb,
+                real_time_qos
+            )
+        else:
+            self.get_logger().info(f"Using regular image topic: {self.image_topic}")
+            self.color_sub = self.create_subscription(
+                Image,
+                self.image_topic,
+                self._store_latest_rgb,
+                self.qos_profile
+            )
+    
+    def _store_latest_rgb(self, color_msg: Image):
+        """Store latest color image (copied from face_recognition pattern)."""
+        self.latest_color_image_msg = color_msg
+        self.color_image_processed = False
+        self.latest_color_image_timestamp = self.get_clock().now()
+        
+        if self.enable_debug_output and not hasattr(self, '_image_received_logged'):
+            self.get_logger().info(f"[NODE-IMAGE] First image received on topic {self.image_topic}, size: {color_msg.width}x{color_msg.height}")
+            self._image_received_logged = True
+    
+    def _store_latest_compressed_rgb(self, color_msg: CompressedImage):
+        """Store latest compressed color image (copied from face_recognition pattern)."""
+        self.latest_color_image_msg = color_msg
+        self.color_image_processed = False
+        self.latest_color_image_timestamp = self.get_clock().now()
+        
+        if self.enable_debug_output and not hasattr(self, '_compressed_image_received_logged'):
+            self.get_logger().info(f"[NODE-IMAGE] First compressed image received on topic {self.compressed_topic}")
+            self._compressed_image_received_logged = True
+    
+    def _get_latest_image(self) -> Optional[np.ndarray]:
+        """
+        Get latest image as OpenCV format (following face_recognition pattern).
+        
+        Returns:
+            BGR image as numpy array or None if no image available
+        """
+        if self.latest_color_image_msg is None:
+            if self.enable_debug_output and not hasattr(self, '_no_image_warned'):
+                self.get_logger().warn(f"[NODE-IMAGE] No image received yet. Subscribed to: image_topic='{self.image_topic}', compressed_topic='{self.compressed_topic}'")
+                self._no_image_warned = True
+            return None
+        
+        try:
+            if self.compressed_topic and self.compressed_topic.strip():
+                # Handle compressed image
+                np_arr = np.frombuffer(self.latest_color_image_msg.data, np.uint8)
+                cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                if cv_image is None:
+                    self.get_logger().error('Failed to decode compressed image')
+                    return None
+            else:
+                # Handle regular image
+                cv_image = self.bridge.imgmsg_to_cv2(self.latest_color_image_msg, desired_encoding='bgr8')
+            
+            return cv_image
+        except Exception as e:
+            self.get_logger().error(f'Error converting image: {e}')
+            return None
     
     # -------------------------------------------------------------------------
     #                    ROS4HRI with ID Mode Callbacks
@@ -408,11 +536,25 @@ class VisualSpeechActivityNode(Node):
         # Convert landmarks to list of (x, y) tuples
         landmarks_list = self._extract_landmark_coordinates(landmarks_msg)
         
-        # Detect speaking
-        is_speaking, speaking_confidence = self.lip_detector.detect_speaking(
-            recognition.recognized_face_id,
-            landmarks_list
-        )
+        # Get current image
+        cv_image = self._get_latest_image()
+        
+        # Detect speaking using VSDLM
+        if cv_image is None:
+            if self.enable_debug_output:
+                self.get_logger().warning(f"No image available for VSDLM detection of {recognition.recognized_face_id}")
+            is_speaking, speaking_confidence = False, 0.0
+        else:
+            if self.enable_debug_output:
+                self.get_logger().info(f"[NODE] Calling VSDLM detector for face {recognition.recognized_face_id}, image shape: {cv_image.shape}, landmarks count: {len(landmarks_list)}")
+            
+            is_speaking, speaking_confidence = self.vsdlm_detector.detect_speaking(
+                cv_image,
+                landmarks_list
+            )
+            
+            if self.enable_debug_output:
+                self.get_logger().info(f"[NODE] VSDLM returned: is_speaking={is_speaking} (type={type(is_speaking)}), speaking_confidence={speaking_confidence} (type={type(speaking_confidence)})")
         
         # Create extended recognition message
         extended_recognition = self._copy_recognition_with_speaking(
@@ -420,9 +562,13 @@ class VisualSpeechActivityNode(Node):
         )
         
         if self.enable_debug_output:
-            self.get_logger().debug(
-                f"Face {recognition.recognized_face_id}: "
-                f"speaking={is_speaking}, confidence={speaking_confidence:.3f}"
+            ext_is_spk = extended_recognition.is_speaking if hasattr(extended_recognition, 'is_speaking') else 'N/A'
+            ext_spk_conf = extended_recognition.speaking_confidence if hasattr(extended_recognition, 'speaking_confidence') else 'N/A'
+            self.get_logger().info(
+                f"[NODE] Face {recognition.recognized_face_id}: "
+                f"speaking={is_speaking}, confidence={speaking_confidence:.4f} -> "
+                f"extended_recognition.is_speaking={ext_is_spk}, "
+                f"extended_recognition.speaking_confidence={ext_spk_conf}"
             )
         
         return extended_recognition
@@ -460,12 +606,23 @@ class VisualSpeechActivityNode(Node):
             # Convert landmarks to coordinate list
             landmarks_coords = self._extract_landmark_coordinates(landmarks_msg)
             
-            # Use face_id as the identity for lip movement tracking
-            # (less robust than recognized_face_id but works without face recognition)
-            is_speaking, speaking_confidence = self.lip_detector.detect_speaking(
-                face_id,  # Use face_id directly as identity
-                landmarks_coords
-            )
+            # Get current image
+            cv_image = self._get_latest_image()
+            
+            if self.enable_debug_output:
+                self.get_logger().info(f"[NODE-ARRAY] Processing face {face_id}, image available: {cv_image is not None}, landmarks: {len(landmarks_coords)}")
+            
+            # Detect speaking using VSDLM
+            if cv_image is None:
+                is_speaking, speaking_confidence = False, 0.0
+            else:
+                is_speaking, speaking_confidence = self.vsdlm_detector.detect_speaking(
+                    cv_image,
+                    landmarks_coords
+                )
+                
+                if self.enable_debug_output:
+                    self.get_logger().info(f"[NODE-ARRAY] VSDLM returned for {face_id}: is_speaking={is_speaking}, confidence={speaking_confidence:.4f}")
             
             # Create a FacialRecognition message using face_id
             recognition = FacialRecognition()
@@ -474,10 +631,13 @@ class VisualSpeechActivityNode(Node):
             recognition.recognized_face_id = face_id  # Same as face_id when no recognition
             recognition.confidence = 1.0  # Full confidence since no recognition uncertainty
             
-            # Set speaking fields if they exist
+            # Set speaking fields if they exist (requires rebuilt hri_msgs)
             if hasattr(recognition, 'is_speaking'):
                 recognition.is_speaking = is_speaking
                 recognition.speaking_confidence = speaking_confidence
+                
+                if self.enable_debug_output:
+                    self.get_logger().info(f"[NODE-ARRAY] Set speaking fields: is_speaking={recognition.is_speaking}, speaking_confidence={recognition.speaking_confidence}")
             
             speaking_recognitions.append(recognition)
             
@@ -508,11 +668,23 @@ class VisualSpeechActivityNode(Node):
         if self.enable_debug_output:
             self.get_logger().debug(f"Extracted {len(landmarks_coords)} landmark coordinates for face {face_id}")
         
-        # Use face_id as the identity for lip movement tracking
-        is_speaking, speaking_confidence = self.lip_detector.detect_speaking(
-            face_id,  # Use face_id directly as identity
-            landmarks_coords
-        )
+        # Get current image
+        cv_image = self._get_latest_image()
+        
+        if self.enable_debug_output:
+            self.get_logger().info(f"[NODE-PERID] Processing face {face_id}, image available: {cv_image is not None}")
+        
+        # Detect speaking using VSDLM
+        if cv_image is None:
+            is_speaking, speaking_confidence = False, 0.0
+        else:
+            is_speaking, speaking_confidence = self.vsdlm_detector.detect_speaking(
+                cv_image,
+                landmarks_coords
+            )
+            
+            if self.enable_debug_output:
+                self.get_logger().info(f"[NODE-PERID] VSDLM returned: is_speaking={is_speaking}, confidence={speaking_confidence:.4f}")
         
         # Create a FacialRecognition message using face_id
         recognition = FacialRecognition()
@@ -521,18 +693,28 @@ class VisualSpeechActivityNode(Node):
         recognition.recognized_face_id = face_id  # Same as face_id when no recognition
         recognition.confidence = 1.0  # Full confidence since no recognition uncertainty
         
-        # Set speaking fields if they exist
+        # Set speaking fields if they exist (requires rebuilt hri_msgs)
         if hasattr(recognition, 'is_speaking'):
             recognition.is_speaking = is_speaking
             recognition.speaking_confidence = speaking_confidence
+            
+            if self.enable_debug_output:
+                self.get_logger().info(f"[NODE-PERID] Message fields set: is_speaking={recognition.is_speaking}, speaking_confidence={recognition.speaking_confidence}")
+        else:
+            if not hasattr(self, '_missing_fields_warned'):
+                self.get_logger().error(
+                    "[NODE-PERID] FacialRecognition message missing 'is_speaking' and 'speaking_confidence' fields! "
+                    "You need to REBUILD hri_msgs package. Available fields: " + str([f for f in dir(recognition) if not f.startswith('_')])
+                )
+                self._missing_fields_warned = True
         
         # Publish per-ID result
         self._publish_speaking_per_id(recognition, face_id)
         
         if self.enable_debug_output:
-            self.get_logger().debug(
-                f"Face {face_id} (no recognition, per-ID): "
-                f"speaking={is_speaking}, confidence={speaking_confidence:.3f}"
+            self.get_logger().info(
+                f"[NODE-PERID] Published for face {face_id}: "
+                f"speaking={is_speaking}, confidence={speaking_confidence:.4f}"
             )
     
     def _debug_status_callback(self):
@@ -545,10 +727,7 @@ class VisualSpeechActivityNode(Node):
         self.get_logger().debug(f"Latest landmarks cache: {list(self.latest_landmarks.keys())}")
         
         # Show detector status
-        if hasattr(self, 'detectors'):
-            self.get_logger().debug(f"Active detectors: {list(self.detectors.keys())}")
-        elif hasattr(self, 'lip_detector'):
-            self.get_logger().debug("Using single shared detector")
+        self.get_logger().debug(f"Using VSDLM detector (variant: {self.vsdlm_model_variant})")
     
     def _extract_landmark_coordinates(self, landmarks_msg: FacialLandmarks) -> List[Tuple[float, float]]:
         """
@@ -591,15 +770,25 @@ class VisualSpeechActivityNode(Node):
         Returns:
             New FacialRecognition message with speaking fields
         """
+        if self.enable_debug_output:
+            self.get_logger().info(f"[NODE-COPY] Input values: is_speaking={is_speaking} (type={type(is_speaking)}), speaking_confidence={speaking_confidence} (type={type(speaking_confidence)})")
+        
         extended_recognition = FacialRecognition()
         extended_recognition.header = recognition.header
         extended_recognition.face_id = recognition.face_id
         extended_recognition.recognized_face_id = recognition.recognized_face_id
         extended_recognition.confidence = recognition.confidence
         
-        # Add speaking fields
-        extended_recognition.is_speaking = is_speaking
-        extended_recognition.speaking_confidence = speaking_confidence
+        # Add speaking fields if they exist (requires rebuilt hri_msgs)
+        if hasattr(extended_recognition, 'is_speaking'):
+            extended_recognition.is_speaking = is_speaking
+            extended_recognition.speaking_confidence = speaking_confidence
+            
+            if self.enable_debug_output:
+                self.get_logger().info(f"[NODE-COPY] After assignment: extended_recognition.is_speaking={extended_recognition.is_speaking}, extended_recognition.speaking_confidence={extended_recognition.speaking_confidence}")
+        else:
+            if self.enable_debug_output:
+                self.get_logger().warn("[NODE-COPY] FacialRecognition message missing speaking fields - hri_msgs needs rebuild!")
         
         return extended_recognition
     
@@ -613,12 +802,21 @@ class VisualSpeechActivityNode(Node):
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.recognitions = speaking_recognitions
         
+        if self.enable_debug_output:
+            for idx, r in enumerate(speaking_recognitions):
+                is_spk = r.is_speaking if hasattr(r, 'is_speaking') else 'N/A'
+                spk_conf = r.speaking_confidence if hasattr(r, 'speaking_confidence') else 'N/A'
+                self.get_logger().info(
+                    f"[NODE-PUBLISH-ARRAY] Recognition[{idx}]: face_id={r.face_id}, "
+                    f"is_speaking={is_spk}, speaking_confidence={spk_conf}"
+                )
+        
         self.speaking_array_publisher.publish(msg)
         
         if self.enable_debug_output:
-            speaking_count = sum(1 for r in speaking_recognitions if r.is_speaking)
-            self.get_logger().debug(
-                f"Published {len(speaking_recognitions)} recognitions, "
+            speaking_count = sum(1 for r in speaking_recognitions if hasattr(r, 'is_speaking') and r.is_speaking)
+            self.get_logger().info(
+                f"[NODE-PUBLISH-ARRAY] Published {len(speaking_recognitions)} recognitions, "
                 f"{speaking_count} speaking"
             )
     
@@ -633,9 +831,16 @@ class VisualSpeechActivityNode(Node):
                 self.qos_profile
             )
             if self.enable_debug_output:
-                self.get_logger().debug(f"Created publisher for {topic}")
+                self.get_logger().info(f"[NODE-PUBLISH-PERID] Created publisher for topic: {topic}")
         
-        # Publish
+        if self.enable_debug_output:
+            is_spk = speaking_recognition.is_speaking if hasattr(speaking_recognition, 'is_speaking') else 'N/A'
+            spk_conf = speaking_recognition.speaking_confidence if hasattr(speaking_recognition, 'speaking_confidence') else 'N/A'
+            self.get_logger().info(
+                f"[NODE-PUBLISH-PERID] Publishing to {recognized_face_id}: "
+                f"is_speaking={is_spk}, speaking_confidence={spk_conf}"
+            )
+        
         self.speaking_publishers[recognized_face_id].publish(speaking_recognition)
     
     # -------------------------------------------------------------------------
@@ -644,12 +849,6 @@ class VisualSpeechActivityNode(Node):
     
     def _cleanup_old_identities(self):
         """Periodic cleanup of old identities from buffers."""
-        # Get list of active recognized_face_ids
-        active_ids = list(self.latest_recognition.keys())
-        
-        # Clean up lip detector buffers
-        self.lip_detector.cleanup_old_identities(active_ids)
-        
         # Clean up local caches (keep last 100 recognitions to avoid unbounded growth)
         if len(self.latest_recognition) > 100:
             # Sort by last access (we don't track this, so just keep most recent)

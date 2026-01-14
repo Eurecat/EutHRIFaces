@@ -20,6 +20,7 @@ services:
       - ../face_recognition:/workspace/src/face_recognition
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
+      - ../Docker/deps/hri_msgs:/workspace/src/hri_msgs
 
     tty: true
     stdin_open: true

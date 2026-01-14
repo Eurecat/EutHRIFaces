@@ -13,42 +13,54 @@ visual_speech_activity_node:
     # Set to false for array mode (/humans/faces/speaking with FacialRecognitionArray)
     ros4hri_with_id: true
     
-    # Lip Movement Detection Parameters
+    # VSDLM Parameters
+    # VSDLM (Visual Speech Detection Lightweight Model) by PINTO0309
+    # Reference: https://github.com/PINTO0309/VSDLM
+    # License: MIT
     
-    # Number of frames to analyze in temporal buffer
-    # Higher values = more stable but slower response
-    # Recommended: 15-30 frames
-    window_size: 10
-    
-    # Minimum mouth aspect ratio variation to detect movement
-    # Lower values = more sensitive
-    # Recommended: 0.01-0.05
-    movement_threshold: 0.01
-    
-    # Confidence threshold for speaking classification
+    # Probability threshold for classifying as speaking (0.0-1.0)
     # Higher values = fewer false positives but may miss speaking
     # Recommended: 0.4-0.6
-    speaking_threshold: 0.90
+    speaking_threshold: 0.9
     
-    # Enable temporal smoothing to reduce jitter
-    # Applies voting over last 5 frames
-    temporal_smoothing: true
+    # Directory containing VSDLM weights (relative to package source)
+    vsdlm_weights_path: "weights"
     
-    # Minimum frames required before starting detection
-    # Prevents unreliable detection from insufficient data
-    # Recommended: 3-10 frames
-    min_frames_for_detection: 5
+    # Specific VSDLM weights filename
+    vsdlm_weights_name: "vsdlm_s.onnx"
     
-    # Enhanced Detection Parameters
+    # Model variant for auto-download: P/N/S/M/L
+    # P: 112KB, F1=0.9502, latency=0.18ms (ultra-fast)
+    # N: 176KB, F1=0.9586, latency=0.31ms (very fast)
+    # S: 494KB, F1=0.9696, latency=0.50ms (recommended - good balance)
+    # M: 1.7MB, F1=0.9801, latency=0.70ms (high accuracy)
+    # L: 6.4MB, F1=0.9891, latency=0.91ms (maximum accuracy)
+    vsdlm_model_variant: "S"
     
-    # Use full 68-point dlib landmarks when available (recommended)
-    # Falls back to 5-point landmarks automatically if not available
-    use_full_landmarks: true
+    # ONNX execution provider: cpu, cuda, tensorrt
+    # cpu: Works everywhere, slower
+    # cuda: Requires NVIDIA GPU with CUDA, faster
+    # tensorrt: Requires TensorRT, fastest on NVIDIA GPUs
+    vsdlm_execution_provider: "cpu"
     
-    # Enable RNN-based temporal classification (recommended for accuracy)
-    # Falls back to simple threshold-based detection if disabled
-    # Note: RNN requires training data - use simple mode for better results with untrained weights
-    rnn_enabled: false
+    # Debug Configuration
+    # Enable verbose debug output with logger.info
+    enable_debug_output: true
+    
+    # Save mouth crops to /tmp for debugging (every 30th frame)
+    # Useful for verifying what the model sees
+    vsdlm_debug_save_crops: false
+    
+    # Camera Image Topics (same pattern as face_recognition)
+    # Use either regular image topic OR compressed topic (not both)
+    
+    # Regular image topic (uncompressed)
+    image_topic: ""
+    
+    # Compressed image topic (optional, recommended for bandwidth)
+    # Leave empty to use regular image_topic
+    # Example: "/camera/color/image_raw/compressed"
+    compressed_topic: "/camera/image_raw/compressed"
     
     # Face Recognition Integration
     # Set to true to use face recognition for robust identity tracking (recommended)
