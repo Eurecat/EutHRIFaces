@@ -575,15 +575,15 @@ class VisualSpeechActivityNode(Node):
     def _landmarks_array_callback(self, msg: FacialLandmarksArray):
         """Callback for facial landmarks array."""
         # Store latest landmarks for each face
-        for landmarks in msg.faces:
+        for landmarks in msg.ids:
             self.latest_landmarks[landmarks.face_id] = landmarks
         
         if self.enable_debug_output:
-            self.get_logger().info(f"Received {len(msg.faces)} facial landmarks")
+            self.get_logger().info(f"Received {len(msg.ids)} facial landmarks")
         
         # If face recognition is disabled, process landmarks directly
         if not self.use_face_recognition:
-            self._process_landmarks_without_recognition(msg.faces)
+            self._process_landmarks_without_recognition(msg.ids)
     
     def _recognition_array_callback(self, msg: FacialRecognitionArray):
         """
@@ -593,18 +593,18 @@ class VisualSpeechActivityNode(Node):
         """
         start_time = time.time()
         
-        if len(msg.recognitions) == 0:
+        if len(msg.facial_recognition) == 0:
             # Publish empty result
             self._publish_speaking_array([])
             return
         
         if self.enable_debug_output:
-            self.get_logger().debug(f"Processing {len(msg.recognitions)} recognition(s)")
+            self.get_logger().debug(f"Processing {len(msg.facial_recognition)} recognition(s)")
         
         # Update mappings and process each recognition
         speaking_recognitions = []
         
-        for recognition in msg.recognitions:
+        for recognition in msg.facial_recognition:
             # Update mapping
             self.latest_recognition[recognition.recognized_face_id] = recognition
             self.face_id_to_recognized_id[recognition.face_id] = recognition.recognized_face_id
@@ -893,8 +893,14 @@ class VisualSpeechActivityNode(Node):
         if not self.enable_debug_output:
             return
         
-        self.get_logger().debug(f"Active tracked faces: {list(self.tracked_face_ids)}")
-        self.get_logger().debug(f"Active landmark subscribers: {list(self.landmarks_subscribers.keys())}")
+        if self.ros4hri_with_id:
+            # Per-ID mode debug info
+            self.get_logger().debug(f"Active tracked faces: {list(self.tracked_face_ids)}")
+            self.get_logger().debug(f"Active landmark subscribers: {list(self.landmarks_subscribers.keys())}")
+        else:
+            # Array mode debug info
+            self.get_logger().debug("Running in array mode")
+            
         self.get_logger().debug(f"Latest landmarks cache: {list(self.latest_landmarks.keys())}")
         
         # Show detector status
@@ -987,7 +993,7 @@ class VisualSpeechActivityNode(Node):
         """Publish speaking detection results as array."""
         msg = FacialRecognitionArray()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.recognitions = speaking_recognitions
+        msg.facial_recognition = speaking_recognitions
         
         if self.enable_debug_output:
             for idx, r in enumerate(speaking_recognitions):
