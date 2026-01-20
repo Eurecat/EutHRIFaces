@@ -84,10 +84,13 @@ class VisualSpeechActivityNode(Node):
             speaking_threshold=self.speaking_threshold,
             debug_save_crops=self.vsdlm_debug_save_crops,
             logger=self.get_logger(),
-            mouth_height_ratio=self.vsdlm_mouth_height_ratio
+            mouth_height_ratio=self.vsdlm_mouth_height_ratio,
+            temporal_smoothing=self.vsdlm_temporal_smoothing,
+            smoothing_window_size=self.vsdlm_smoothing_window_size,
+            min_confidence_for_change=self.vsdlm_min_confidence_for_change
         )
         self.get_logger().info(f"VSDLM detector initialized: variant={self.vsdlm_model_variant}, threshold={self.speaking_threshold}, "
-                               f"mouth_height_ratio={self.vsdlm_mouth_height_ratio}")
+                               f"mouth_height_ratio={self.vsdlm_mouth_height_ratio}, temporal_smoothing={self.vsdlm_temporal_smoothing}")
         
         # CV Bridge for image conversion
         self.bridge = CvBridge()
@@ -165,6 +168,11 @@ class VisualSpeechActivityNode(Node):
         self.declare_parameter('vsdlm_execution_provider', 'cpu')  # ONNX provider: cpu/cuda/tensorrt
         self.declare_parameter('vsdlm_mouth_height_ratio', 0.35)  # Mouth height as ratio of face height (YOLO mode)
         
+        # Temporal smoothing parameters for VSDLM
+        self.declare_parameter('vsdlm_temporal_smoothing', True)  # Enable temporal smoothing to reduce flickering
+        self.declare_parameter('vsdlm_smoothing_window_size', 5)  # Number of frames for smoothing window
+        self.declare_parameter('vsdlm_min_confidence_for_change', 0.1)  # Min confidence diff to change state
+        
         # Image input parameters (same as face_recognition)
         self.declare_parameter('image_topic', '/camera/color/image_raw')  # Camera image topic
         self.declare_parameter('compressed_topic', '')  # Compressed image topic (optional)
@@ -197,6 +205,11 @@ class VisualSpeechActivityNode(Node):
         self.vsdlm_model_variant = self.get_parameter('vsdlm_model_variant').get_parameter_value().string_value
         vsdlm_provider = self.get_parameter('vsdlm_execution_provider').get_parameter_value().string_value
         self.vsdlm_mouth_height_ratio = self.get_parameter('vsdlm_mouth_height_ratio').get_parameter_value().double_value
+        
+        # Temporal smoothing parameters
+        self.vsdlm_temporal_smoothing = self.get_parameter('vsdlm_temporal_smoothing').get_parameter_value().bool_value
+        self.vsdlm_smoothing_window_size = self.get_parameter('vsdlm_smoothing_window_size').get_parameter_value().integer_value
+        self.vsdlm_min_confidence_for_change = self.get_parameter('vsdlm_min_confidence_for_change').get_parameter_value().double_value
         
         # Image topics
         self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
@@ -491,12 +504,25 @@ class VisualSpeechActivityNode(Node):
         self.get_logger().info(f"Created subscriber for topic: {landmarks_topic}")
         if self.enable_debug_output:
             self.get_logger().debug(f"Subscribed to {landmarks_topic} with QoS profile")
+        
+        # If face recognition is enabled, also subscribe to recognition topic for this face
+        if self.use_face_recognition:
+            self._create_per_id_recognition_subscriber(face_id)
     
     def _remove_per_id_subscribers(self, face_id: str):
         """Remove per-ID subscribers for a face that's no longer tracked."""
         if face_id in self.landmarks_subscribers:
             self.destroy_subscription(self.landmarks_subscribers[face_id])
             del self.landmarks_subscribers[face_id]
+        
+        if face_id in self.recognition_subscribers:
+            self.destroy_subscription(self.recognition_subscribers[face_id])
+            del self.recognition_subscribers[face_id]
+        
+        # Clean up speaking publishers too
+        if face_id in self.speaking_publishers:
+            self.destroy_publisher(self.speaking_publishers[face_id])
+            del self.speaking_publishers[face_id]
         
         if face_id in self.latest_landmarks:
             del self.latest_landmarks[face_id]
@@ -518,22 +544,23 @@ class VisualSpeechActivityNode(Node):
             # Process landmarks directly without face recognition
             self._process_single_landmark_without_recognition(msg)
     
-    def _create_per_id_recognition_subscriber(self, recognized_face_id: str):
+    def _create_per_id_recognition_subscriber(self, face_id: str):
         """Create per-ID subscriber for recognition messages."""
-        if recognized_face_id not in self.recognition_subscribers:
-            recognition_topic = f'/humans/faces/{recognized_face_id}/recognition'
-            self.recognition_subscribers[recognized_face_id] = self.create_subscription(
+        if face_id not in self.recognition_subscribers:
+            recognition_topic = f'/humans/faces/{face_id}/recognized'
+            self.recognition_subscribers[face_id] = self.create_subscription(
                 FacialRecognition,
                 recognition_topic,
-                lambda msg, rid=recognized_face_id: self._recognition_per_id_callback(msg, rid),
+                lambda msg, fid=face_id: self._recognition_per_id_callback(msg, fid),
                 self.qos_profile
             )
             
             if self.enable_debug_output:
                 self.get_logger().info(f"Subscribed to {recognition_topic}")
     
-    def _recognition_per_id_callback(self, msg: FacialRecognition, recognized_face_id: str):
+    def _recognition_per_id_callback(self, msg: FacialRecognition, face_id: str):
         """Callback for per-ID facial recognition."""
+        recognized_face_id = msg.recognized_face_id
         self.latest_recognition[recognized_face_id] = msg
         self.face_id_to_recognized_id[msg.face_id] = recognized_face_id
         
@@ -654,7 +681,8 @@ class VisualSpeechActivityNode(Node):
             is_speaking, speaking_confidence, mouth_crop_bbox = self.vsdlm_detector.detect_speaking(
                 cv_image,
                 landmarks_list,
-                face_bbox
+                face_bbox,
+                face_id=recognition.recognized_face_id
             )
             
             if self.enable_debug_output:
@@ -698,7 +726,7 @@ class VisualSpeechActivityNode(Node):
         
         # Process and publish
         speaking_recognition = self._process_recognition(recognition)
-        self._publish_speaking_per_id(speaking_recognition, recognized_face_id)
+        self._publish_speaking_per_id(speaking_recognition, face_id)
     
     def _process_landmarks_without_recognition(self, landmarks_list: List[FacialLandmarks]):
         """
@@ -737,7 +765,8 @@ class VisualSpeechActivityNode(Node):
                 is_speaking, speaking_confidence, mouth_crop_bbox = self.vsdlm_detector.detect_speaking(
                     cv_image,
                     landmarks_coords,
-                    face_bbox
+                    face_bbox,
+                    face_id=face_id
                 )
                 
                 if self.enable_debug_output:
@@ -814,7 +843,8 @@ class VisualSpeechActivityNode(Node):
             is_speaking, speaking_confidence, mouth_crop_bbox = self.vsdlm_detector.detect_speaking(
                 cv_image,
                 landmarks_coords,
-                face_bbox
+                face_bbox,
+                face_id=face_id
             )
             
             if self.enable_debug_output:
@@ -977,12 +1007,12 @@ class VisualSpeechActivityNode(Node):
                 f"{speaking_count} speaking"
             )
     
-    def _publish_speaking_per_id(self, speaking_recognition: FacialRecognition, recognized_face_id: str):
+    def _publish_speaking_per_id(self, speaking_recognition: FacialRecognition, face_id: str):
         """Publish speaking detection result for a single face ID."""
-        # Create publisher if it doesn't exist
-        if recognized_face_id not in self.speaking_publishers:
-            topic = f'/humans/faces/{recognized_face_id}/speaking'
-            self.speaking_publishers[recognized_face_id] = self.create_publisher(
+        # Create publisher if it doesn't exist - use face_id for topic naming
+        if face_id not in self.speaking_publishers:
+            topic = f'/humans/faces/{face_id}/speaking'
+            self.speaking_publishers[face_id] = self.create_publisher(
                 FacialRecognition,
                 topic,
                 self.qos_profile
@@ -994,11 +1024,11 @@ class VisualSpeechActivityNode(Node):
             is_spk = speaking_recognition.is_speaking if hasattr(speaking_recognition, 'is_speaking') else 'N/A'
             spk_conf = speaking_recognition.speaking_confidence if hasattr(speaking_recognition, 'speaking_confidence') else 'N/A'
             self.get_logger().info(
-                f"[NODE-PUBLISH-PERID] Publishing to {recognized_face_id}: "
+                f"[NODE-PUBLISH-PERID] Publishing to {face_id}: "
                 f"is_speaking={is_spk}, speaking_confidence={spk_conf}"
             )
         
-        self.speaking_publishers[recognized_face_id].publish(speaking_recognition)
+        self.speaking_publishers[face_id].publish(speaking_recognition)
     
     # -------------------------------------------------------------------------
     #                    Cleanup Methods
@@ -1012,6 +1042,27 @@ class VisualSpeechActivityNode(Node):
             # In a production system, you'd want to track last access time
             items = list(self.latest_recognition.items())
             self.latest_recognition = dict(items[-100:])
+        
+        # Clean up VSDLM detector temporal buffers
+        # Get currently active face IDs from various sources
+        active_face_ids = set()
+        
+        # Add face_ids from latest landmarks
+        active_face_ids.update(self.latest_landmarks.keys())
+        
+        # Add recognized_face_ids from latest recognition
+        active_face_ids.update(self.latest_recognition.keys())
+        
+        # Add face_ids from face_id_to_recognized_id mapping
+        active_face_ids.update(self.face_id_to_recognized_id.keys())
+        active_face_ids.update(self.face_id_to_recognized_id.values())
+        
+        # Clean up VSDLM temporal buffers
+        if active_face_ids:
+            self.vsdlm_detector.cleanup_old_identities(list(active_face_ids))
+        
+        if self.enable_debug_output and len(active_face_ids) > 0:
+            self.get_logger().debug(f"[CLEANUP] Active face IDs: {active_face_ids}")
     
     # -------------------------------------------------------------------------
     #                    Visualization Methods

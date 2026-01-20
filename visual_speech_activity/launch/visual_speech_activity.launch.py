@@ -51,6 +51,8 @@ def _setup_visual_speech_activity(context, *args, **kwargs):
         output='screen',
         emulate_tty=True,
         additional_env={'PYTHONPATH': new_py_path}
+            # arguments=['--ros-args', '--log-level', 'DEBUG']  # Set log level to DEBUG
+
     )
 
     return [
@@ -105,10 +107,23 @@ def generate_launch_description():
         description='Confidence threshold for speaking classification'
     )
     
-    temporal_smoothing_arg = DeclareLaunchArgument(
-        'temporal_smoothing',
+    # VSDLM Temporal Smoothing Arguments
+    vsdlm_temporal_smoothing_arg = DeclareLaunchArgument(
+        'vsdlm_temporal_smoothing',
         default_value='true',
-        description='Enable temporal smoothing of speaking detection'
+        description='Enable VSDLM temporal smoothing to reduce flickering'
+    )
+    
+    vsdlm_smoothing_window_size_arg = DeclareLaunchArgument(
+        'vsdlm_smoothing_window_size',
+        default_value='5',
+        description='Number of frames for VSDLM temporal smoothing window'
+    )
+    
+    vsdlm_min_confidence_for_change_arg = DeclareLaunchArgument(
+        'vsdlm_min_confidence_for_change',
+        default_value='0.1',
+        description='Minimum confidence difference required to change VSDLM speaking state'
     )
     
     min_frames_for_detection_arg = DeclareLaunchArgument(
@@ -149,7 +164,9 @@ def generate_launch_description():
         window_size_arg,
         movement_threshold_arg,
         speaking_threshold_arg,
-        temporal_smoothing_arg,
+        vsdlm_temporal_smoothing_arg,
+        vsdlm_smoothing_window_size_arg,
+        vsdlm_min_confidence_for_change_arg,
         min_frames_for_detection_arg,
         enable_debug_output_arg,
         use_full_landmarks_arg,

@@ -22,7 +22,7 @@ visual_speech_activity_node:
     # Probability threshold for classifying as speaking (0.0-1.0)
     # Higher values = fewer false positives but may miss speaking
     # Recommended: 0.4-0.6
-    speaking_threshold: 0.9
+    speaking_threshold: 0.75
     
     # Directory containing VSDLM weights (relative to package source)
     vsdlm_weights_path: "weights"
@@ -42,7 +42,7 @@ visual_speech_activity_node:
     # cpu: Works everywhere, slower
     # cuda: Requires NVIDIA GPU with CUDA, faster
     # tensorrt: Requires TensorRT, fastest on NVIDIA GPUs
-    vsdlm_execution_provider: "cpu"
+    vsdlm_execution_provider: "cuda"
     
     # YOLO Landmark Mode Parameters
     # When using YOLO 5-point landmarks instead of dlib 68-point landmarks,
@@ -53,6 +53,21 @@ visual_speech_activity_node:
     # Increase if mouth region is too small vertically, decrease if too large
     # Typical range: 0.25 - 0.45
     vsdlm_mouth_height_ratio: 0.10
+    
+    # Temporal Smoothing Configuration
+    # Enable temporal smoothing to reduce speaking detection flickering
+    # Highly recommended for stable results
+    vsdlm_temporal_smoothing: true
+    
+    # Number of frames to use for temporal smoothing (default: 5)
+    # Larger values = smoother but slower response to changes
+    # Smaller values = faster response but more flickering
+    vsdlm_smoothing_window_size: 10
+    
+    # Minimum confidence difference required to change speaking state (default: 0.1)
+    # Higher values = more stable but less responsive
+    # Lower values = more responsive but potentially more flickering
+    vsdlm_min_confidence_for_change: 0.1
     
     # Debug Configuration
     # Enable verbose debug output with logger.info
@@ -76,7 +91,7 @@ visual_speech_activity_node:
     # Face Recognition Integration
     # Set to true to use face recognition for robust identity tracking (recommended)
     # Set to false to work with face_id only (fallback when face recognition unavailable)
-    use_face_recognition: false
+    use_face_recognition: true
     
     # Image Visualization
     # Enable/disable annotated image output with lip visualization
