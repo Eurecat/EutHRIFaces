@@ -478,6 +478,7 @@ class FaceDetectorNode(Node):
         self.declare_parameter('mediapipe_model_path', 'face_landmarker.task')
         self.declare_parameter('mediapipe_min_detection_confidence', 0.5)
         self.declare_parameter('mediapipe_min_tracking_confidence', 0.5)
+        self.declare_parameter('mediapipe_use_gpu', False)
         
     def _get_parameters(self):
         """Get parameter values from ROS2 parameter server."""
@@ -574,6 +575,7 @@ class FaceDetectorNode(Node):
         mediapipe_model_path_param = self.get_parameter('mediapipe_model_path').get_parameter_value().string_value
         self.mediapipe_min_detection_confidence = self.get_parameter('mediapipe_min_detection_confidence').get_parameter_value().double_value
         self.mediapipe_min_tracking_confidence = self.get_parameter('mediapipe_min_tracking_confidence').get_parameter_value().double_value
+        self.mediapipe_use_gpu = self.get_parameter('mediapipe_use_gpu').get_parameter_value().bool_value
         
         # If model path is relative, make it relative to package source directory
         if not os.path.isabs(mediapipe_model_path_param):
@@ -649,7 +651,8 @@ class FaceDetectorNode(Node):
                     model_path=self.mediapipe_model_path,
                     logger=self.get_logger(),
                     min_detection_confidence=self.mediapipe_min_detection_confidence,
-                    min_tracking_confidence=self.mediapipe_min_tracking_confidence
+                    min_tracking_confidence=self.mediapipe_min_tracking_confidence,
+                    use_gpu=self.mediapipe_use_gpu
                 )
                 if self.mediapipe_detector.is_available():
                     self.get_logger().info("MediaPipe landmark detector initialized successfully")

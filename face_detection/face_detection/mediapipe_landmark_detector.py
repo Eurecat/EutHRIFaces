@@ -159,7 +159,8 @@ class MediaPipeLandmarkDetector:
         model_path: str,
         logger: Optional[logging.Logger] = None,
         min_detection_confidence: float = 0.5,
-        min_tracking_confidence: float = 0.5
+        min_tracking_confidence: float = 0.5,
+        use_gpu: bool = False
     ):
         """
         Initialize the MediaPipe landmark detector.
@@ -169,6 +170,7 @@ class MediaPipeLandmarkDetector:
             logger: Optional logger for debugging
             min_detection_confidence: Minimum confidence for face detection (0.0-1.0)
             min_tracking_confidence: Minimum confidence for face tracking (0.0-1.0)
+            use_gpu: Whether to use GPU acceleration (default: False)
         """
         self.landmarker = None
         self.is_initialized = False
@@ -176,6 +178,7 @@ class MediaPipeLandmarkDetector:
         self.logger = logger or logging.getLogger(__name__)
         self.min_detection_confidence = min_detection_confidence
         self.min_tracking_confidence = min_tracking_confidence
+        self.use_gpu = use_gpu
         
         # Default model URL (lightest float16 model ~3.7MB)
         self.default_model_url = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
@@ -208,6 +211,20 @@ class MediaPipeLandmarkDetector:
             
             # Create MediaPipe FaceLandmarker options
             base_options = python.BaseOptions(model_asset_path=model_path)
+            
+            # Configure GPU delegation if requested
+            if self.use_gpu:
+                try:
+                    # Try to enable GPU delegation
+                    from mediapipe.tasks.python.core import base_options as bo
+                    base_options.delegate = bo.BaseOptions.Delegate.GPU
+                    self.logger.info("[MEDIAPIPE-GPU] GPU delegation enabled")
+                except Exception as gpu_e:
+                    self.logger.warning(f"[MEDIAPIPE-GPU] Failed to enable GPU delegation: {gpu_e}")
+                    self.logger.info("[MEDIAPIPE-GPU] Falling back to CPU")
+            else:
+                self.logger.info("[MEDIAPIPE-CPU] Using CPU (default)")
+            
             options = vision.FaceLandmarkerOptions(
                 base_options=base_options,
                 running_mode=vision.RunningMode.IMAGE,
