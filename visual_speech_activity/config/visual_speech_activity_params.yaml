@@ -12,7 +12,7 @@ visual_speech_activity_node:
     # ROS4HRI Configuration
     # Set to true for per-ID topics (/humans/faces/<id>/speaking)
     # Set to false for array mode (/humans/faces/speaking with FacialRecognitionArray)
-    ros4hri_with_id: true
+    ros4hri_with_id: false
     
     # VSDLM Parameters
     # VSDLM (Visual Speech Detection Lightweight Model) by PINTO0309
@@ -96,6 +96,11 @@ visual_speech_activity_node:
     # Image Visualization
     # Enable/disable annotated image output with lip visualization
     enable_image_output: true
+    
+    # Distance in pixels to position labels above mouth center (default: 50)
+    # Increase this value to move speaking labels further away from lips
+    # This prevents labels from blocking the mouth region
+    label_offset_y: 50
     
     # Debug Configuration
     enable_debug_output: true

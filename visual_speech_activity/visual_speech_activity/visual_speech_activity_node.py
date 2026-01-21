@@ -89,8 +89,12 @@ class VisualSpeechActivityNode(Node):
             smoothing_window_size=self.vsdlm_smoothing_window_size,
             min_confidence_for_change=self.vsdlm_min_confidence_for_change
         )
+        
+        # Log final provider selection from the detector
+        actual_providers = self.vsdlm_detector.session.get_providers() if hasattr(self.vsdlm_detector, 'session') else "unknown"
         self.get_logger().info(f"VSDLM detector initialized: variant={self.vsdlm_model_variant}, threshold={self.speaking_threshold}, "
                                f"mouth_height_ratio={self.vsdlm_mouth_height_ratio}, temporal_smoothing={self.vsdlm_temporal_smoothing}")
+        self.get_logger().info(f"VSDLM final providers: {actual_providers}")
         
         # CV Bridge for image conversion
         self.bridge = CvBridge()
@@ -119,6 +123,10 @@ class VisualSpeechActivityNode(Node):
         # Performance tracking
         self.total_processing_time = 0.0
         self.processed_messages = 0
+        
+        # Initialize visualization collection for multi-face images
+        self.pending_visualizations = []  # List to collect face visualizations for multi-face images
+        self.last_image_timestamp = None  # Track when to publish collected visualizations
         
         # Setup QoS profiles
         self.qos_profile = QoSProfile(
@@ -182,6 +190,7 @@ class VisualSpeechActivityNode(Node):
         
         # Image visualization parameters
         self.declare_parameter('enable_image_output', True)
+        self.declare_parameter('label_offset_y', 50)  # Pixels above mouth center for label placement
         
         # Debug parameters
         self.declare_parameter('enable_debug_output', False)
@@ -215,19 +224,25 @@ class VisualSpeechActivityNode(Node):
         self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
         self.compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
         
-        # Map provider string to ONNX provider list
+        # Map provider string to ONNX provider list with intelligent fallbacks
         if vsdlm_provider == 'cuda':
+            # Try CUDA first, with CPU fallback
             self.vsdlm_providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
         elif vsdlm_provider == 'tensorrt':
+            # Try TensorRT, then CUDA, then CPU
             self.vsdlm_providers = ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']
         else:
+            # CPU-only mode
             self.vsdlm_providers = ['CPUExecutionProvider']
+        
+        self.get_logger().info(f"VSDLM provider requested: {vsdlm_provider} -> providers: {self.vsdlm_providers}")
         
         # Face recognition dependency
         self.use_face_recognition = self.get_parameter('use_face_recognition').get_parameter_value().bool_value
         
         # Image visualization
         self.enable_image_output = self.get_parameter('enable_image_output').get_parameter_value().bool_value
+        self.label_offset_y = self.get_parameter('label_offset_y').get_parameter_value().integer_value
         
         # Debug
         self.enable_debug_output = self.get_parameter('enable_debug_output').get_parameter_value().bool_value
@@ -695,7 +710,7 @@ class VisualSpeechActivityNode(Node):
         
         # Publish visualization if enabled and image available
         if self.enable_image_output and self.image_publisher is not None and cv_image is not None:
-            self._publish_speaking_visualization(
+            self._collect_face_visualization(
                 cv_image, landmarks_list, is_speaking, speaking_confidence,
                 recognition.recognized_face_id, landmarks_msg.header, mouth_crop_bbox
             )
@@ -774,7 +789,7 @@ class VisualSpeechActivityNode(Node):
             
             # Publish visualization if enabled and image available
             if self.enable_image_output and self.image_publisher is not None and cv_image is not None:
-                self._publish_speaking_visualization(
+                self._collect_face_visualization(
                     cv_image, landmarks_coords, is_speaking, speaking_confidence,
                     face_id, landmarks_msg.header, mouth_crop_bbox
                 )
@@ -852,7 +867,7 @@ class VisualSpeechActivityNode(Node):
         
         # Publish visualization if enabled and image available
         if self.enable_image_output and self.image_publisher is not None and cv_image is not None:
-            self._publish_speaking_visualization(
+            self._collect_face_visualization(
                 cv_image, landmarks_coords, is_speaking, speaking_confidence,
                 face_id, landmarks_msg.header, mouth_crop_bbox
             )
@@ -1073,6 +1088,285 @@ class VisualSpeechActivityNode(Node):
     # -------------------------------------------------------------------------
     #                    Visualization Methods
     # -------------------------------------------------------------------------
+    
+    def _collect_face_visualization(
+        self,
+        cv_image: np.ndarray,
+        landmarks: List[Tuple[float, float, float]],
+        is_speaking: bool,
+        speaking_confidence: float,
+        face_id: str,
+        header: Header,
+        mouth_crop_bbox: Optional[Tuple[int, int, int, int]] = None
+    ):
+        """
+        Collect face visualization data for later batch processing.
+        
+        This method collects data for multiple faces and publishes a single
+        annotated image when all faces for a timestamp are processed.
+        
+        Args:
+            cv_image: Original OpenCV image
+            landmarks: List of (x, y, c) landmark coordinates with confidence
+            is_speaking: Speaking detection result
+            speaking_confidence: Speaking confidence score
+            face_id: Face identifier for labeling
+            header: Original image header
+            mouth_crop_bbox: Optional mouth crop bbox (x1, y1, x2, y2) for visualization
+        """
+        current_timestamp = header.stamp.sec + header.stamp.nanosec / 1e9
+        
+        # If this is a new timestamp, publish previous batch and start new one
+        if (self.last_image_timestamp is not None and 
+            abs(current_timestamp - self.last_image_timestamp) > 0.1):  # 100ms tolerance
+            self._publish_collected_visualizations()
+        
+        # Add current face to visualization collection
+        self.pending_visualizations.append({
+            'cv_image': cv_image.copy(),
+            'landmarks': landmarks,
+            'is_speaking': is_speaking,
+            'speaking_confidence': speaking_confidence,
+            'face_id': face_id,
+            'header': header,
+            'mouth_crop_bbox': mouth_crop_bbox
+        })
+        
+        self.last_image_timestamp = current_timestamp
+        
+        # Set a small timer to publish if no more faces come
+        # This ensures we don't wait forever for additional faces
+        self._schedule_visualization_publish()
+    
+    def _schedule_visualization_publish(self):
+        """Schedule visualization publishing after a short delay."""
+        # Use a timer to publish after 50ms if no new faces arrive
+        if hasattr(self, '_viz_timer'):
+            self._viz_timer.cancel()
+        
+        self._viz_timer = self.create_timer(0.05, self._publish_collected_visualizations_callback)
+    
+    def _publish_collected_visualizations_callback(self):
+        """Timer callback to publish collected visualizations."""
+        if hasattr(self, '_viz_timer'):
+            self._viz_timer.cancel()
+        self._publish_collected_visualizations()
+    
+    def _publish_collected_visualizations(self):
+        """Publish all collected face visualizations on a single image."""
+        if not self.pending_visualizations:
+            return
+            
+        try:
+            # Use the image from the first face (they should all be the same)
+            base_data = self.pending_visualizations[0]
+            annotated_image = base_data['cv_image'].copy()
+            header = base_data['header']
+            
+            # Process all faces
+            for face_data in self.pending_visualizations:
+                self._draw_face_visualization(
+                    annotated_image,
+                    face_data['landmarks'],
+                    face_data['is_speaking'],
+                    face_data['speaking_confidence'],
+                    face_data['face_id'],
+                    face_data['mouth_crop_bbox']
+                )
+            
+            # Publish the final annotated image
+            annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
+            annotated_msg.header = header
+            self.image_publisher.publish(annotated_msg)
+            
+            if self.enable_debug_output:
+                face_ids = [data['face_id'] for data in self.pending_visualizations]
+                self.get_logger().debug(
+                    f"Published batch visualization for {len(face_ids)} faces: {face_ids}"
+                )
+            
+            # Clear the collection
+            self.pending_visualizations.clear()
+            
+        except Exception as e:
+            self.get_logger().error(f"Error publishing collected visualizations: {e}")
+            self.pending_visualizations.clear()
+    
+    def _draw_face_visualization(
+        self,
+        annotated_image: np.ndarray,
+        landmarks: List[Tuple[float, float, float]],
+        is_speaking: bool,
+        speaking_confidence: float,
+        face_id: str,
+        mouth_crop_bbox: Optional[Tuple[int, int, int, int]] = None
+    ):
+        """
+        Draw visualization for a single face on the provided image.
+        
+        Args:
+            annotated_image: Image to draw on (modified in place)
+            landmarks: List of (x, y, c) landmark coordinates with confidence
+            is_speaking: Speaking detection result
+            speaking_confidence: Speaking confidence score
+            face_id: Face identifier for labeling
+            mouth_crop_bbox: Optional mouth crop bbox (x1, y1, x2, y2) for visualization
+        """
+        # Detect if we have YOLO or dlib landmarks
+        valid_landmarks = sum(1 for lm in landmarks if len(lm) >= 3 and lm[2] > 0.0)
+        is_yolo = valid_landmarks < 10
+        
+        # Calculate adaptive sizes based on image dimensions
+        img_height, img_width = annotated_image.shape[:2]
+        base_size = min(img_width, img_height)
+        
+        adaptive_line_thickness = max(2, int(base_size * 0.003))  # 0.3% of image size
+        adaptive_landmark_radius = max(3, int(base_size * 0.008))  # 0.8% of image size
+        adaptive_font_scale = max(0.6, base_size * 0.0012)  # Adaptive font size
+        adaptive_font_thickness = max(2, int(base_size * 0.002))  # Adaptive font thickness
+        
+        # Choose color based on speaking status
+        if is_speaking:
+            mouth_color = (0, 255, 0)  # Green for speaking
+            status_text = "SPEAKING"
+        else:
+            mouth_color = (0, 0, 255)  # Red for not speaking
+            status_text = "NOT SPEAKING"
+        
+        # Visualization based on landmark type
+        if is_yolo:
+            # YOLO mode: Draw the crop rectangle and the 2 mouth landmarks
+            if mouth_crop_bbox is not None:
+                x1, y1, x2, y2 = mouth_crop_bbox
+                # Draw thick rectangle for the mouth crop area
+                cv2.rectangle(annotated_image, (x1, y1), (x2, y2), mouth_color, adaptive_line_thickness * 2)
+                # Add label on the rectangle
+                cv2.putText(annotated_image, "MOUTH CROP", (x1, y1 - 5), 
+                           cv2.FONT_HERSHEY_SIMPLEX, adaptive_font_scale * 0.7, mouth_color, adaptive_font_thickness)
+            
+            # Draw YOLO mouth corner landmarks
+            if len(landmarks) > 48 and landmarks[48][2] > 0:  # Left mouth
+                pt = (int(landmarks[48][0]), int(landmarks[48][1]))
+                cv2.circle(annotated_image, pt, adaptive_landmark_radius * 2, (255, 0, 0), -1)  # Blue
+                cv2.putText(annotated_image, "L", (pt[0] + 10, pt[1]), 
+                           cv2.FONT_HERSHEY_SIMPLEX, adaptive_font_scale, (255, 0, 0), adaptive_font_thickness)
+            
+            if len(landmarks) > 54 and landmarks[54][2] > 0:  # Right mouth
+                pt = (int(landmarks[54][0]), int(landmarks[54][1]))
+                cv2.circle(annotated_image, pt, adaptive_landmark_radius * 2, (255, 0, 0), -1)  # Blue
+                cv2.putText(annotated_image, "R", (pt[0] + 10, pt[1]), 
+                           cv2.FONT_HERSHEY_SIMPLEX, adaptive_font_scale, (255, 0, 0), adaptive_font_thickness)
+            
+            # Calculate label position from mouth crop bbox or landmarks
+            if mouth_crop_bbox is not None:
+                mouth_center_x = (mouth_crop_bbox[0] + mouth_crop_bbox[2]) // 2
+                mouth_center_y = (mouth_crop_bbox[1] + mouth_crop_bbox[3]) // 2
+            elif len(landmarks) > 54 and landmarks[48][2] > 0 and landmarks[54][2] > 0:
+                mouth_center_x = int((landmarks[48][0] + landmarks[54][0]) / 2)
+                mouth_center_y = int((landmarks[48][1] + landmarks[54][1]) / 2)
+            else:
+                mouth_center_x = img_width // 2
+                mouth_center_y = img_height // 2
+        else:
+            # dlib mode: Draw full mouth contours
+            if len(landmarks) < 68:
+                if self.enable_debug_output:
+                    self.get_logger().warn(f"Expected 68 landmarks for dlib visualization, got {len(landmarks)}. Skipping.")
+                return
+            
+            # Draw mouth outer contour (landmarks 48-59)
+            for i in range(48, 59):
+                pt1 = (int(landmarks[i][0]), int(landmarks[i][1]))
+                pt2 = (int(landmarks[i + 1][0]), int(landmarks[i + 1][1]))
+                cv2.line(annotated_image, pt1, pt2, mouth_color, adaptive_line_thickness)
+            
+            # Close mouth outer contour
+            pt1 = (int(landmarks[59][0]), int(landmarks[59][1]))
+            pt2 = (int(landmarks[48][0]), int(landmarks[48][1]))
+            cv2.line(annotated_image, pt1, pt2, mouth_color, adaptive_line_thickness)
+            
+            # Draw mouth inner contour (landmarks 60-67)
+            for i in range(60, 67):
+                pt1 = (int(landmarks[i][0]), int(landmarks[i][1]))
+                pt2 = (int(landmarks[i + 1][0]), int(landmarks[i + 1][1]))
+                cv2.line(annotated_image, pt1, pt2, mouth_color, adaptive_line_thickness)
+            
+            # Close mouth inner contour
+            pt1 = (int(landmarks[67][0]), int(landmarks[67][1]))
+            pt2 = (int(landmarks[60][0]), int(landmarks[60][1]))
+            cv2.line(annotated_image, pt1, pt2, mouth_color, adaptive_line_thickness)
+            
+            # Draw mouth landmarks as circles
+            for i in range(48, 68):  # Mouth landmarks (48-67)
+                lm_x, lm_y = int(landmarks[i][0]), int(landmarks[i][1])
+                cv2.circle(annotated_image, (lm_x, lm_y), adaptive_landmark_radius, mouth_color, -1)
+            
+            # Calculate mouth center for label placement
+            mouth_landmarks = landmarks[48:68]
+            mouth_center_x = int(np.mean([lm[0] for lm in mouth_landmarks]))
+            mouth_center_y = int(np.mean([lm[1] for lm in mouth_landmarks]))
+        
+        # Format speaking threshold to first 2 digits (e.g., 0.5 -> "0.5")
+        threshold_str = f"{self.speaking_threshold:.1f}"
+        
+        # Create label with status, confidence, and threshold
+        label = f"Face {face_id}: {status_text} ({speaking_confidence:.2f})"
+        threshold_label = f"Threshold: {threshold_str}"
+        
+        # Draw label background and text ABOVE mouth using configurable offset
+        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 
+                                    adaptive_font_scale, adaptive_font_thickness)[0]
+        threshold_size = cv2.getTextSize(threshold_label, cv2.FONT_HERSHEY_SIMPLEX,
+                                        adaptive_font_scale * 0.8, adaptive_font_thickness)[0]
+        
+        label_padding = max(5, int(base_size * 0.01))
+        label_x = mouth_center_x - label_size[0] // 2
+        
+        # IMPORTANT FIX: Move labels further UP using configurable offset
+        label_y = mouth_center_y - self.label_offset_y - max(label_size[1], threshold_size[1]) - label_padding
+        
+        # Ensure labels stay within image bounds
+        label_y = max(label_size[1] + label_padding, label_y)
+        
+        # Draw background for status label
+        cv2.rectangle(
+            annotated_image,
+            (label_x - label_padding, label_y - label_size[1] - label_padding),
+            (label_x + label_size[0] + label_padding, label_y + label_padding),
+            mouth_color, -1
+        )
+        
+        # Draw status text
+        cv2.putText(
+            annotated_image, label,
+            (label_x, label_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            adaptive_font_scale,
+            (255, 255, 255),  # White text
+            adaptive_font_thickness
+        )
+        
+        # Draw threshold label below status
+        threshold_x = mouth_center_x - threshold_size[0] // 2
+        threshold_y = label_y + label_size[1] + label_padding * 2
+        
+        # Draw background for threshold label
+        cv2.rectangle(
+            annotated_image,
+            (threshold_x - label_padding, threshold_y - threshold_size[1] - label_padding),
+            (threshold_x + threshold_size[0] + label_padding, threshold_y + label_padding),
+            (100, 100, 100), -1  # Gray background
+        )
+        
+        # Draw threshold text
+        cv2.putText(
+            annotated_image, threshold_label,
+            (threshold_x, threshold_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            adaptive_font_scale * 0.8,
+            (255, 255, 255),  # White text
+            adaptive_font_thickness
+        )
     
     def _publish_speaking_visualization(
         self, 

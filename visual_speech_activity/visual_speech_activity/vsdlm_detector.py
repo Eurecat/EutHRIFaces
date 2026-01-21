@@ -22,6 +22,11 @@ try:
 except ImportError:
     ort = None
 
+DEFAULT_MEAN = [0, 0, 0]
+DEFAULT_STD = [1, 1, 1]
+
+# DEFAULT_MEAN = [0.485, 0.456, 0.406]
+# DEFAULT_STD = [0.229, 0.224, 0.225]
 
 class VSDLMDetector:
     """
@@ -83,10 +88,10 @@ class VSDLMDetector:
         model_path: str = "vsdlm_s.onnx",
         model_variant: str = "S",
         providers: Optional[List[str]] = None,
-        crop_margin_top: int = 2,
-        crop_margin_bottom: int = 8,
-        crop_margin_left: int = 2,
-        crop_margin_right: int = 2,
+        crop_margin_top: int = 0,
+        crop_margin_bottom: int = 0,
+        crop_margin_left: int = 0,
+        crop_margin_right: int = 0,
         speaking_threshold: float = 0.5,
         debug_save_crops: bool = False,
         logger: Optional[logging.Logger] = None,
@@ -153,13 +158,24 @@ class VSDLMDetector:
         
         self.logger.info(f"Loading VSDLM model from {self.model_path} with providers: {providers}")
         self.session = ort.InferenceSession(str(self.model_path), providers=providers)
-        
         # Get model input/output details
         self.input_name = self.session.get_inputs()[0].name
         self.output_name = self.session.get_outputs()[0].name
         input_shape = self.session.get_inputs()[0].shape
         output_shape = self.session.get_outputs()[0].shape
-        
+
+        #get the model mean and std
+        model_meta = self.session.get_modelmeta()
+
+        self.logger.info(f"[VSDLM] Model metadata map: {model_meta.custom_metadata_map}")
+
+        self.mean = DEFAULT_MEAN
+        self.std = DEFAULT_STD
+
+        if model_meta.custom_metadata_map:
+            self.mean = model_meta.custom_metadata_map.get("mean", DEFAULT_MEAN)
+            self.std = model_meta.custom_metadata_map.get("std", DEFAULT_STD)
+
         self.logger.info(f"[VSDLM] Model loaded successfully")
         self.logger.info(f"[VSDLM] Input: name='{self.input_name}', shape={input_shape}")
         self.logger.info(f"[VSDLM] Output: name='{self.output_name}', shape={output_shape}")
@@ -476,8 +492,8 @@ class VSDLMDetector:
             Tuple of (x1, y1, x2, y2) or None if extraction fails
         """
         return self._extract_mouth_bbox_dlib(landmarks)
-    
-    def _preprocess_crop(self, crop: np.ndarray) -> np.ndarray:
+
+    def _preprocess_crop(self, crop: np.ndarray, mean: Optional[List[float]] = None, std: Optional[List[float]] = None) -> np.ndarray:
         """
         Preprocess mouth crop for VSDLM inference.
         
@@ -487,6 +503,7 @@ class VSDLMDetector:
         Returns:
             Preprocessed tensor ready for inference [1, 3, H, W]
         """
+       
         # Resize to model input size
         resized = cv2.resize(crop, (self.input_width, self.input_height), interpolation=cv2.INTER_LINEAR)
         
@@ -501,7 +518,19 @@ class VSDLMDetector:
         
         # Add batch dimension: (C, H, W) -> (1, C, H, W)
         batched = np.expand_dims(transposed, axis=0)
-        
+
+
+        # Normalize(mean, std)
+        if mean is None:
+            mean = DEFAULT_MEAN
+        if std is None:
+            std = DEFAULT_STD
+
+        mean_arr = np.array(mean, dtype=np.float32).reshape(1, 3, 1, 1)
+        std_arr  = np.array(std,  dtype=np.float32).reshape(1, 3, 1, 1)
+
+        batched = (batched - mean_arr) / std_arr
+
         return batched
     
     def detect_speaking(
@@ -587,7 +616,9 @@ class VSDLMDetector:
         if self.debug_save_crops and self.debug_frame_count % 30 == 0:  # Save every 30 frames
             try:
                 debug_path = f"/tmp/.X11-unix/vsdlm_crop_{self.debug_frame_count:06d}.jpg"
-                cv2.imwrite(debug_path, crop)
+                resized = cv2.resize(crop, (self.input_width, self.input_height), interpolation=cv2.INTER_LINEAR)
+
+                cv2.imwrite(debug_path, resized)
                 if self.logger:
                     self.logger.info(f"[VSDLM DEBUG] Saved crop to {debug_path}")
             except Exception as e:
@@ -597,7 +628,7 @@ class VSDLMDetector:
         self.debug_frame_count += 1
         
         # Preprocess crop
-        input_tensor = self._preprocess_crop(crop)
+        input_tensor = self._preprocess_crop(crop, mean=self.mean, std=self.std)
         
         if self.logger:
             self.logger.info(f"[VSDLM] Input tensor shape: {input_tensor.shape}, dtype: {input_tensor.dtype}, range: [{input_tensor.min():.3f}, {input_tensor.max():.3f}]")
