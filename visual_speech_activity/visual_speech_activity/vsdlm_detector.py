@@ -156,7 +156,7 @@ class VSDLMDetector:
         if providers is None:
             providers = ['CPUExecutionProvider']
         
-        self.logger.info(f"Loading VSDLM model from {self.model_path} with providers: {providers}")
+        self.logger.debug(f"Loading VSDLM model from {self.model_path} with providers: {providers}")
         self.session = ort.InferenceSession(str(self.model_path), providers=providers)
         # Get model input/output details
         self.input_name = self.session.get_inputs()[0].name
@@ -167,7 +167,7 @@ class VSDLMDetector:
         #get the model mean and std
         model_meta = self.session.get_modelmeta()
 
-        self.logger.info(f"[VSDLM] Model metadata map: {model_meta.custom_metadata_map}")
+        self.logger.debug(f"[VSDLM] Model metadata map: {model_meta.custom_metadata_map}")
 
         self.mean = DEFAULT_MEAN
         self.std = DEFAULT_STD
@@ -176,9 +176,9 @@ class VSDLMDetector:
             self.mean = model_meta.custom_metadata_map.get("mean", DEFAULT_MEAN)
             self.std = model_meta.custom_metadata_map.get("std", DEFAULT_STD)
 
-        self.logger.info(f"[VSDLM] Model loaded successfully")
-        self.logger.info(f"[VSDLM] Input: name='{self.input_name}', shape={input_shape}")
-        self.logger.info(f"[VSDLM] Output: name='{self.output_name}', shape={output_shape}")
+        self.logger.debug(f"[VSDLM] Model loaded successfully")
+        self.logger.debug(f"[VSDLM] Input: name='{self.input_name}', shape={input_shape}")
+        self.logger.debug(f"[VSDLM] Output: name='{self.output_name}', shape={output_shape}")
         
         # Extract input dimensions (handle dynamic batch dimension)
         if len(input_shape) == 4:  # [batch, channels, height, width]
@@ -189,8 +189,8 @@ class VSDLMDetector:
             self.input_height = 30
             self.input_width = 48
         
-        self.logger.info(f"[VSDLM] Initialized: input_size={self.input_height}x{self.input_width}, speaking_threshold={self.speaking_threshold}")
-        self.logger.info(f"[VSDLM] Temporal smoothing: {'enabled' if self.temporal_smoothing else 'disabled'}, window_size={self.smoothing_window_size}")
+        self.logger.debug(f"[VSDLM] Initialized: input_size={self.input_height}x{self.input_width}, speaking_threshold={self.speaking_threshold}")
+        self.logger.debug(f"[VSDLM] Temporal smoothing: {'enabled' if self.temporal_smoothing else 'disabled'}, window_size={self.smoothing_window_size}")
     
     def _apply_temporal_smoothing(
         self,
@@ -256,7 +256,7 @@ class VSDLMDetector:
         self.last_stable_state[face_id] = (new_speaking, avg_confidence)
         
         if self.logger:
-            self.logger.info(
+            self.logger.debug(
                 f"[VSDLM-SMOOTH] Face {face_id}: votes={speaking_votes}/{total_votes} "
                 f"({speaking_ratio:.2f}), avg_conf={avg_confidence:.3f}, "
                 f"raw={is_speaking}, smoothed={new_speaking}"
@@ -315,9 +315,9 @@ class VSDLMDetector:
         model_info = self.VSDLM_MODELS[self.model_variant]
         url = model_info['url']
         
-        self.logger.info(f"Downloading VSDLM model variant '{self.model_variant}' ({model_info['size']}, F1={model_info['f1']:.4f})...")
-        self.logger.info(f"URL: {url}")
-        self.logger.info(f"Saving to: {self.model_path}")
+        self.logger.debug(f"Downloading VSDLM model variant '{self.model_variant}' ({model_info['size']}, F1={model_info['f1']:.4f})...")
+        self.logger.debug(f"URL: {url}")
+        self.logger.debug(f"Saving to: {self.model_path}")
         
         # Create directory if needed
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -328,11 +328,11 @@ class VSDLMDetector:
             if total_size > 0:
                 percent = min(downloaded * 100 / total_size, 100)
                 if block_num % 10 == 0:  # Log every 10 blocks to reduce verbosity
-                    self.logger.info(f"Download progress: {percent:.1f}% ({downloaded}/{total_size} bytes)")
+                    self.logger.debug(f"Download progress: {percent:.1f}% ({downloaded}/{total_size} bytes)")
         
         try:
             urllib.request.urlretrieve(url, self.model_path, reporthook=reporthook)
-            self.logger.info(f"Successfully downloaded VSDLM model to {self.model_path}")
+            self.logger.debug(f"Successfully downloaded VSDLM model to {self.model_path}")
         except Exception as e:
             raise RuntimeError(f"Failed to download VSDLM model: {e}")
     
@@ -467,7 +467,7 @@ class VSDLMDetector:
         y2 = min(image_height, y2 + self.crop_margin_bottom)
         
         if self.logger:
-            self.logger.info(
+            self.logger.debug(
                 f"[VSDLM-YOLO] Mouth bbox from landmarks: "
                 f"left_mouth=({left_mouth[0]:.1f},{left_mouth[1]:.1f}), right_mouth=({right_mouth[0]:.1f},{right_mouth[1]:.1f}), "
                 f"mouth_width={mouth_width:.1f} (EXACT landmark distance), "
@@ -562,7 +562,7 @@ class VSDLMDetector:
         landmark_type = self._detect_landmark_type(landmarks)
         
         if self.logger:
-            self.logger.info(f"[VSDLM] Detected landmark type: {landmark_type}, landmark count: {len(landmarks)}")
+            self.logger.debug(f"[VSDLM] Detected landmark type: {landmark_type}, landmark count: {len(landmarks)}")
         
         # Extract mouth bounding box based on landmark type
         if landmark_type == 'dlib68':
@@ -584,7 +584,7 @@ class VSDLMDetector:
         x1, y1, x2, y2 = bbox
         
         if self.logger:
-            self.logger.info(f"[VSDLM] Mouth bbox extracted: ({x1}, {y1}) to ({x2}, {y2}), size: {x2-x1}x{y2-y1}")
+            self.logger.debug(f"[VSDLM] Mouth bbox extracted: ({x1}, {y1}) to ({x2}, {y2}), size: {x2-x1}x{y2-y1}")
         
         # Validate bbox
         if x2 <= x1 or y2 <= y1:
@@ -610,7 +610,7 @@ class VSDLMDetector:
             return False, 0.0, None
         
         if self.logger:
-            self.logger.info(f"[VSDLM] Mouth crop size: {crop.shape}, will be resized to {self.input_height}x{self.input_width}")
+            self.logger.debug(f"[VSDLM] Mouth crop size: {crop.shape}, will be resized to {self.input_height}x{self.input_width}")
         
         # Debug: save crop if enabled
         if self.debug_save_crops and self.debug_frame_count % 30 == 0:  # Save every 30 frames
@@ -620,7 +620,7 @@ class VSDLMDetector:
 
                 cv2.imwrite(debug_path, resized)
                 if self.logger:
-                    self.logger.info(f"[VSDLM DEBUG] Saved crop to {debug_path}")
+                    self.logger.debug(f"[VSDLM DEBUG] Saved crop to {debug_path}")
             except Exception as e:
                 if self.logger:
                     self.logger.warning(f"Failed to save debug crop: {e}")
@@ -631,15 +631,15 @@ class VSDLMDetector:
         input_tensor = self._preprocess_crop(crop, mean=self.mean, std=self.std)
         
         if self.logger:
-            self.logger.info(f"[VSDLM] Input tensor shape: {input_tensor.shape}, dtype: {input_tensor.dtype}, range: [{input_tensor.min():.3f}, {input_tensor.max():.3f}]")
+            self.logger.debug(f"[VSDLM] Input tensor shape: {input_tensor.shape}, dtype: {input_tensor.dtype}, range: [{input_tensor.min():.3f}, {input_tensor.max():.3f}]")
         
         # Run inference
         try:
             outputs = self.session.run([self.output_name], {self.input_name: input_tensor})
             
             if self.logger:
-                self.logger.info(f"[VSDLM] Raw output: {outputs}, type: {type(outputs)}")
-                self.logger.info(f"[VSDLM] Output[0]: {outputs[0]}, shape: {outputs[0].shape if hasattr(outputs[0], 'shape') else 'N/A'}")
+                self.logger.debug(f"[VSDLM] Raw output: {outputs}, type: {type(outputs)}")
+                self.logger.debug(f"[VSDLM] Output[0]: {outputs[0]}, shape: {outputs[0].shape if hasattr(outputs[0], 'shape') else 'N/A'}")
             
             # Extract probability - check output format
             raw_output = outputs[0]
@@ -664,19 +664,19 @@ class VSDLMDetector:
             is_speaking = prob_open >= self.speaking_threshold
             
             if self.logger:
-                self.logger.info(f"[VSDLM] Raw result: prob_open={prob_open:.4f}, threshold={self.speaking_threshold:.4f}, is_speaking={is_speaking}")
+                self.logger.debug(f"[VSDLM] Raw result: prob_open={prob_open:.4f}, threshold={self.speaking_threshold:.4f}, is_speaking={is_speaking}")
             
             # Apply temporal smoothing if enabled and face_id is provided
             self.logger.debug(f"[VSDLM] Temporal smoothing: {'enabled' if self.temporal_smoothing else 'disabled'}")
             self.logger.debug(f"[VSDLM] face_id: {face_id}") 
             if self.temporal_smoothing and face_id is not None:
-                self.logger.info(f"[VSDLM] Applying temporal smoothing for face_id: {face_id}")
+                self.logger.debug(f"[VSDLM] Applying temporal smoothing for face_id: {face_id}")
                 smoothed_is_speaking, smoothed_confidence = self._apply_temporal_smoothing(
                     face_id, is_speaking, prob_open
                 )
-                self.logger.info(f"[VSDLM] Smoothed result: is_speaking={smoothed_is_speaking}, confidence={smoothed_confidence:.4f}")  
+                self.logger.debug(f"[VSDLM] Smoothed result: is_speaking={smoothed_is_speaking}, confidence={smoothed_confidence:.4f}")  
                 if self.logger:
-                    self.logger.info(
+                    self.logger.debug(
                         f"[VSDLM] Temporal smoothing applied for face {face_id}: "
                         f"raw=({is_speaking}, {prob_open:.3f}) -> smoothed=({smoothed_is_speaking}, {smoothed_confidence:.3f})"
                     )
@@ -690,10 +690,10 @@ class VSDLMDetector:
                 final_confidence = prob_open
                 
                 if self.temporal_smoothing and face_id is None and self.logger:
-                    self.logger.info("[VSDLM] Temporal smoothing disabled: no face_id provided")
+                    self.logger.debug("[VSDLM] Temporal smoothing disabled: no face_id provided")
             
             if self.logger:
-                self.logger.info(f"[VSDLM] Final result: is_speaking={final_is_speaking}, confidence={final_confidence:.4f}")
+                self.logger.debug(f"[VSDLM] Final result: is_speaking={final_is_speaking}, confidence={final_confidence:.4f}")
             
             return final_is_speaking, final_confidence, bbox
             

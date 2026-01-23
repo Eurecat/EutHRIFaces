@@ -21,7 +21,7 @@ face_recognition_node:
     similarity_threshold: 0.3
     clustering_threshold: 0.3
     max_embeddings_per_identity: 150
-    identity_timeout: 60.0
+    identity_timeout: 5.0
     identity_database_path: "src/face_recognition/database/identity_database.json"
     
     # Debug Configuration
@@ -31,4 +31,4 @@ face_recognition_node:
     receiver_id: "face_recognition"
     
     # ROS4HRI Configuration
-    ros4hri_with_id: true
+    ros4hri_with_id: false

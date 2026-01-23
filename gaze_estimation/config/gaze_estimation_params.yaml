@@ -44,4 +44,4 @@ gaze_estimation_node:
     publish_rate: 30.0
     
     # ROS4HRI Configuration
-    ros4hri_with_id: true
+    ros4hri_with_id: false

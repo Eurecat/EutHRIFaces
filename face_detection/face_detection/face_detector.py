@@ -234,7 +234,7 @@ class FaceDetectorNode(Node):
         self.frame_count += 1
 
         if self.detector is None:
-            self.get_logger().warn("Face detector not initialized, skipping image")
+            self.get_logger().warn("Face detector not initialized, skipping image", throttle_duration_sec=2.0)
             return
             
         if self.enable_debug_output:

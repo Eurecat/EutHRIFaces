@@ -269,7 +269,7 @@ class MySpeechAwareNode(Node):
     def speaking_callback(self, msg):
         for recognition in msg.recognitions:
             if recognition.is_speaking:
-                self.get_logger().info(
+                self.get_logger().debug(
                     f"Person {recognition.recognized_face_id} is speaking "
                     f"(confidence: {recognition.speaking_confidence:.2f})"
                 )

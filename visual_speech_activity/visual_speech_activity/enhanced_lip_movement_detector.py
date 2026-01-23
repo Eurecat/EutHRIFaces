@@ -132,7 +132,7 @@ class EnhancedLipMovementDetector:
         
         self.logger = logger or logging.getLogger(__name__)
         
-        self.logger.info(
+        self.logger.debug(
             f"Enhanced LipMovementDetector initialized: window_size={window_size}, "
             f"movement_threshold={movement_threshold}, speaking_threshold={speaking_threshold}, "
             f"use_full_landmarks={use_full_landmarks}, rnn_enabled={rnn_enabled}"
@@ -373,26 +373,26 @@ class EnhancedLipMovementDetector:
             Tuple of (is_speaking: bool, confidence: float)
         """
         if self.logger:
-            self.logger.info(f"Processing landmarks for {recognized_face_id}, landmark count: {len(landmarks)}")
+            self.logger.debug(f"Processing landmarks for {recognized_face_id}, landmark count: {len(landmarks)}")
         
         # Extract lip features based on landmark type
         if self.use_full_landmarks and len(landmarks) >= 68:
             features = self.extract_lip_features_full(landmarks)
             if self.logger:
-                self.logger.info(f"Using full 68-point landmarks for {recognized_face_id}")
+                self.logger.debug(f"Using full 68-point landmarks for {recognized_face_id}")
         else:
             features = self.extract_lip_features_simple(landmarks)
             if self.logger:
-                self.logger.info(f"Using simple landmark features for {recognized_face_id}")
+                self.logger.debug(f"Using simple landmark features for {recognized_face_id}")
         
         if features is None:
             if self.logger:
-                self.logger.info(f"Failed to extract features for {recognized_face_id}")
+                self.logger.debug(f"Failed to extract features for {recognized_face_id}")
             # Return previous state or default
             return self._get_default_state(recognized_face_id)
         
         if self.logger:
-            self.logger.info(f"Extracted features for {recognized_face_id}: MAR={features[0]:.4f}, MER={features[1]:.4f}, lip_h={features[2]:.4f}, lip_w={features[3]:.4f}")
+            self.logger.debug(f"Extracted features for {recognized_face_id}: MAR={features[0]:.4f}, MER={features[1]:.4f}, lip_h={features[2]:.4f}, lip_w={features[3]:.4f}")
         
         # Update feature buffer for this identity
         self.feature_buffers[recognized_face_id].append(features)
@@ -401,19 +401,19 @@ class EnhancedLipMovementDetector:
         buffer = self.feature_buffers[recognized_face_id]
         if len(buffer) < self.min_frames_for_detection:
             if self.logger:
-                self.logger.info(f"Not enough frames for {recognized_face_id}: {len(buffer)}/{self.min_frames_for_detection}")
+                self.logger.debug(f"Not enough frames for {recognized_face_id}: {len(buffer)}/{self.min_frames_for_detection}")
             return False, 0.0
         
         # Analyze temporal patterns
         if self.rnn_enabled:
             is_speaking, confidence = self._analyze_temporal_pattern_rnn(recognized_face_id, features)
             if self.logger:
-                self.logger.info(f"RNN analysis for {recognized_face_id}: speaking={is_speaking}, conf={confidence:.3f}")
+                self.logger.debug(f"RNN analysis for {recognized_face_id}: speaking={is_speaking}, conf={confidence:.3f}")
         else:
             # Use simple threshold-based detection as fallback
             is_speaking, confidence = self._analyze_temporal_pattern_simple(buffer)
             if self.logger:
-                self.logger.info(f"Simple analysis for {recognized_face_id}: speaking={is_speaking}, conf={confidence:.3f}")
+                self.logger.debug(f"Simple analysis for {recognized_face_id}: speaking={is_speaking}, conf={confidence:.3f}")
         
         # Apply temporal smoothing if enabled
         if self.temporal_smoothing:
@@ -422,10 +422,10 @@ class EnhancedLipMovementDetector:
                 recognized_face_id, is_speaking, confidence
             )
             if self.logger and (old_speaking != is_speaking or abs(old_confidence - confidence) > 0.1):
-                self.logger.info(f"Temporal smoothing for {recognized_face_id}: {old_speaking},{old_confidence:.3f} -> {is_speaking},{confidence:.3f}")
+                self.logger.debug(f"Temporal smoothing for {recognized_face_id}: {old_speaking},{old_confidence:.3f} -> {is_speaking},{confidence:.3f}")
         
         if self.logger:
-            self.logger.info(f"Final result for {recognized_face_id}: speaking={is_speaking}, confidence={confidence:.3f}")
+            self.logger.debug(f"Final result for {recognized_face_id}: speaking={is_speaking}, confidence={confidence:.3f}")
         
         return is_speaking, confidence
     
@@ -444,7 +444,7 @@ class EnhancedLipMovementDetector:
         normalized_features = self._normalize_features(current_features)
         
         if self.logger:
-            self.logger.info(f"Normalized features for {recognized_face_id}: [{normalized_features[0]:.3f}, {normalized_features[1]:.3f}, {normalized_features[2]:.3f}, {normalized_features[3]:.3f}]")
+            self.logger.debug(f"Normalized features for {recognized_face_id}: [{normalized_features[0]:.3f}, {normalized_features[1]:.3f}, {normalized_features[2]:.3f}, {normalized_features[3]:.3f}]")
         
         # Get current hidden state for this identity
         hidden_state = self.hidden_states[recognized_face_id]
@@ -453,7 +453,7 @@ class EnhancedLipMovementDetector:
         probability, new_hidden_state = self._rnn_forward(normalized_features, hidden_state)
         
         if self.logger:
-            self.logger.info(f"RNN raw output for {recognized_face_id}: prob={probability:.4f}, hidden_norm={np.linalg.norm(new_hidden_state):.3f}")
+            self.logger.debug(f"RNN raw output for {recognized_face_id}: prob={probability:.4f}, hidden_norm={np.linalg.norm(new_hidden_state):.3f}")
         
         # Update hidden state
         self.hidden_states[recognized_face_id] = new_hidden_state
@@ -530,7 +530,7 @@ class EnhancedLipMovementDetector:
         # Log details if logger available
         if self.logger:
             component_str = ", ".join([f"{name}={score:.2f}" for name, score, _ in confidence_components])
-            self.logger.info(
+            self.logger.debug(
                 f"Simple analysis: MAR(μ={mar_mean:.3f}, σ={mar_std:.3f}, range={mar_range:.3f}), "
                 f"freq={movement_frequency:.2f}, scores=[{component_str}], conf={confidence:.3f}"
             )

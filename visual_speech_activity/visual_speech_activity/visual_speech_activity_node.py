@@ -73,8 +73,8 @@ class VisualSpeechActivityNode(Node):
         # Build full VSDLM model path (similar to face_recognition approach)
         vsdlm_weights_dir_path = self._get_weights_directory_path()
         vsdlm_model_full_path = os.path.join(vsdlm_weights_dir_path, self.vsdlm_weights_name)
-        self.get_logger().info(f"VSDLM weights directory: {vsdlm_weights_dir_path}")
-        self.get_logger().info(f"VSDLM model path: {vsdlm_model_full_path}")
+        self.get_logger().debug(f"VSDLM weights directory: {vsdlm_weights_dir_path}")
+        self.get_logger().debug(f"VSDLM model path: {vsdlm_model_full_path}")
         
         # Initialize VSDLM detector for visual speech detection
         self.vsdlm_detector = VSDLMDetector(
@@ -92,9 +92,9 @@ class VisualSpeechActivityNode(Node):
         
         # Log final provider selection from the detector
         actual_providers = self.vsdlm_detector.session.get_providers() if hasattr(self.vsdlm_detector, 'session') else "unknown"
-        self.get_logger().info(f"VSDLM detector initialized: variant={self.vsdlm_model_variant}, threshold={self.speaking_threshold}, "
+        self.get_logger().debug(f"VSDLM detector initialized: variant={self.vsdlm_model_variant}, threshold={self.speaking_threshold}, "
                                f"mouth_height_ratio={self.vsdlm_mouth_height_ratio}, temporal_smoothing={self.vsdlm_temporal_smoothing}")
-        self.get_logger().info(f"VSDLM final providers: {actual_providers}")
+        self.get_logger().debug(f"VSDLM final providers: {actual_providers}")
         
         # CV Bridge for image conversion
         self.bridge = CvBridge()
@@ -151,11 +151,11 @@ class VisualSpeechActivityNode(Node):
         if self.enable_debug_output:
             self.debug_timer = self.create_timer(10.0, self._debug_status_callback)
         
-        self.get_logger().info("Visual Speech Activity Node initialized")
-        self.get_logger().info(f"ROS4HRI mode: {'with_id' if self.ros4hri_with_id else 'array'}")
-        self.get_logger().info(f"Face recognition mode: {'enabled' if self.use_face_recognition else 'disabled (face_id only)'}")
-        self.get_logger().info(f"VSDLM model: {self.vsdlm_model_variant}")
-        self.get_logger().info(f"Speaking threshold: {self.speaking_threshold}")
+        self.get_logger().debug("Visual Speech Activity Node initialized")
+        self.get_logger().debug(f"ROS4HRI mode: {'with_id' if self.ros4hri_with_id else 'array'}")
+        self.get_logger().debug(f"Face recognition mode: {'enabled' if self.use_face_recognition else 'disabled (face_id only)'}")
+        self.get_logger().debug(f"VSDLM model: {self.vsdlm_model_variant}")
+        self.get_logger().debug(f"Speaking threshold: {self.speaking_threshold}")
     
     def _declare_parameters(self):
         """Declare ROS2 parameters."""
@@ -235,7 +235,7 @@ class VisualSpeechActivityNode(Node):
             # CPU-only mode
             self.vsdlm_providers = ['CPUExecutionProvider']
         
-        self.get_logger().info(f"VSDLM provider requested: {vsdlm_provider} -> providers: {self.vsdlm_providers}")
+        self.get_logger().debug(f"VSDLM provider requested: {vsdlm_provider} -> providers: {self.vsdlm_providers}")
         
         # Face recognition dependency
         self.use_face_recognition = self.get_parameter('use_face_recognition').get_parameter_value().bool_value
@@ -251,7 +251,7 @@ class VisualSpeechActivityNode(Node):
         # Set logger level based on debug flag
         if self.enable_debug_output:
             self.get_logger().set_level(rclpy.logging.LoggingSeverity.INFO)
-            self.get_logger().info("[DEBUG MODE ENABLED] Verbose logging activated")
+            self.get_logger().debug("[DEBUG MODE ENABLED] Verbose logging activated")
         else:
             self.get_logger().set_level(rclpy.logging.LoggingSeverity.WARN)
     
@@ -272,7 +272,7 @@ class VisualSpeechActivityNode(Node):
         # Create weights dir if not there
         if not os.path.exists(weights_dir_path):
             os.makedirs(weights_dir_path)
-            self.get_logger().info(f"Created weights directory: {weights_dir_path}")
+            self.get_logger().debug(f"Created weights directory: {weights_dir_path}")
         
         return weights_dir_path
     
@@ -294,7 +294,7 @@ class VisualSpeechActivityNode(Node):
                 self.qos_profile
             )
             
-            self.get_logger().info("Subscribed to /humans/faces/tracked for dynamic per-ID topics")
+            self.get_logger().debug("Subscribed to /humans/faces/tracked for dynamic per-ID topics")
             
             # No array-mode subscribers
             self.landmarks_array_subscriber = None
@@ -317,10 +317,10 @@ class VisualSpeechActivityNode(Node):
                     self._recognition_array_callback,
                     self.qos_profile
                 )
-                self.get_logger().info(f"Subscribed to {self.recognition_input_topic} for face recognition")
+                self.get_logger().debug(f"Subscribed to {self.recognition_input_topic} for face recognition")
             else:
                 self.recognition_array_subscriber = None
-                self.get_logger().info("Face recognition disabled - working with face_id only")
+                self.get_logger().debug("Face recognition disabled - working with face_id only")
             
             # Publisher
             self.speaking_array_publisher = self.create_publisher(
@@ -329,8 +329,8 @@ class VisualSpeechActivityNode(Node):
                 self.qos_profile
             )
             
-            self.get_logger().info(f"Subscribed to {self.landmarks_input_topic} (array mode)")
-            self.get_logger().info(f"Publishing to {self.output_topic} (array mode)")
+            self.get_logger().debug(f"Subscribed to {self.landmarks_input_topic} (array mode)")
+            self.get_logger().debug(f"Publishing to {self.output_topic} (array mode)")
             
             # No per-ID structures
             self.landmarks_subscribers = {}
@@ -340,7 +340,7 @@ class VisualSpeechActivityNode(Node):
         
         # Subscribe to camera image (same pattern as face_recognition)
         if self.compressed_topic and self.compressed_topic.strip():
-            self.get_logger().info(f"Using compressed image topic: {self.compressed_topic}")
+            self.get_logger().debug(f"Using compressed image topic: {self.compressed_topic}")
             real_time_qos = QoSProfile(
                 depth=1,
                 reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -354,7 +354,7 @@ class VisualSpeechActivityNode(Node):
                 real_time_qos
             )
         else:
-            self.get_logger().info(f"Using regular image topic: {self.image_topic}")
+            self.get_logger().debug(f"Using regular image topic: {self.image_topic}")
             self.color_sub = self.create_subscription(
                 Image,
                 self.image_topic,
@@ -370,7 +370,7 @@ class VisualSpeechActivityNode(Node):
                 self.output_image_topic,
                 10
             )
-            self.get_logger().info(f"Publishing annotated images to {self.output_image_topic}")
+            self.get_logger().debug(f"Publishing annotated images to {self.output_image_topic}")
     
     def _store_latest_rgb(self, color_msg: Image):
         """Store latest color image with timestamp in buffer."""
@@ -389,7 +389,7 @@ class VisualSpeechActivityNode(Node):
             self.latest_color_image_timestamp = self.get_clock().now()
             
             if self.enable_debug_output and not hasattr(self, '_image_received_logged'):
-                self.get_logger().info(f"[NODE-IMAGE] First image received on topic {self.image_topic}, size: {color_msg.width}x{color_msg.height}")
+                self.get_logger().debug(f"[NODE-IMAGE] First image received on topic {self.image_topic}, size: {color_msg.width}x{color_msg.height}")
                 self._image_received_logged = True
         except Exception as e:
             self.get_logger().error(f"Error storing RGB image: {e}")
@@ -417,7 +417,7 @@ class VisualSpeechActivityNode(Node):
             self.latest_color_image_timestamp = self.get_clock().now()
             
             if self.enable_debug_output and not hasattr(self, '_compressed_image_received_logged'):
-                self.get_logger().info(f"[NODE-IMAGE] First compressed image received on topic {self.compressed_topic}")
+                self.get_logger().debug(f"[NODE-IMAGE] First compressed image received on topic {self.compressed_topic}")
                 self._compressed_image_received_logged = True
         except Exception as e:
             self.get_logger().error(f"Error storing compressed image: {e}")
@@ -496,14 +496,14 @@ class VisualSpeechActivityNode(Node):
             if face_id not in self.tracked_face_ids:
                 self._create_per_id_subscribers(face_id)
                 self.tracked_face_ids.add(face_id)
-                self.get_logger().info(f"Added tracked face: {face_id}")
+                self.get_logger().debug(f"Added tracked face: {face_id}")
         
         # Remove old face IDs
         removed_ids = self.tracked_face_ids - current_ids
         for face_id in removed_ids:
             self._remove_per_id_subscribers(face_id)
             self.tracked_face_ids.discard(face_id)
-            self.get_logger().info(f"Removed tracked face: {face_id}")
+            self.get_logger().debug(f"Removed tracked face: {face_id}")
     
     def _create_per_id_subscribers(self, face_id: str):
         """Create per-ID subscribers for a new tracked face."""
@@ -516,7 +516,7 @@ class VisualSpeechActivityNode(Node):
             self.qos_profile
         )
         
-        self.get_logger().info(f"Created subscriber for topic: {landmarks_topic}")
+        self.get_logger().debug(f"Created subscriber for topic: {landmarks_topic}")
         if self.enable_debug_output:
             self.get_logger().debug(f"Subscribed to {landmarks_topic} with QoS profile")
         
@@ -571,7 +571,7 @@ class VisualSpeechActivityNode(Node):
             )
             
             if self.enable_debug_output:
-                self.get_logger().info(f"Subscribed to {recognition_topic}")
+                self.get_logger().debug(f"Subscribed to {recognition_topic}")
     
     def _recognition_per_id_callback(self, msg: FacialRecognition, face_id: str):
         """Callback for per-ID facial recognition."""
@@ -594,7 +594,7 @@ class VisualSpeechActivityNode(Node):
             self.latest_landmarks[landmarks.face_id] = landmarks
         
         if self.enable_debug_output:
-            self.get_logger().info(f"Received {len(msg.ids)} facial landmarks")
+            self.get_logger().debug(f"Received {len(msg.ids)} facial landmarks")
         
         # If face recognition is disabled, process landmarks directly
         if not self.use_face_recognition:
@@ -638,7 +638,7 @@ class VisualSpeechActivityNode(Node):
         
         if self.enable_debug_output and self.processed_messages % 30 == 0:
             avg_time = self.total_processing_time / self.processed_messages
-            self.get_logger().info(f"Avg processing time: {avg_time*1000:.2f}ms")
+            self.get_logger().debug(f"Avg processing time: {avg_time*1000:.2f}ms")
     
     # -------------------------------------------------------------------------
     #                    Core Processing Methods
@@ -688,7 +688,7 @@ class VisualSpeechActivityNode(Node):
             is_speaking, speaking_confidence, mouth_crop_bbox = False, 0.0, None
         else:
             if self.enable_debug_output:
-                self.get_logger().info(
+                self.get_logger().debug(
                     f"[NODE] Using synchronized image (t={landmarks_timestamp:.3f}) for face {recognition.recognized_face_id}, "
                     f"image shape: {cv_image.shape}, landmarks count: {len(landmarks_list)}, face_bbox: {face_bbox}"
                 )
@@ -701,7 +701,7 @@ class VisualSpeechActivityNode(Node):
             )
             
             if self.enable_debug_output:
-                self.get_logger().info(f"[NODE] VSDLM returned: is_speaking={is_speaking}, speaking_confidence={speaking_confidence}, mouth_bbox={mouth_crop_bbox}")
+                self.get_logger().debug(f"[NODE] VSDLM returned: is_speaking={is_speaking}, speaking_confidence={speaking_confidence}, mouth_bbox={mouth_crop_bbox}")
         
         # Create extended recognition message
         extended_recognition = self._copy_recognition_with_speaking(
@@ -718,7 +718,7 @@ class VisualSpeechActivityNode(Node):
         if self.enable_debug_output:
             ext_is_spk = extended_recognition.is_speaking if hasattr(extended_recognition, 'is_speaking') else 'N/A'
             ext_spk_conf = extended_recognition.speaking_confidence if hasattr(extended_recognition, 'speaking_confidence') else 'N/A'
-            self.get_logger().info(
+            self.get_logger().debug(
                 f"[NODE] Face {recognition.recognized_face_id}: "
                 f"speaking={is_speaking}, confidence={speaking_confidence:.4f} -> "
                 f"extended_recognition.is_speaking={ext_is_spk}, "
@@ -768,7 +768,7 @@ class VisualSpeechActivityNode(Node):
             cv_image = self._get_image_by_timestamp(landmarks_timestamp, slop=0.1)
             
             if self.enable_debug_output:
-                self.get_logger().info(
+                self.get_logger().debug(
                     f"[NODE-ARRAY] Processing face {face_id} at t={landmarks_timestamp:.3f}, "
                     f"image available: {cv_image is not None}, landmarks: {len(landmarks_coords)}, face_bbox: {face_bbox}"
                 )
@@ -785,7 +785,7 @@ class VisualSpeechActivityNode(Node):
                 )
                 
                 if self.enable_debug_output:
-                    self.get_logger().info(f"[NODE-ARRAY] VSDLM returned for {face_id}: is_speaking={is_speaking}, confidence={speaking_confidence:.4f}, mouth_bbox={mouth_crop_bbox}")
+                    self.get_logger().debug(f"[NODE-ARRAY] VSDLM returned for {face_id}: is_speaking={is_speaking}, confidence={speaking_confidence:.4f}, mouth_bbox={mouth_crop_bbox}")
             
             # Publish visualization if enabled and image available
             if self.enable_image_output and self.image_publisher is not None and cv_image is not None:
@@ -807,7 +807,7 @@ class VisualSpeechActivityNode(Node):
                 recognition.speaking_confidence = speaking_confidence
                 
                 if self.enable_debug_output:
-                    self.get_logger().info(f"[NODE-ARRAY] Set speaking fields: is_speaking={recognition.is_speaking}, speaking_confidence={recognition.speaking_confidence}")
+                    self.get_logger().debug(f"[NODE-ARRAY] Set speaking fields: is_speaking={recognition.is_speaking}, speaking_confidence={recognition.speaking_confidence}")
             
             speaking_recognitions.append(recognition)
             
@@ -846,7 +846,7 @@ class VisualSpeechActivityNode(Node):
         cv_image = self._get_image_by_timestamp(landmarks_timestamp, slop=0.1)
         
         if self.enable_debug_output:
-            self.get_logger().info(
+            self.get_logger().debug(
                 f"[NODE-PERID] Processing face {face_id} at t={landmarks_timestamp:.3f}, "
                 f"image available: {cv_image is not None}"
             )
@@ -863,7 +863,7 @@ class VisualSpeechActivityNode(Node):
             )
             
             if self.enable_debug_output:
-                self.get_logger().info(f"[NODE-PERID] VSDLM returned: is_speaking={is_speaking}, confidence={speaking_confidence:.4f}, mouth_bbox={mouth_crop_bbox}")
+                self.get_logger().debug(f"[NODE-PERID] VSDLM returned: is_speaking={is_speaking}, confidence={speaking_confidence:.4f}, mouth_bbox={mouth_crop_bbox}")
         
         # Publish visualization if enabled and image available
         if self.enable_image_output and self.image_publisher is not None and cv_image is not None:
@@ -885,7 +885,7 @@ class VisualSpeechActivityNode(Node):
             recognition.speaking_confidence = speaking_confidence
             
             if self.enable_debug_output:
-                self.get_logger().info(f"[NODE-PERID] Message fields set: is_speaking={recognition.is_speaking}, speaking_confidence={recognition.speaking_confidence}")
+                self.get_logger().debug(f"[NODE-PERID] Message fields set: is_speaking={recognition.is_speaking}, speaking_confidence={recognition.speaking_confidence}")
         else:
             if not hasattr(self, '_missing_fields_warned'):
                 self.get_logger().error(
@@ -898,7 +898,7 @@ class VisualSpeechActivityNode(Node):
         self._publish_speaking_per_id(recognition, face_id)
         
         if self.enable_debug_output:
-            self.get_logger().info(
+            self.get_logger().debug(
                 f"[NODE-PERID] Published for face {face_id}: "
                 f"speaking={is_speaking}, confidence={speaking_confidence:.4f}"
             )
@@ -979,7 +979,7 @@ class VisualSpeechActivityNode(Node):
             New FacialRecognition message with speaking fields
         """
         if self.enable_debug_output:
-            self.get_logger().info(f"[NODE-COPY] Input values: is_speaking={is_speaking} (type={type(is_speaking)}), speaking_confidence={speaking_confidence} (type={type(speaking_confidence)})")
+            self.get_logger().debug(f"[NODE-COPY] Input values: is_speaking={is_speaking} (type={type(is_speaking)}), speaking_confidence={speaking_confidence} (type={type(speaking_confidence)})")
         
         extended_recognition = FacialRecognition()
         extended_recognition.header = recognition.header
@@ -989,11 +989,12 @@ class VisualSpeechActivityNode(Node):
         
         # Add speaking fields if they exist (requires rebuilt hri_msgs)
         if hasattr(extended_recognition, 'is_speaking'):
-            extended_recognition.is_speaking = is_speaking
-            extended_recognition.speaking_confidence = speaking_confidence
+            # Convert numpy types to Python native types to avoid ROS message type issues
+            extended_recognition.is_speaking = bool(is_speaking)
+            extended_recognition.speaking_confidence = float(speaking_confidence)
             
             if self.enable_debug_output:
-                self.get_logger().info(f"[NODE-COPY] After assignment: extended_recognition.is_speaking={extended_recognition.is_speaking}, extended_recognition.speaking_confidence={extended_recognition.speaking_confidence}")
+                self.get_logger().debug(f"[NODE-COPY] After assignment: extended_recognition.is_speaking={extended_recognition.is_speaking}, extended_recognition.speaking_confidence={extended_recognition.speaking_confidence}")
         else:
             if self.enable_debug_output:
                 self.get_logger().warn("[NODE-COPY] FacialRecognition message missing speaking fields - hri_msgs needs rebuild!")
@@ -1014,7 +1015,7 @@ class VisualSpeechActivityNode(Node):
             for idx, r in enumerate(speaking_recognitions):
                 is_spk = r.is_speaking if hasattr(r, 'is_speaking') else 'N/A'
                 spk_conf = r.speaking_confidence if hasattr(r, 'speaking_confidence') else 'N/A'
-                self.get_logger().info(
+                self.get_logger().debug(
                     f"[NODE-PUBLISH-ARRAY] Recognition[{idx}]: face_id={r.face_id}, "
                     f"is_speaking={is_spk}, speaking_confidence={spk_conf}"
                 )
@@ -1023,7 +1024,7 @@ class VisualSpeechActivityNode(Node):
         
         if self.enable_debug_output:
             speaking_count = sum(1 for r in speaking_recognitions if hasattr(r, 'is_speaking') and r.is_speaking)
-            self.get_logger().info(
+            self.get_logger().debug(
                 f"[NODE-PUBLISH-ARRAY] Published {len(speaking_recognitions)} recognitions, "
                 f"{speaking_count} speaking"
             )
@@ -1039,12 +1040,12 @@ class VisualSpeechActivityNode(Node):
                 self.qos_profile
             )
             if self.enable_debug_output:
-                self.get_logger().info(f"[NODE-PUBLISH-PERID] Created publisher for topic: {topic}")
+                self.get_logger().debug(f"[NODE-PUBLISH-PERID] Created publisher for topic: {topic}")
         
         if self.enable_debug_output:
             is_spk = speaking_recognition.is_speaking if hasattr(speaking_recognition, 'is_speaking') else 'N/A'
             spk_conf = speaking_recognition.speaking_confidence if hasattr(speaking_recognition, 'speaking_confidence') else 'N/A'
-            self.get_logger().info(
+            self.get_logger().debug(
                 f"[NODE-PUBLISH-PERID] Publishing to {face_id}: "
                 f"is_speaking={is_spk}, speaking_confidence={spk_conf}"
             )
