@@ -11,7 +11,7 @@ gradio==3.35.2
 
 # ONNX Runtime for face detection-----------------------------------
 # Use GPU version by default (falls back to CPU automatically if no GPU)
-onnxruntime-gpu>=1.12.0
+onnxruntime-gpu>=1.20.1
 
 # MediaPipe for advanced face processing-----------------------------------
 mediapipe>=0.10.7

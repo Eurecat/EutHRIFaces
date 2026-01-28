@@ -9,7 +9,17 @@ ARG BASE_IMAGE
 
 # Prevent interactive prompts during apt installs
 ENV DEBIAN_FRONTEND=noninteractive
- 
+
+ # Install this for onnxgpu dependencies
+RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+RUN dpkg -i cuda-keyring_1.1-1_all.deb
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcudnn9-cuda-12 \
+    cuda-libraries-12-9 \
+    ffmpeg \
+&& rm -rf /var/lib/apt/lists/*
+
 # ------------------------------------------------------------
 # Install system dependencies & development tools
 # ------------------------------------------------------------
