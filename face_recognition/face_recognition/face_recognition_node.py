@@ -732,8 +732,37 @@ class FaceRecognitionNode(Node):
                     # Format as tuple: (landmarks_msg, unique_id, confidence)
                     all_recognition_results.append((facial_landmarks_msg, "unknown", 0.0))
             
-            # Publish all cached/unknown results
-            self._publish_recognition_array(all_recognition_results)
+            # Publish all cached/unknown results based on mode
+            if self.ros4hri_with_id:
+                # ROS4HRI with ID mode: Publish to per-ID topics
+                for landmarks_msg, unique_id, confidence in all_recognition_results:
+                    face_id = landmarks_msg.face_id
+                    
+                    # Create publisher for this face ID if it doesn't exist
+                    if face_id not in self.recognition_publishers:
+                        topic_name = f'/humans/faces/{face_id}/recognized'
+                        self.recognition_publishers[face_id] = self.create_publisher(
+                            FacialRecognition,
+                            topic_name,
+                            self.qos_profile
+                        )
+                    
+                    recognition_msg = FacialRecognition()
+                    recognition_msg.header = landmarks_msg.header
+                    recognition_msg.face_id = face_id
+                    recognition_msg.recognized_face_id = unique_id if unique_id != "unknown" else "unknown"
+                    recognition_msg.confidence = float(confidence)
+                    
+                    # Initialize speaking fields if they exist
+                    if hasattr(recognition_msg, 'is_speaking'):
+                        recognition_msg.is_speaking = False
+                        recognition_msg.speaking_confidence = 0.0
+                    
+                    # Publish to the per-ID topic
+                    self.recognition_publishers[face_id].publish(recognition_msg)
+            else:
+                # ROS4HRI array mode: Publish FacialRecognitionArray
+                self._publish_recognition_array(all_recognition_results)
             return
         
         # Process this frame normally (don't skip)
@@ -892,6 +921,16 @@ class FaceRecognitionNode(Node):
     
     def _publish_recognition_array(self, recognition_results: List):
         """Publish facial recognition results as a single array message."""
+        # Safety check: this method should only be called in array mode
+        if self.ros4hri_with_id:
+            self.get_logger().warning("_publish_recognition_array called in ros4hri_with_id mode - skipping")
+            return
+        
+        # Additional safety check: ensure publisher exists
+        if self.recognition_publisher is None:
+            self.get_logger().error("Recognition publisher is None - cannot publish array")
+            return
+            
         try:
             # Create FacialRecognitionArray message
             recognition_array_msg = FacialRecognitionArray()

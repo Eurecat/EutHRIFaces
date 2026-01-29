@@ -85,7 +85,7 @@ def generate_launch_description():
     
     ros4hri_with_id_arg = DeclareLaunchArgument(
         'ros4hri_with_id',
-        default_value='true',
+        default_value='false',
         description='Enable ROS4HRI per-ID mode (true) or array mode (false)'
     )
     
