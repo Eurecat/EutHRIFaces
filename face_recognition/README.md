@@ -8,6 +8,7 @@ This ROS2 package provides face recognition capabilities for HRI (Human-Robot In
 - **Identity Management**: Persistent identity tracking across frames using clustering and similarity matching
 - **Temporal Tracking**: Maintains identities even when track IDs change
 - **Batch Processing**: Optimized batch processing for better performance
+- **Frame Skipping Optimization**: Configurable frame skipping with result caching for improved performance
 - **Persistent Storage**: Optional identity database for maintaining identities across sessions
 - **ROS4HRI Compatibility**: Publishes `FacialRecognition` messages following the ros4hri standard
 

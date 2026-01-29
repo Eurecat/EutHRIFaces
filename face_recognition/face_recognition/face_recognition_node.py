@@ -71,7 +71,7 @@ class FaceRecognitionNode(Node):
 
         # Setup QoS profiles (copied from perception node)
         self.qos_profile = QoSProfile(
-            depth=10,  # Keep only the latest image
+            depth=1,  # Keep only the latest image
             # reliability=QoSReliabilityPolicy.BEST_EFFORT,
             # durability=DurabilityPolicy.VOLATILE,
             # history=QoSHistoryPolicy.KEEP_LAST,
@@ -119,6 +119,12 @@ class FaceRecognitionNode(Node):
         self.landmarks_buffer = {}  # {timestamp: [FacialLandmarks, ...]}
         self.buffer_timeout = 0.1  # 100ms timeout for frame synchronization
         self.last_processed_timestamp = None
+        
+        # Frame skipping for recognition optimization
+        # Cache of last recognition results per face_id: {face_id: (unique_id, confidence, timestamp)}
+        self.recognition_cache = {}
+        # Global frame counter for frame-level skipping (not per-face)
+        self.global_frame_counter = 0
 
         # Timer for periodic inference (copied from perception node pattern)
         timer_period = 1.0 / self.processing_rate_hz  # Use processing_rate_hz parameter
@@ -359,6 +365,11 @@ class FaceRecognitionNode(Node):
         
         # Processing parameters
         self.declare_parameter('gaze_identity_exclusion_threshold', 0.5)
+        
+        # Frame skipping optimization parameter
+        # Percentage of frames to skip recognition processing (0-100)
+        # When skipping, the last cached recognition result for that face_id will be reused
+        self.declare_parameter('recognition_frame_skip_percentage', 0.0)  # Default: no skipping
         
         # Receiver ID for hri_msgs
         self.declare_parameter('receiver_id', 'face_recognition')
@@ -655,10 +666,79 @@ class FaceRecognitionNode(Node):
             if self.enable_debug_output:
                 self.get_logger().debug(f"Processing buffered frame with {len(messages)} faces (timestamp: {ts_key})")
     
+    def _should_skip_recognition(self):
+        """
+        Determine if recognition should be skipped for this entire frame based on frame skip percentage.
+        This operates at the FRAME level, not per-face - if a frame is skipped, ALL faces in that frame are skipped.
+        
+        Returns:
+            bool: True if this entire frame should be skipped, False otherwise
+        """
+        skip_percentage = self.get_parameter('recognition_frame_skip_percentage').get_parameter_value().double_value
+        
+        # If skip percentage is 0, never skip
+        if skip_percentage <= 0.0:
+            return False
+        
+        # If skip percentage is 100, always skip (but still process first frame)
+        if skip_percentage >= 100.0:
+            return self.global_frame_counter > 0
+        
+        # Calculate skip pattern: if skip_percentage is 50%, process every other frame (skip 1, process 1)
+        # frames_per_cycle = 100 / skip_percentage rounded
+        # For 50%: every 2 frames, skip 1, process 1
+        # For 75%: every 4 frames, skip 3, process 1
+        
+        frames_per_cycle = max(1, int(100.0 / skip_percentage))
+        frames_to_skip = max(1, int(skip_percentage / 100.0 * frames_per_cycle))
+        
+        frame_position = self.global_frame_counter % frames_per_cycle
+        
+        # Skip if we're in the skip portion of the cycle
+        should_skip = frame_position < frames_to_skip
+        
+        if self.enable_debug_output and should_skip:
+            self.get_logger().debug(f"Skipping entire frame {self.global_frame_counter} (position {frame_position}/{frames_per_cycle}, skip_pct={skip_percentage}%)")
+        
+        return should_skip
+    
     def _process_landmarks_array_batch(self, msg):
         """Process array of facial landmarks in batch mode for better performance."""
         if not msg.ids:
             return
+        
+        # Increment global frame counter
+        self.global_frame_counter += 1
+        
+        # Check if we should skip this ENTIRE frame
+        if self._should_skip_recognition():
+            # Skip the entire frame - publish cached results for all faces
+            if self.enable_debug_output:
+                self.get_logger().info(f"Skipping frame {self.global_frame_counter} - publishing {len(msg.ids)} cached recognitions")
+            
+            all_recognition_results = []
+            for facial_landmarks_msg in msg.ids:
+                face_id = facial_landmarks_msg.face_id
+                
+                # Try to get cached result
+                if face_id in self.recognition_cache:
+                    unique_id, confidence, _ = self.recognition_cache[face_id]
+                    # Format as tuple: (landmarks_msg, unique_id, confidence)
+                    all_recognition_results.append((facial_landmarks_msg, unique_id, confidence))
+                else:
+                    # No cached result - publish unknown
+                    if self.enable_debug_output:
+                        self.get_logger().debug(f"No cached recognition for {face_id}, publishing unknown")
+                    # Format as tuple: (landmarks_msg, unique_id, confidence)
+                    all_recognition_results.append((facial_landmarks_msg, "unknown", 0.0))
+            
+            # Publish all cached/unknown results
+            self._publish_recognition_array(all_recognition_results)
+            return
+        
+        # Process this frame normally (don't skip)
+        if self.enable_debug_output:
+            self.get_logger().info(f"Processing frame {self.global_frame_counter} with {len(msg.ids)} faces")
         
         # Extract face crops and face IDs for all faces
         if self.enable_debug_output:
@@ -677,79 +757,82 @@ class FaceRecognitionNode(Node):
         
         if self.enable_debug_output:
             crop_time = (time.time() - crop_start_time) * 1000
-            self.get_logger().debug(f"Face crop extraction took: {crop_time:.2f}ms for {len(msg.ids)} input faces, got {len(face_crops)} valid crops")
+            self.get_logger().info(f"Face crop extraction took: {crop_time:.2f}ms for {len(msg.ids)} input faces, got {len(face_crops)} valid crops")
         
-        if not face_crops:
-            self.get_logger().warning("No valid face crops extracted from landmarks array")
-            # Publish empty array when no valid faces
-            self._publish_recognition_array([])
-            return
+        # Collect all recognition results
+        all_recognition_results = []
         
-        # Check if face embedding extractor is available
-        if not self.face_embedding_extractor.is_available():
-            self.get_logger().error("Face embedding extractor is not available")
-            return
-        
-        # Extract embeddings in batch
-        if self.enable_debug_output:
-            embedding_start_time = time.time()
-        
-        embeddings = self.face_embedding_extractor.extract_embeddings_batch(face_crops)
-        
-        if self.enable_debug_output:
-            embedding_time = (time.time() - embedding_start_time) * 1000
-            self.get_logger().debug(f"Embedding extraction took: {embedding_time:.2f}ms for {len(face_crops)} faces")
-        
-        # Create face_embeddings dictionary for identity manager using face_id as key
-        if self.enable_debug_output:
-            prep_start_time = time.time()
-        
-        face_embeddings = {}
-        valid_indices = []
-        
-        for i, (face_id, embedding) in enumerate(zip(face_ids, embeddings)):
-            if embedding is not None:
-                face_embeddings[face_id] = embedding
-                valid_indices.append(i)
-            else:
-                self.get_logger().warning(f"Failed to extract embedding for face {face_ids[i]}")
-        
-        if self.enable_debug_output:
-            prep_time = (time.time() - prep_start_time) * 1000
-            self.get_logger().debug(f"Embedding preparation took: {prep_time:.2f}ms")
-        
-        # Process identities in batch
-        if face_embeddings:
-            if self.enable_debug_output:
-                identity_start_time = time.time()
+        # Process faces that need recognition
+        if face_crops:
+            # Check if face embedding extractor is available
+            if not self.face_embedding_extractor.is_available():
+                self.get_logger().error("Face embedding extractor is not available")
+                return
             
-            identity_results = self.identity_manager.process_new_embedding_batch(face_embeddings)
+            # Extract embeddings in batch
+            if self.enable_debug_output:
+                embedding_start_time = time.time()
+            
+            embeddings = self.face_embedding_extractor.extract_embeddings_batch(face_crops)
             
             if self.enable_debug_output:
-                identity_time = (time.time() - identity_start_time) * 1000
-                self.get_logger().debug(f"Identity processing took: {identity_time:.2f}ms for {len(face_embeddings)} faces")
+                embedding_time = (time.time() - embedding_start_time) * 1000
+                self.get_logger().debug(f"Embedding extraction took: {embedding_time:.2f}ms for {len(face_crops)} faces")
             
-            # Collect results for batch publishing
-            recognition_results = []
-            for i in valid_indices:
-                face_id = face_ids[i]
-                landmarks_msg = landmarks_msgs[i]
-                unique_id, confidence = identity_results.get(face_id, (None, 0.0))
+            # Create face_embeddings dictionary for identity manager using face_id as key
+            if self.enable_debug_output:
+                prep_start_time = time.time()
+            
+            face_embeddings = {}
+            valid_indices = []
+            
+            for i, (face_id, embedding) in enumerate(zip(face_ids, embeddings)):
+                if embedding is not None:
+                    face_embeddings[face_id] = embedding
+                    valid_indices.append(i)
+                else:
+                    self.get_logger().warning(f"Failed to extract embedding for face {face_ids[i]}")
+            
+            if self.enable_debug_output:
+                prep_time = (time.time() - prep_start_time) * 1000
+                self.get_logger().debug(f"Embedding preparation took: {prep_time:.2f}ms")
+            
+            # Process identities in batch
+            if face_embeddings:
+                if self.enable_debug_output:
+                    identity_start_time = time.time()
+                
+                identity_results = self.identity_manager.process_new_embedding_batch(face_embeddings)
                 
                 if self.enable_debug_output:
-                    self.get_logger().debug(f"Face {face_id} -> Identity: {unique_id}, Confidence: {confidence:.3f}")
+                    identity_time = (time.time() - identity_start_time) * 1000
+                    self.get_logger().debug(f"Identity processing took: {identity_time:.2f}ms for {len(face_embeddings)} faces")
                 
-                recognition_results.append((landmarks_msg, unique_id, confidence))
-            
-            # Publish recognition results based on mode
+                # Collect results for batch publishing and update cache
+                for i in valid_indices:
+                    face_id = face_ids[i]
+                    landmarks_msg = landmarks_msgs[i]
+                    unique_id, confidence = identity_results.get(face_id, (None, 0.0))
+                    
+                    # Update recognition cache with current timestamp
+                    current_time = self.get_clock().now()
+                    self.recognition_cache[face_id] = (unique_id, confidence, current_time)
+                    
+                    if self.enable_debug_output:
+                        self.get_logger().debug(f"Face {face_id} -> Identity: {unique_id}, Confidence: {confidence:.3f}")
+                    
+                    all_recognition_results.append((landmarks_msg, unique_id, confidence))
+        
+        # Publish recognition results based on mode
+        if all_recognition_results:
             if self.enable_debug_output:
                 publish_start_time = time.time()
             
             if self.ros4hri_with_id:
                 # ROS4HRI with ID mode: Publish to per-ID topics /humans/faces/<faceID>/recognized
                 # All messages from the same frame share the same timestamp for synchronization
-                frame_timestamp = recognition_results[0][0].header.stamp if recognition_results else None
-                for landmarks_msg, unique_id, confidence in recognition_results:
+                frame_timestamp = all_recognition_results[0][0].header.stamp if all_recognition_results else None
+                for landmarks_msg, unique_id, confidence in all_recognition_results:
                     face_id = landmarks_msg.face_id
                     
                     # Create publisher for this face ID if it doesn't exist
@@ -787,23 +870,25 @@ class FaceRecognitionNode(Node):
                         self.get_logger().debug(f"Published FacialRecognition for face_id={face_id} to /humans/faces/{face_id}/recognized, recognized_id={unique_id}")
             else:
                 # ROS4HRI array mode: Publish FacialRecognitionArray
-                self._publish_recognition_array(recognition_results)
+                self._publish_recognition_array(all_recognition_results)
             
             # Publish annotated image with all recognitions if enabled
-            if self.enable_image_output and self.image_output_publisher and valid_indices:
-                image_recognition_results = [(landmarks_msgs[i], identity_results.get(face_ids[i], (None, 0.0))) for i in valid_indices]
+            if self.enable_image_output and self.image_output_publisher and all_recognition_results:
+                # Create image recognition results from all results (processed + cached)
+                image_recognition_results = [(landmarks_msg, (unique_id, confidence)) for landmarks_msg, unique_id, confidence in all_recognition_results]
                 self._publish_batch_annotated_image(image_recognition_results)
             
             if self.enable_debug_output:
                 publish_time = (time.time() - publish_start_time) * 1000
-                self.get_logger().debug(f"Publishing results took: {publish_time:.2f}ms for {len(valid_indices)} faces")
+                self.get_logger().debug(f"Publishing results took: {publish_time:.2f}ms for {len(all_recognition_results)} faces")
         else:
-            self.get_logger().warning("No valid embeddings extracted for identity processing")
-            # Publish empty results when no valid embeddings
-            if not self.ros4hri_with_id:
-                self._publish_recognition_array([])
-            # Note: In ROS4HRI with ID mode, we don't publish anything if no valid embeddings
-            self._publish_batch_annotated_image(None)
+            # No valid faces to process
+            if not face_crops:
+                self.get_logger().warning("No valid face crops extracted from landmarks array")
+                # Publish empty results when no valid faces
+                if not self.ros4hri_with_id:
+                    self._publish_recognition_array([])
+                self._publish_batch_annotated_image(None)
     
     def _publish_recognition_array(self, recognition_results: List):
         """Publish facial recognition results as a single array message."""

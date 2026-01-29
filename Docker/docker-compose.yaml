@@ -138,37 +138,37 @@ services:
     stop_signal: SIGINT
     stop_grace_period: 30s
 
-#   mongodb_faces_service:
-#     image: mongo:7
-#     container_name: "mongodb_faces"
-#     restart: unless-stopped
-#     ports:
-#       - "27018:27017" 
-#     volumes:
-#       - mongodb_faces_data:/data/db
-#     environment:
-#       - MONGODB_INITDB_ROOT_USERNAME=eurecat
-#       - MONGODB_INITDB_ROOT_PASSWORD=cerdanyola
-#     stop_signal: SIGTERM
-#     stop_grace_period: 60s
+  mongodb_faces_service:
+    image: mongo:7
+    container_name: "mongodb_faces"
+    restart: unless-stopped
+    ports:
+      - "27018:27017" 
+    volumes:
+      - mongodb_faces_data:/data/db
+    environment:
+      - MONGODB_INITDB_ROOT_USERNAME=eurecat
+      - MONGODB_INITDB_ROOT_PASSWORD=cerdanyola
+    stop_signal: SIGTERM
+    stop_grace_period: 60s
 
-#   mongo_express_faces:
-#     image: mongo-express:latest
-#     container_name: "mongo-express-faces"
-#     restart: unless-stopped
-#     depends_on:
-#       - mongodb_faces_service
-#     ports:
-#       - "8082:8081"  
-#     environment:
-#       - ME_CONFIG_MONGODB_ENABLE_ADMIN=true
-#       - ME_CONFIG_MONGODB_ADMINUSERNAME=eurecat
-#       - ME_CONFIG_MONGODB_ADMINPASSWORD=cerdanyola
-#       - ME_CONFIG_MONGODB_SERVER=mongodb_faces_service
-#       - ME_CONFIG_MONGODB_URL=mongodb://eurecat:cerdanyola@mongodb_faces_service:27017/?authSource=admin
+  mongo_express_faces:
+    image: mongo-express:latest
+    container_name: "mongo-express-faces"
+    restart: unless-stopped
+    depends_on:
+      - mongodb_faces_service
+    ports:
+      - "8082:8081"  
+    environment:
+      - ME_CONFIG_MONGODB_ENABLE_ADMIN=true
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=eurecat
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=cerdanyola
+      - ME_CONFIG_MONGODB_SERVER=mongodb_faces_service
+      - ME_CONFIG_MONGODB_URL=mongodb://eurecat:cerdanyola@mongodb_faces_service:27017/?authSource=admin
 
-# volumes:
-#   mongodb_faces_data:
-#     name: coghri_faces_mongodb_data
-#     driver: local
+volumes:
+  mongodb_faces_data:
+    name: coghri_faces_mongodb_data
+    driver: local
 
