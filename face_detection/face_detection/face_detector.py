@@ -201,7 +201,7 @@ class FaceDetectorNode(Node):
         color_image_processed = self.color_image_processed
 
         if color_msg is None:
-            self.get_logger().warning("No data received from color camera")
+            self.get_logger().warning("No data received from color camera", throttle_duration_sec=1.0)
             return  # No data available yet
         if color_image_processed is True:
             return
@@ -474,6 +474,7 @@ class FaceDetectorNode(Node):
         self.declare_parameter('dlib_model_path', 'shape_predictor_68_face_landmarks.dat')
         
         # MediaPipe 478-point landmark detection parameters
+        # Note: mediapipe_use_gpu should be False - standard mediapipe package lacks GPU support
         self.declare_parameter('enable_mediapipe_landmarks', False)
         self.declare_parameter('mediapipe_model_path', 'face_landmarker.task')
         self.declare_parameter('mediapipe_min_detection_confidence', 0.5)

@@ -65,7 +65,9 @@ class FaceEmbeddingExtractor:
             self.device = "cuda" if torch.cuda.is_available() and _TORCH_AVAILABLE else "cpu"
         else:
             self.device = device
-        print(f"[INFO] Using device: {self.device}")
+        light_green = "\033[38;5;82m"
+        reset = "\033[0m"
+        print(f"{light_green}[INFO] Using device: {self.device}{reset}")
         # Model components
         self.model = None
         self.transform = None

@@ -167,8 +167,9 @@ class YoloFaceDetector:
                 self.logger.info(f"[INFO] Found existing YOLO face model at: {self.model_path}")
             
             self.logger.info(f"[INFO] Initializing YOLO face detector from {self.model_path}")
-            self.logger.info(f"[INFO] Using device: {self.device}")
-            
+            light_green = "\033[38;5;82m"
+            reset = "\033[0m"
+            print(f"{light_green}[INFO] Using device: {self.device}{reset}")            
             # Check for onnxruntime-gpu if CUDA is requested
             if 'cuda' in self.device.lower():
                 try:

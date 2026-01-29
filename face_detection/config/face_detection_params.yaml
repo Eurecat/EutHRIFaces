@@ -50,7 +50,9 @@ face_detector:
     # MediaPipe offers better accuracy than dlib, especially for mouth/lip landmarks
     # The lightest model (float16, ~3.7MB) will be auto-downloaded if not present
     # Note: If both dlib and MediaPipe are enabled, MediaPipe takes priority
+    # GPU support: Set to false (standard mediapipe package doesn't include GPU support)
     enable_mediapipe_landmarks: true
+    mediapipe_use_gpu: false
     mediapipe_model_path: "face_landmarker.task"
     mediapipe_min_detection_confidence: 0.5
     mediapipe_min_tracking_confidence: 0.5
