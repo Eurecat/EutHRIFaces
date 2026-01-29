@@ -70,12 +70,12 @@ visual_speech_activity_node:
     vsdlm_min_confidence_for_change: 0.1
     
     # Debug Configuration
-    # Enable verbose debug output with logger.info
-    enable_debug_output: true
+    # Enable verbose debug output with logger.debug
+    enable_debug_output: false
     
     # Save mouth crops to /tmp for debugging (every 30th frame)
     # Useful for verifying what the model sees
-    vsdlm_debug_save_crops: true
+    vsdlm_debug_save_crops: false
     
     # Camera Image Topics (same pattern as face_recognition)
     # Use either regular image topic OR compressed topic (not both)
@@ -101,6 +101,3 @@ visual_speech_activity_node:
     # Increase this value to move speaking labels further away from lips
     # This prevents labels from blocking the mouth region
     label_offset_y: 50
-    
-    # Debug Configuration
-    enable_debug_output: true

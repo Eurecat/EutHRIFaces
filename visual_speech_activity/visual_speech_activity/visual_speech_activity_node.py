@@ -123,6 +123,8 @@ class VisualSpeechActivityNode(Node):
         # Performance tracking
         self.total_processing_time = 0.0
         self.processed_messages = 0
+        self.max_processing_time = 0.0
+        self.min_processing_time = float('inf')
         
         # Initialize visualization collection for multi-face images
         self.pending_visualizations = []  # List to collect face visualizations for multi-face images
@@ -249,11 +251,13 @@ class VisualSpeechActivityNode(Node):
         self.vsdlm_debug_save_crops = self.get_parameter('vsdlm_debug_save_crops').get_parameter_value().bool_value
         
         # Set logger level based on debug flag
+        # When debug is enabled, show DEBUG level messages
+        # When debug is disabled, show INFO level messages (including TIMING logs)
         if self.enable_debug_output:
-            self.get_logger().set_level(rclpy.logging.LoggingSeverity.INFO)
-            self.get_logger().debug("[DEBUG MODE ENABLED] Verbose logging activated")
+            self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
+            self.get_logger().info("[DEBUG MODE ENABLED] Verbose logging activated")
         else:
-            self.get_logger().set_level(rclpy.logging.LoggingSeverity.WARN)
+            self.get_logger().set_level(rclpy.logging.LoggingSeverity.INFO)
     
     def _get_weights_directory_path(self) -> str:
         """
@@ -631,14 +635,26 @@ class VisualSpeechActivityNode(Node):
         # Publish results
         self._publish_speaking_array(speaking_recognitions)
         
-        # Track performance
-        processing_time = time.time() - start_time
-        self.total_processing_time += processing_time
+        # Calculate and log timing information
+        processing_time = (time.time() - start_time) * 1000  # Convert to milliseconds
         self.processed_messages += 1
         
-        if self.enable_debug_output and self.processed_messages % 30 == 0:
+        # Update timing statistics
+        self.total_processing_time += processing_time
+        self.max_processing_time = max(self.max_processing_time, processing_time)
+        self.min_processing_time = min(self.min_processing_time, processing_time)
+        
+        # Log timing every 100 frames
+        if self.processed_messages % 100 == 0:
             avg_time = self.total_processing_time / self.processed_messages
-            self.get_logger().debug(f"Avg processing time: {avg_time*1000:.2f}ms")
+            self.get_logger().info(
+                f"[TIMING] Visual Speech Activity - Frame #{self.processed_messages}: "
+                f"Current: {processing_time:.2f}ms, "
+                f"Avg: {avg_time:.2f}ms, "
+                f"Min: {self.min_processing_time:.2f}ms, "
+                f"Max: {self.max_processing_time:.2f}ms, "
+                f"Faces: {len(speaking_recognitions)}"
+            )
     
     # -------------------------------------------------------------------------
     #                    Core Processing Methods

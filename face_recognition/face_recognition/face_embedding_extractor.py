@@ -67,7 +67,7 @@ class FaceEmbeddingExtractor:
             self.device = device
         light_green = "\033[38;5;82m"
         reset = "\033[0m"
-        print(f"{light_green}[INFO] Using device: {self.device}{reset}")
+        print(f"{light_green}[INFO] Using device for face embedding: {self.device}{reset}")
         # Model components
         self.model = None
         self.transform = None
