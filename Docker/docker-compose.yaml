@@ -19,11 +19,13 @@ services:
       - ../face_recognition:/workspace/src/face_recognition
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
+      - ./logs:/workspace/log
 
     tty: true
     stdin_open: true
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - PACKAGE_NAME=face_detection
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
@@ -54,11 +56,13 @@ services:
       - ../face_recognition:/workspace/src/face_recognition
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
+      - ./logs:/workspace/log
       
     tty: true
     stdin_open: true
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - PACKAGE_NAME=face_recognition
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
@@ -88,11 +92,13 @@ services:
       - ../face_recognition:/workspace/src/face_recognition
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
+      - ./logs:/workspace/log
 
     tty: true
     stdin_open: true
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - PACKAGE_NAME=gaze_estimation
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
@@ -122,11 +128,13 @@ services:
       - ../face_recognition:/workspace/src/face_recognition
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
+      - ./logs:/workspace/log
 
     tty: true
     stdin_open: true
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - PACKAGE_NAME=visual_speech_activity
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1

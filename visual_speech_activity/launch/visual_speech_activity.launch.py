@@ -8,7 +8,7 @@ import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, LogInfo
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, LogInfo, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -40,137 +40,118 @@ def _setup_visual_speech_activity(context, *args, **kwargs):
         
     defaults = params_yaml['visual_speech_activity_node']['ros__parameters']
 
-    # Visual speech activity node - use config file only, no parameter overrides
-    # Launch arguments will override config file values when provided
+    # Build node_params dict with LaunchConfiguration overrides
+    node_params = {}
+    params_to_expose = [
+        'recognition_input_topic',
+        'landmarks_input_topic',
+        'output_topic',
+        'output_image_topic',
+        'ros4hri_with_id',
+        'speaking_threshold',
+        'vsdlm_weights_path',
+        'vsdlm_weights_name',
+        'vsdlm_model_variant',
+        'vsdlm_execution_provider',
+        'vsdlm_mouth_height_ratio',
+        'vsdlm_temporal_smoothing',
+        'vsdlm_smoothing_window_size',
+        'vsdlm_min_confidence_for_change',
+        'window_size',
+        'movement_threshold',
+        'min_frames_for_detection',
+        'use_full_landmarks',
+        'rnn_enabled',
+        'enable_debug_output',
+        'vsdlm_debug_save_crops',
+        'image_topic',
+        'compressed_topic',
+        'use_face_recognition',
+        'enable_image_output',
+        'label_offset_y'
+    ]
+
+    for param in params_to_expose:
+        if param in defaults:
+            node_params[param] = LaunchConfiguration(param)
+
+    # Visual speech activity node
     visual_speech_activity_node = Node(
         package='visual_speech_activity',
         executable='visual_speech_activity_node',
         name='visual_speech_activity_node',
-        # Only pass config file - launch arguments will override automatically
-        parameters=[config_file],
+        # Pass config file first, then overrides
+        parameters=[config_file, node_params],
         output='screen',
         emulate_tty=True,
-        additional_env={'PYTHONPATH': new_py_path}
-            # arguments=['--ros-args', '--log-level', 'DEBUG']  # Set log level to DEBUG
-
     )
 
     return [
-        LogInfo(msg=f"Using PYTHONPATH: {new_py_path}"),
-        visual_speech_activity_node
+        LogInfo(msg=f"[visual_speech_activity] Using AI venv: {VENV_PATH}"),
+        LogInfo(msg=f"[visual_speech_activity] Injecting site-packages: {site_pkgs}"),
+        LogInfo(msg=f"[visual_speech_activity] Loading config from: {config_file}"),
+        SetEnvironmentVariable("PYTHONPATH", new_py_path),
+        visual_speech_activity_node,
     ]
 
 
 def generate_launch_description():
     """Generate launch description for visual speech activity detection."""
     
-    # Declare launch arguments
-    recognition_input_topic_arg = DeclareLaunchArgument(
-        'recognition_input_topic',
-        default_value='/humans/faces/recognized',
-        description='Input topic for facial recognition messages'
-    )
-    
-    landmarks_input_topic_arg = DeclareLaunchArgument(
-        'landmarks_input_topic',
-        default_value='/humans/faces/detected',
-        description='Input topic for facial landmarks messages'
-    )
-    
-    output_topic_arg = DeclareLaunchArgument(
-        'output_topic',
-        default_value='/humans/faces/speaking',
-        description='Output topic for speaking detection results'
-    )
-    
-    ros4hri_with_id_arg = DeclareLaunchArgument(
-        'ros4hri_with_id',
-        default_value='false',
-        description='Enable ROS4HRI per-ID mode (true) or array mode (false)'
-    )
-    
-    window_size_arg = DeclareLaunchArgument(
-        'window_size',
-        default_value='20',
-        description='Number of frames for temporal analysis window'
-    )
-    
-    movement_threshold_arg = DeclareLaunchArgument(
-        'movement_threshold',
-        default_value='0.02',
-        description='Minimum mouth aspect ratio variation to detect movement'
-    )
-    
-    speaking_threshold_arg = DeclareLaunchArgument(
-        'speaking_threshold',
-        default_value='0.5',
-        description='Confidence threshold for speaking classification'
-    )
-    
-    # VSDLM Temporal Smoothing Arguments
-    vsdlm_temporal_smoothing_arg = DeclareLaunchArgument(
-        'vsdlm_temporal_smoothing',
-        default_value='true',
-        description='Enable VSDLM temporal smoothing to reduce flickering'
-    )
-    
-    vsdlm_smoothing_window_size_arg = DeclareLaunchArgument(
-        'vsdlm_smoothing_window_size',
-        default_value='5',
-        description='Number of frames for VSDLM temporal smoothing window'
-    )
-    
-    vsdlm_min_confidence_for_change_arg = DeclareLaunchArgument(
-        'vsdlm_min_confidence_for_change',
-        default_value='0.1',
-        description='Minimum confidence difference required to change VSDLM speaking state'
-    )
-    
-    min_frames_for_detection_arg = DeclareLaunchArgument(
-        'min_frames_for_detection',
-        default_value='5',
-        description='Minimum frames required before speaking detection'
-    )
-    
-    enable_debug_output_arg = DeclareLaunchArgument(
-        'enable_debug_output',
-        default_value='false',
-        description='Enable debug output logging'
-    )
-    
-    use_full_landmarks_arg = DeclareLaunchArgument(
-        'use_full_landmarks',
-        default_value='true',
-        description='Use full 68-point dlib landmarks when available'
-    )
-    
-    rnn_enabled_arg = DeclareLaunchArgument(
-        'rnn_enabled',
-        default_value='true',
-        description='Enable RNN-based temporal classification'
-    )
-    
-    use_face_recognition_arg = DeclareLaunchArgument(
-        'use_face_recognition',
-        default_value='true',
-        description='Use face recognition for robust identity tracking'
-    )
+    # Get config file
+    config_dir = get_package_share_directory("visual_speech_activity")
+    config_file = os.path.join(config_dir, "config", "visual_speech_activity_params.yaml")
 
-    return LaunchDescription([
-        recognition_input_topic_arg,
-        landmarks_input_topic_arg,
-        output_topic_arg,
-        ros4hri_with_id_arg,
-        window_size_arg,
-        movement_threshold_arg,
-        speaking_threshold_arg,
-        vsdlm_temporal_smoothing_arg,
-        vsdlm_smoothing_window_size_arg,
-        vsdlm_min_confidence_for_change_arg,
-        min_frames_for_detection_arg,
-        enable_debug_output_arg,
-        use_full_landmarks_arg,
-        rnn_enabled_arg,
-        use_face_recognition_arg,
-        OpaqueFunction(function=_setup_visual_speech_activity)
-    ])
+    # Load defaults from YAML
+    with open(config_file, 'r') as f:
+        params_yaml = yaml.safe_load(f)
+        
+    defaults = params_yaml['visual_speech_activity_node']['ros__parameters']
+
+    # Declare launch arguments
+    launch_args = []
+    params_to_expose = [
+        'recognition_input_topic',
+        'landmarks_input_topic',
+        'output_topic',
+        'output_image_topic',
+        'ros4hri_with_id',
+        'speaking_threshold',
+        'vsdlm_weights_path',
+        'vsdlm_weights_name',
+        'vsdlm_model_variant',
+        'vsdlm_execution_provider',
+        'vsdlm_mouth_height_ratio',
+        'vsdlm_temporal_smoothing',
+        'vsdlm_smoothing_window_size',
+        'vsdlm_min_confidence_for_change',
+        'window_size',
+        'movement_threshold',
+        'min_frames_for_detection',
+        'use_full_landmarks',
+        'rnn_enabled',
+        'enable_debug_output',
+        'vsdlm_debug_save_crops',
+        'image_topic',
+        'compressed_topic',
+        'use_face_recognition',
+        'enable_image_output',
+        'label_offset_y'
+    ]
+
+    for param in params_to_expose:
+        if param in defaults:
+            launch_args.append(
+                DeclareLaunchArgument(
+                    param,
+                    default_value=str(defaults[param]),
+                    description=f'Parameter {param} from visual_speech_activity_params.yaml'
+                )
+            )
+    
+    return LaunchDescription(
+        launch_args +
+        [
+            OpaqueFunction(function=_setup_visual_speech_activity),
+        ]
+    )

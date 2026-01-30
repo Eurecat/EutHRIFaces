@@ -69,6 +69,22 @@ visual_speech_activity_node:
     # Lower values = more responsive but potentially more flickering
     vsdlm_min_confidence_for_change: 0.1
     
+    # Legacy Temporal Analysis Parameters (if RNN fallback is used)
+    # Number of frames for temporal analysis window
+    window_size: 20
+    
+    # Minimum mouth aspect ratio variation to detect movement
+    movement_threshold: 0.02
+    
+    # Minimum frames required before speaking detection
+    min_frames_for_detection: 5
+    
+    # Use full 68-point dlib landmarks when available
+    use_full_landmarks: true
+    
+    # Enable RNN-based temporal classification
+    rnn_enabled: true
+    
     # Debug Configuration
     # Enable verbose debug output with logger.debug
     enable_debug_output: false

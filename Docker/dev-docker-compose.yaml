@@ -16,7 +16,7 @@ services:
       - ~/.xauth_docker/share/:/tmp/xauth/
       - ./.vscode:/workspace/.vscode
       # Logs volume for easy access from VS Code
-      - ./logs:/workspace/logs
+      - ./logs:/workspace/log
       #MAP DEPS if needed
       - ../face_detection:/workspace/src/face_detection
       - ../face_recognition:/workspace/src/face_recognition

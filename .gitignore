@@ -211,3 +211,8 @@ face_detection/weights
 Docker/deps/
 face_recognition/database
 visual_speech_activity/weights
+logs/
+
+# Docker logs - ignore all except README
+Docker/logs/*
+!Docker/logs/README.md
