@@ -2,9 +2,43 @@
 
 ROS2 packages for face-related perception capabilities in Human-Robot Interaction (HRI) applications.
 
-This repository contains three main packages:
+## 🏗️ Architecture Overview
 
-## Packages
+![Perception Stack Diagram](Docker/imgs/perceptionstack_diagram.jpeg)
+
+This diagram shows the complete perception stack architecture organized by domain. **EutHRIFaces** is part of the Visual Perception Domain and focuses specifically on face-related processing.
+
+### Key Characteristics
+
+- **Standalone & Independent**: This repository contains self-contained ROS2 packages that work independently
+- **Simple Input Requirements**: Only requires a camera image stream (e.g., `/camera/image_raw/compressed`)
+- **ROS4HRI Standard**: Publishes all outputs following the [ROS4HRI standard](https://github.com/ros4hri)
+- **Message Definitions**: The `hri_msgs` package is included in the `Docker/deps/` folder
+- **Docker Architecture**: Each ROS2 package runs in its own container, all built from the same base image for consistency&optimization
+
+### Integration Example
+
+```bash
+# Any camera publisher (e.g., from EutEntityDetection/eut_utils)
+/camera/image_raw/compressed  →  [EutHRIFaces]  →  ROS4HRI topics
+                                                   ├─ /humans/faces/tracked
+                                                   ├─ /humans/faces/landmarks  (default: optimized)
+                                                   ├─ /humans/faces/gaze
+                                                   └─ /humans/persons/face
+```
+
+**Note on Topic Names:**
+- **Default mode** (optimized): Topics without individual IDs (e.g., `/humans/faces/landmarks`)
+- **With ID mode** (ros4hri_with_id): Topics include face IDs (e.g., `/humans/faces/{face_id}/landmarks`)
+- The ID mode provides full ROS4HRI compliance but with slightly higher overhead. Enable it via launch parameter `ros4hri_with_id:=true`
+
+Once you have a camera publishing images, EutHRIFaces packages will automatically detect, recognize, and analyze faces, publishing standardized HRI data for downstream multimodal fusion (e.g., EutPersonManager).
+
+---
+
+## 📦 Packages
+
+This repository contains four main packages:
 
 ### 1. face_detection 🔍
 
@@ -38,7 +72,18 @@ Gaze direction estimation from facial landmarks.
   - Point of attention estimation
   - 3D gaze vectors
 
-## Quick Start
+### 4. visual_speech_activity 👄
+Visual speech activity detection from lip movements.
+
+- **Planned Features**:
+  - Lip movement detection
+  - Visual speech activity detection (VAD)
+  - Speaking/non-speaking classification
+  - Multimodal fusion support
+
+---
+
+## 🚀 Quick Start
 
 ## Installation & Setup
 
@@ -64,9 +109,9 @@ cd EutHRIFaces
    
    You can use `--clean-rebuild` to force a clean rebuild from scratch (i.e. no cached layers).
 
-## Launch
+## 🐳 Launch
 
-### Option A: Deployment
+### Option A: Deployment (Docker Compose)
 
 As simple as...
    ```bash
@@ -74,9 +119,9 @@ As simple as...
    ```
 ... within `Docker/` folder
 
-Will start all face processing modules (face detection, face recognition, and gaze estimation).
+**Architecture:** Each ROS2 package (face_detection, face_recognition, gaze_estimation, visual_speech_activity) runs in its own dedicated container. All containers are built from the same base image, ensuring consistency while allowing independent scaling and resource management.
 
-If you want to run only specific modules, you can scale down the services you don't need:
+This will start all face processing modules. If you want to run only specific modules, you can scale down the services you don't need:
 
    ```bash
    # Run only face detection
