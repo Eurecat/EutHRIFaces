@@ -32,32 +32,35 @@ if [ ! -d $DEPS_DIR ]; then
 fi
 
 # Check arguments
-BASE_IMAGE="eut_ros_torch:jazzy"
-CPU_ONLY="false"
+TARGET_DISTRO="jazzy"
+BASE_IMAGE="eut_ros_torch:${TARGET_DISTRO}"
 REBUILD=false
 NO_VCS=false
+USE_VULCANEXUS=false
+USE_HUMBLE=false
 for arg in "$@"; do
     if [ "$arg" == "--clean-rebuild" ]; then
         REBUILD=true
     fi
     if [ "$arg" == "--vulcanexus" ]; then
-        BASE_IMAGE="eut_ros_vulcanexus_torch:jazzy"
+        BASE_IMAGE="eut_ros_vulcanexus_torch:${TARGET_DISTRO}"
+        USE_VULCANEXUS=true
     fi
-    if [ "$arg" == "--cpu" ]; then
-        CPU_ONLY="true"
+    if [ "$arg" == "--humble" ]; then
+        TARGET_DISTRO="humble"
+        BASE_IMAGE="eut_ros_torch:${TARGET_DISTRO}"
+        USE_HUMBLE=true
     fi
     if [ "$arg" == "--no-vcs" ]; then
         NO_VCS=true
     fi
 done
 
-# Update base image for CPU variant
-if [ "$CPU_ONLY" = "true" ]; then
-    if [[ "${BASE_IMAGE}" == *"vulcanexus"* ]]; then
-        BASE_IMAGE="eut_ros_vulcanexus_torch_cpu:jazzy"
-    else
-        BASE_IMAGE="eut_ros_torch_cpu:jazzy"
-    fi
+# Validate that Vulcanexus and Humble are not used together
+if $USE_VULCANEXUS && $USE_HUMBLE; then
+    echo "ERROR: --vulcanexus and --humble cannot be used together."
+    echo "Vulcanexus is only available for Jazzy."
+    exit 1
 fi
 
 if $REBUILD; then
@@ -80,21 +83,18 @@ fi
 
 # Set image name based on the base image choice and CPU flag
 if [[ "${BASE_IMAGE}" == *"vulcanexus"* ]]; then
-    if [ "$CPU_ONLY" = "true" ]; then
-        IMAGE_NAME="eut_human_face_vulcanexus_cpu:jazzy"
-        echo "Building with Vulcanexus Jazzy CPU-only base image..."
-    else
-        IMAGE_NAME="eut_human_face_vulcanexus:jazzy"
-        echo "Building with Vulcanexus Jazzy base image..."
-    fi
+    echo "Building with Vulcanexus ${TARGET_DISTRO} base image..."
 else
-    if [ "$CPU_ONLY" = "true" ]; then
-        IMAGE_NAME="eut_human_face_cpu:jazzy"
-        echo "Building with standard ROS2 Jazzy CPU-only base image..."
-    else
-        IMAGE_NAME="eut_human_face:jazzy"
-        echo "Building with standard ROS2 Jazzy base image..."
-    fi
+    echo "Building with standard ROS2 ${TARGET_DISTRO} base image..."
+fi
+
+# Set image name based on the base image choice
+if [[ "${BASE_IMAGE}" == *"vulcanexus"* ]]; then
+    IMAGE_NAME="eut_human_face_vulcanexus:${TARGET_DISTRO}"
+    echo "Building with Vulcanexus ${TARGET_DISTRO} base image..."
+else
+    IMAGE_NAME="eut_human_face:${TARGET_DISTRO}"
+    echo "Building with standard ROS2 ${TARGET_DISTRO} base image..."
 fi
 
 echo "Base image: ${BASE_IMAGE}"
