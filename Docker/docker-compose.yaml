@@ -20,11 +20,15 @@ services:
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
       - ./logs:/workspace/log
+      # Cyclone DDS configuration for TiagoPro WiFi
+      - ./cyclonedds_wifi.xml:/etc/cyclonedds.xml:ro
 
     tty: true
     stdin_open: true
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}  
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastdds_cpp}  
       - PACKAGE_NAME=face_detection
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
@@ -33,7 +37,8 @@ services:
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
-    command: bash -c "source /workspace/install/setup.bash && ros2 launch face_detection face_detection.launch.py compressed_topic:=/camera/image_raw/compressed" #ros4hri_with_id:=true
+    command: bash -c "source /workspace/install/setup.bash && ros2 launch face_detection face_detection.launch.py compressed_topic:=${IMG_RAW_TOPIC:-/camera/image_raw/compressed}" #ros4hri_with_id:=true
+    entrypoint: ["/entrypoint.sh"]
     stop_signal: SIGINT
     stop_grace_period: 30s
   
@@ -55,12 +60,16 @@ services:
       - ../face_recognition:/workspace/src/face_recognition
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
+      # Cyclone DDS configuration for TiagoPro WiFi
+      - ./cyclonedds_wifi.xml:/etc/cyclonedds.xml:ro
       - ./logs:/workspace/log
       
     tty: true
     stdin_open: true
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}  
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastdds_cpp} 
       - PACKAGE_NAME=face_recognition
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
@@ -69,7 +78,7 @@ services:
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
-    command: bash -c "source /workspace/install/setup.bash && ros2 launch face_recognition face_recognition.launch.py compressed_topic:=/camera/image_raw/compressed"
+    command: bash -c "source /workspace/install/setup.bash && ros2 launch face_recognition face_recognition.launch.py compressed_topic:=${IMG_RAW_TOPIC:-/camera/image_raw/compressed}"
     stop_signal: SIGINT
     stop_grace_period: 30s
 
@@ -91,12 +100,16 @@ services:
       - ../face_recognition:/workspace/src/face_recognition
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
+      # Cyclone DDS configuration for TiagoPro WiFi
+      - ./cyclonedds_wifi.xml:/etc/cyclonedds.xml:ro
       - ./logs:/workspace/log
 
     tty: true
     stdin_open: true
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}  
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastdds_cpp}   
       - PACKAGE_NAME=gaze_estimation
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
@@ -105,7 +118,7 @@ services:
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
-    command: bash -c "source /workspace/install/setup.bash && ros2 launch gaze_estimation gaze_estimation.launch.py compressed_topic:=/camera/image_raw/compressed"
+    command: bash -c "source /workspace/install/setup.bash && ros2 launch gaze_estimation gaze_estimation.launch.py compressed_topic:=${IMG_RAW_TOPIC:-/camera/image_raw/compressed}"
     stop_signal: SIGINT
     stop_grace_period: 30s
 
@@ -128,13 +141,14 @@ services:
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
       - ./logs:/workspace/log
-
+      # Cyclone DDS configuration for TiagoPro WiFi
+      - ./cyclonedds_wifi.xml:/etc/cyclonedds.xml:ro
     tty: true
     stdin_open: true
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
-      - PACKAGE_NAME=visual_speech_activity
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
       - NVIDIA_VISIBLE_DEVICES=all 
+      - PACKAGE_NAME=visual_speech_activity
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
       - XAUTHORITY=/tmp/xauth/.docker.xauth     
@@ -154,8 +168,8 @@ services:
     volumes:
       - mongodb_faces_data:/data/db
     environment:
-      - MONGO_INITDB_ROOT_USERNAME=eurecat
-      - MONGO_INITDB_ROOT_PASSWORD=cerdanyola
+      - MONGODB_INITDB_ROOT_USERNAME=eurecat
+      - MONGODB_INITDB_ROOT_PASSWORD=cerdanyola
     stop_signal: SIGTERM
     stop_grace_period: 60s
     #if any change in env vars, need to delete volume coghri_faces_mongodb_data to reinit DB
