@@ -74,6 +74,8 @@ fi
 
 echo "=== ENTRYPOINT END $(date) ==="
 
+printenv | grep -E 'RMW|CYCLONEDDS|ROS_DOMAIN'
+
 # Export ROS_LOG_DIR for the command that follows
 # This ensures ros2 launch commands will use our timestamped directory
 export ROS_LOG_DIR="$RUNTIME_LOG_DIR"
