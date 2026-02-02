@@ -1175,6 +1175,7 @@ class IdentityManager:
         except Exception as e:
             self.logger.error(f"[ERROR] Failed to load identity database from MongoDB: {e}")
     
+    
     def _normalize_embedding(self, embedding: np.ndarray) -> np.ndarray:
         """Normalize an embedding vector."""
         embedding = embedding.flatten()

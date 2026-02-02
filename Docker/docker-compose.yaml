@@ -9,8 +9,8 @@ services:
     runtime: ${DOCKER_RUNTIME:-runc}
     image: ${BUILT_IMAGE}
     privileged: true
-    # depends_on:
-      # - mongodb_faces_service
+    depends_on:
+      - mongodb_faces_service
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.xauth_docker/share/:/tmp/xauth/
@@ -34,7 +34,6 @@ services:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
     command: bash -c "source /workspace/install/setup.bash && ros2 launch face_detection face_detection.launch.py compressed_topic:=/camera/image_raw/compressed" #ros4hri_with_id:=true
-    entrypoint: ["/entrypoint.sh"]
     stop_signal: SIGINT
     stop_grace_period: 30s
   
@@ -46,8 +45,8 @@ services:
     runtime: ${DOCKER_RUNTIME:-runc}
     image: ${BUILT_IMAGE}
     privileged: true
-    # depends_on:
-      # - mongodb_faces_service
+    depends_on:
+      - mongodb_faces_service
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.xauth_docker/share/:/tmp/xauth/
@@ -82,8 +81,8 @@ services:
     runtime: ${DOCKER_RUNTIME:-runc}
     image: ${BUILT_IMAGE}
     privileged: true
-    # depends_on:
-    #   - mongodb_faces_service
+    depends_on:
+      - mongodb_faces_service
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.xauth_docker/share/:/tmp/xauth/
@@ -118,8 +117,8 @@ services:
     runtime: ${DOCKER_RUNTIME:-runc}
     image: ${BUILT_IMAGE}
     privileged: true
-    # depends_on:
-    #   - mongodb_faces_service
+    depends_on:
+      - mongodb_faces_service
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.xauth_docker/share/:/tmp/xauth/
@@ -155,10 +154,12 @@ services:
     volumes:
       - mongodb_faces_data:/data/db
     environment:
-      - MONGODB_INITDB_ROOT_USERNAME=eurecat
-      - MONGODB_INITDB_ROOT_PASSWORD=cerdanyola
+      - MONGO_INITDB_ROOT_USERNAME=eurecat
+      - MONGO_INITDB_ROOT_PASSWORD=cerdanyola
     stop_signal: SIGTERM
     stop_grace_period: 60s
+    #if any change in env vars, need to delete volume coghri_faces_mongodb_data to reinit DB
+    #docker compose down -v
 
   mongo_express_faces:
     image: mongo-express:latest
