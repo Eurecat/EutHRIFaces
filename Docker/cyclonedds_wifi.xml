@@ -5,7 +5,7 @@
       <AllowMulticast>false</AllowMulticast>
       <Interfaces>
         <!-- Your PC wifi interface name -->
-        <NetworkInterface name="wlp114s0f0" priority="2" presence_required="true"/>
+        <NetworkInterface name="wlp47s0" priority="2" presence_required="true"/>
         <NetworkInterface name="lo" priority="0"/>
       </Interfaces>
     </General>
@@ -15,7 +15,7 @@
       <MaxAutoParticipantIndex>500</MaxAutoParticipantIndex>
       <Peers>
         <Peer Address="localhost"/>
-        <Peer Address="10.68.0.1"/> <!-- robot -->
+        <Peer Address="10.68.0.1"/> <!-- robot IP over Tiago Pro WiFi -->
       </Peers>
     </Discovery>
   </Domain>

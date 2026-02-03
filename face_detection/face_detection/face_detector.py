@@ -132,10 +132,16 @@ class FaceDetectorNode(Node):
         # Create image publisher for visualization
         self.image_publisher = None
         if self.enable_image_output:
+            image_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,   # 1–5 is ideal for images over Wi-Fi
+                durability=DurabilityPolicy.VOLATILE
+            )
             self.image_publisher = self.create_publisher(
                 Image,
                 self.output_image_topic,
-                 10)
+                image_qos)
 
         # Timer for periodic inference (copied from perception node pattern)
         timer_period = 1.0 / self.processing_rate_hz  # Use processing_rate_hz parameter
