@@ -168,8 +168,8 @@ services:
     volumes:
       - mongodb_faces_data:/data/db
     environment:
-      - MONGODB_INITDB_ROOT_USERNAME=eurecat
-      - MONGODB_INITDB_ROOT_PASSWORD=cerdanyola
+      - MONGO_INITDB_ROOT_USERNAME=eurecat
+      - MONGO_INITDB_ROOT_PASSWORD=cerdanyola
     stop_signal: SIGTERM
     stop_grace_period: 60s
     #if any change in env vars, need to delete volume coghri_faces_mongodb_data to reinit DB

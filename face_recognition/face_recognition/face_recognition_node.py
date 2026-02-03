@@ -359,7 +359,7 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('ewma_alpha', 0.6)
         
         # MongoDB parameters for identity storage
-        self.declare_parameter('mongo_uri', 'mongodb://eurecat:cerdanyola@localhost:27018/?authSource=admin&serverSelectionTimeoutMS=5000') #'mongodb://localhost:27018/')#
+        self.declare_parameter('mongo_uri', 'mongodb://eurecat:cerdanyola@localhost:27018/?authSource=admin&serverSelectionTimeoutMS=5000') #'mongodb://localhost:27018/')# #eurecat:cerdanyola@mongodb:27018/
         self.declare_parameter('mongo_db_name', 'face_recognition_db')
         self.declare_parameter('mongo_collection_name', 'identity_database')
         
@@ -434,10 +434,16 @@ class FaceRecognitionNode(Node):
         self.enable_image_output = self.get_parameter('enable_image_output').get_parameter_value().bool_value
         if self.enable_image_output:
             output_image_topic = self.get_parameter('output_image_topic').get_parameter_value().string_value
+            image_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,   # 1–5 is ideal for images over Wi-Fi
+                durability=DurabilityPolicy.VOLATILE
+            )
             self.image_output_publisher = self.create_publisher(
                 Image,
                 output_image_topic,
-                self.qos_profile
+                image_qos
             )
             self.get_logger().debug(f"Image output enabled: {output_image_topic}")
         else:

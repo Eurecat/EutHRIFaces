@@ -151,10 +151,16 @@ class GazeEstimationNode(Node):
                     self.qos_profile
                 )
             
+            image_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,   # 1–5 is ideal for images over Wi-Fi
+                durability=DurabilityPolicy.VOLATILE
+            )
             self.image_pub = self.create_publisher(
                 Image,
                 self.output_image_topic,
-                10
+                image_qos
             )
 
         # Timer for periodic inference (copied from perception node pattern)
