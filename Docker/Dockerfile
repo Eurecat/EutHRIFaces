@@ -36,7 +36,7 @@ WORKDIR /workspace
 
 # Copy requirements.txt and install Python dependencies in the virtual environment
 COPY requirements.txt /workspace/requirements.txt
-RUN /bin/bash -c "source /opt/ros_python_env/bin/activate && uv pip install --no-cache -r requirements.txt"
+RUN /bin/bash -c "source /opt/ros_python_env/bin/activate && uv pip install -r requirements.txt"
 
 # ------------------------------------------------------------
 # Setup rosdep

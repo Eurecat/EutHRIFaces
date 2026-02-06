@@ -109,7 +109,6 @@ nvidia-nvshmem-cu12==3.4.5
 nvidia-nvtx-cu12==12.8.90
 onnx==1.16.1
 onnxruntime-gpu==1.20.1
-open3d==0.19.0
 opencv-contrib-python==4.11.0.86
 opencv-python==4.11.0.86
 opencv-python-headless==4.11.0.86
@@ -170,7 +169,6 @@ torch==2.10.0
 torchvision==0.25.0
 tqdm==4.67.1
 traitlets==5.14.3
-trimesh==4.11.1
 triton==3.6.0
 typer-slim==0.21.1
 typing-extensions==4.15.0
