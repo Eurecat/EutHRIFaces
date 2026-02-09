@@ -115,5 +115,18 @@ else
     echo "BUILT_IMAGE=${IMAGE_NAME}" >> "$ENV_FILE"
 fi
 
+# Set or Update DOCKER_RUNTIME based on CPU_ONLY flag
+if [ "$CPU_ONLY" = "true" ]; then
+    DOCKER_RUNTIME="runc"
+else
+    DOCKER_RUNTIME="nvidia"
+fi
+
+if grep -q -E "^DOCKER_RUNTIME=" "$ENV_FILE"; then
+    sed -i "s/^DOCKER_RUNTIME=.*/DOCKER_RUNTIME=$DOCKER_RUNTIME/" "$ENV_FILE"
+else
+    echo "DOCKER_RUNTIME=$DOCKER_RUNTIME" >> "$ENV_FILE"
+fi
+
 echo "Application Docker image built successfully!"
 echo "Build process completed!"
