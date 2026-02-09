@@ -221,6 +221,25 @@ To delete the database, remove the associated Docker volume.
 You can also manage entries via the web interface at [http://0.0.0.0:8081/db/face_recognition_db/identity_database/](http://0.0.0.0:8081/db/face_recognition_db/identity_database/).
 
 
+## Troubleshooting
+
+## Troubleshooting
+
+### Port 27018 Already in Use
+
+If you encounter the error `failed to bind host port for 0.0.0.0:27018:172.21.0.2:27018/tcp: address already in use`, this means another service is already occupying port 27018. The docker-compose MongoDB service cannot start because the port is blocked. To resolve this, identify and stop the conflicting service with `sudo lsof -i :27018` and kill the process if needed, then restart docker-compose. 
+
+```bash
+sudo lsof -ti:27018 | xargs -r sudo kill -9
+```
+### Container Name Conflicts
+
+If you switch between `dev-docker-compose.yaml` and `docker-compose.yaml`, you may encounter errors like `Conflict. The container name "/mongodb_faces" is already in use`. This happens because containers from the previous compose file are still running. To resolve this, remove all containers and restart: 
+```bash
+docker rm -f $(docker ps -aq)
+```
+then run `docker compose up` again. This cleanly removes all existing containers and allows the new composition to start fresh.
+
 ## License
 
 Apache-2.0
