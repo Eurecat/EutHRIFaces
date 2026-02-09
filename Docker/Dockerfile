@@ -1,22 +1,25 @@
 # Choose the base image at build time. Defaults to Vulcanexus.
 ARG BASE_IMAGE="eut_ros_vulcanexus_torch:jazzy"
+ARG CPU_ONLY="false"
 
 FROM ${BASE_IMAGE}
 #https://github.com/Eurecat/EutRobAIDockers
 
-# (Optional) re-declare the arg if you want to use it in later instructions
+# (Optional) re-declare the args if you want to use them in later instructions
 ARG BASE_IMAGE
+ARG CPU_ONLY
 
 # Prevent interactive prompts during apt installs
 ENV DEBIAN_FRONTEND=noninteractive
 
- # Install this for onnxgpu dependencies
-RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-RUN dpkg -i cuda-keyring_1.1-1_all.deb
+# Install CUDA dependencies only if not CPU_ONLY
+RUN if [ "$CPU_ONLY" = "false" ]; then \
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
+        dpkg -i cuda-keyring_1.1-1_all.deb; \
+    fi
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libcudnn9-cuda-12 \
-    cuda-libraries-12-9 \
+    $(if [ "$CPU_ONLY" = "false" ]; then echo "libcudnn9-cuda-12 cuda-libraries-12-9"; fi) \
     ffmpeg \
 && rm -rf /var/lib/apt/lists/*
 
@@ -34,9 +37,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /workspace
 
-# Copy requirements.txt and install Python dependencies in the virtual environment
+# Copy all requirements files
 COPY requirements.txt /workspace/requirements.txt
-RUN /bin/bash -c "source /opt/ros_python_env/bin/activate && uv pip install -r requirements.txt"
+COPY requirements_detailed.txt /workspace/requirements_detailed.txt
+COPY requirements_detailed_cpu.txt /workspace/requirements_detailed_cpu.txt
+
+# Copy requirements files and install Python dependencies in the virtual environment
+# Use CPU or GPU detailed requirements based on build arg
+RUN if [ "$CPU_ONLY" = "true" ]; then \
+        cp requirements_detailed_cpu.txt requirements_detailed_active.txt; \
+    else \
+        cp requirements_detailed.txt requirements_detailed_active.txt; \
+    fi
+
+# Install packages in the ros_python_env
+RUN /bin/bash -c "source /opt/ros_python_env/bin/activate && uv pip install -r requirements_detailed_active.txt"
 
 # ------------------------------------------------------------
 # Setup rosdep

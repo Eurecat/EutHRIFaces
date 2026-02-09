@@ -5,7 +5,9 @@
 # Usage:
 # - Default (Vulcanexus): ./build_container.sh
 # - Standard ROS2: ./build_container.sh --standard-ros
-# - Clean rebuild: ./build_container.sh --clean-rebuild [--standard-ros]
+# - CPU-only version: ./build_container.sh --cpu
+# - CPU-only Vulcanexus: ./build_container.sh --cpu --vulcanexus
+# - Clean rebuild: ./build_container.sh --clean-rebuild [--standard-ros] [--cpu]
 #
 
 export DOCKER_BUILDKIT=1
@@ -31,6 +33,7 @@ fi
 
 # Check arguments
 BASE_IMAGE="eut_ros_torch:jazzy"
+CPU_ONLY="false"
 REBUILD=false
 NO_VCS=false
 for arg in "$@"; do
@@ -40,10 +43,22 @@ for arg in "$@"; do
     if [ "$arg" == "--vulcanexus" ]; then
         BASE_IMAGE="eut_ros_vulcanexus_torch:jazzy"
     fi
+    if [ "$arg" == "--cpu" ]; then
+        CPU_ONLY="true"
+    fi
     if [ "$arg" == "--no-vcs" ]; then
         NO_VCS=true
     fi
 done
+
+# Update base image for CPU variant
+if [ "$CPU_ONLY" = "true" ]; then
+    if [[ "${BASE_IMAGE}" == *"vulcanexus"* ]]; then
+        BASE_IMAGE="eut_ros_vulcanexus_torch_cpu:jazzy"
+    else
+        BASE_IMAGE="eut_ros_torch_cpu:jazzy"
+    fi
+fi
 
 if $REBUILD; then
     echo "Rebuilding: cleaning up dependencies..."
@@ -63,30 +78,34 @@ else
     echo "Skipping VCS operations..."
 fi
 
-# Display build configuration
+# Set image name based on the base image choice and CPU flag
 if [[ "${BASE_IMAGE}" == *"vulcanexus"* ]]; then
-    echo "Building with Vulcanexus Jazzy base image..."
+    if [ "$CPU_ONLY" = "true" ]; then
+        IMAGE_NAME="eut_human_face_vulcanexus_cpu:jazzy"
+        echo "Building with Vulcanexus Jazzy CPU-only base image..."
+    else
+        IMAGE_NAME="eut_human_face_vulcanexus:jazzy"
+        echo "Building with Vulcanexus Jazzy base image..."
+    fi
 else
-    echo "Building with standard ROS2 Jazzy base image..."
-fi
-
-# Set image name based on the base image choice
-if [[ "${BASE_IMAGE}" == *"vulcanexus"* ]]; then
-    IMAGE_NAME="eut_human_face_vulcanexus:jazzy"
-    echo "Building with Vulcanexus Jazzy base image..."
-else
-    IMAGE_NAME="eut_human_face:jazzy"
-    echo "Building with standard ROS2 Jazzy base image..."
+    if [ "$CPU_ONLY" = "true" ]; then
+        IMAGE_NAME="eut_human_face_cpu:jazzy"
+        echo "Building with standard ROS2 Jazzy CPU-only base image..."
+    else
+        IMAGE_NAME="eut_human_face:jazzy"
+        echo "Building with standard ROS2 Jazzy base image..."
+    fi
 fi
 
 echo "Base image: ${BASE_IMAGE}"
+echo "CPU Only: ${CPU_ONLY}"
 echo "Output image: ${IMAGE_NAME}"
 
 if $REBUILD; then
     echo "Rebuilding the application Docker image..."
-    docker build --no-cache . --build-arg BASE_IMAGE="${BASE_IMAGE}" -t ${IMAGE_NAME} -f Dockerfile
+    docker build --no-cache . --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg CPU_ONLY="${CPU_ONLY}" -t ${IMAGE_NAME} -f Dockerfile
 else
-    docker build . --build-arg BASE_IMAGE="${BASE_IMAGE}" -t ${IMAGE_NAME} -f Dockerfile
+    docker build . --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg CPU_ONLY="${CPU_ONLY}" -t ${IMAGE_NAME} -f Dockerfile
 fi
 
 # Set or Update BUILT_IMAGE 
