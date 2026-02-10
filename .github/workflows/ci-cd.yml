@@ -354,16 +354,29 @@ jobs:
           find . -name "coverage*.xml" -o -name "coverage*.lcov" 2>/dev/null || true
           
           echo ""
-          echo "📋 Coverage XML files found:"
-          ls -lh coverage-*.xml 2>/dev/null || echo "⚠️ No coverage-*.xml files found yet"
+          echo "📋 Coverage LCOV files found:"
+          ls -lh coverage-*.lcov 2>/dev/null || echo "⚠️ No coverage-*.lcov files found yet"
+          ls -lh build/*/coverage.lcov 2>/dev/null || echo "⚠️ No build/*/coverage.lcov files found yet"
           
           # Install lcov_cobertura for coverage conversion
           python3 -m pip install lcov_cobertura
           
           # Convert Python coverage for all packages
           for pkg in ${{ env.PY_PACKAGES }}; do
-            if [ -f "build/${pkg}/coverage.lcov" ]; then
-              python3 -m lcov_cobertura build/${pkg}/coverage.lcov -o coverage-py-${pkg}.xml
+            LCOV_FILE=""
+            
+            # Check multiple possible locations for the lcov file
+            if [ -f "coverage-py-${pkg}.lcov" ]; then
+              LCOV_FILE="coverage-py-${pkg}.lcov"
+              echo "✅ Found coverage file at workspace root: ${LCOV_FILE}"
+            elif [ -f "build/${pkg}/coverage.lcov" ]; then
+              LCOV_FILE="build/${pkg}/coverage.lcov"
+              echo "✅ Found coverage file in build directory: ${LCOV_FILE}"
+            fi
+            
+            # Convert if found
+            if [ -n "$LCOV_FILE" ]; then
+              python3 -m lcov_cobertura "$LCOV_FILE" -o "coverage-py-${pkg}.xml"
               echo "✅ Converted Python coverage for ${pkg} to XML"
             else
               echo "⚠️ No Python coverage file found for ${pkg}"
