@@ -164,17 +164,27 @@ jobs:
                 # Force garbage collection before each package
                 python3 -c \"import gc; gc.collect()\" 2>/dev/null || true
                 
+                # Verify package is installed and importable
+                echo \"🔍 Verifying \$pkg installation...\"
+                python3 -c \"import \$pkg; print(f'✅ \$pkg imported successfully')\" || echo \"⚠️ Warning: \$pkg import failed\"
+                
+                # Show test files that will be discovered
+                echo \"📋 Test files for \$pkg:\"
+                find src/\$pkg/test -name 'test_*.py' 2>/dev/null || echo \"No test files found\"
+                
                 # Run tests with memory-optimized settings
                 colcon test \
                   --packages-select \$pkg \
                   --event-handlers console_direct+ \
                   --pytest-args \
                     -p no:cacheprovider \
+                    --junitxml=pytest.xml \
                     --cov=\$pkg \
                     --cov-report=html \
                     --cov-report=term \
                     --cov-report=lcov \
                     --cov-report=xml:coverage.xml \
+                    -v \
                   --return-code-on-test-failure || true
                 
                 # Copy lcov file immediately after each package test

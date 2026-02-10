@@ -4,6 +4,11 @@ import rclpy
 from visual_speech_activity.visual_speech_activity_node import VisualSpeechActivityNode
 
 
+def test_module_import():
+    """Simple sanity check to verify module imports correctly"""
+    assert VisualSpeechActivityNode is not None
+
+
 class TestVisualSpeechActivityNode:
     """Test suite for VisualSpeechActivityNode basic functionality"""
     
