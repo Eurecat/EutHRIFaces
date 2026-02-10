@@ -34,18 +34,18 @@ jobs:
         run: |
           cd EutRobAIDockers/Docker
           chmod +x build_container.sh
-          ./build_container.sh --cpu
+          ./build_container.sh --cpu --vulcanexus
         env:
           DOCKER_BUILDKIT: 1
       
       # Verify base image was built successfully
       - name: Verify base image was built
         run: |
-          if docker images | grep -q "eut_ros_torch_cpu.*jazzy"; then
-            echo "✅ Base image eut_ros_torch_cpu:jazzy successfully built"
-            docker images eut_ros_torch_cpu:jazzy
-          else
-            echo "❌ Base image eut_ros_torch_cpu:jazzy not found"
+          if docker images | grep -q "eut_ros_vulcanexus_torch_cpu.*jazzy"; then
+            echo "✅ Base image eut_ros_vulcanexus_torch_cpu:jazzy successfully built"
+            docker images eut_ros_vulcanexus_torch_cpu:jazzy
+            
+            echo "❌ Base image eut_ros_vulcanexus_torch_cpu:jazzy not found"
             echo "Available images:"
             docker images
             exit 1
@@ -65,7 +65,7 @@ jobs:
       
       # Build the EutHRIFaces Docker image (depends on base image)
       - name: Build EutHRIFaces Docker image
-        run: cd ./Docker && ./build_container.sh --cpu
+        run: cd ./Docker && ./build_container.sh --cpu --vulcanexus
         env:
           DOCKER_BUILDKIT: 1
       
