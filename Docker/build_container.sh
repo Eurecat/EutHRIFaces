@@ -128,5 +128,13 @@ else
     echo "DOCKER_RUNTIME=$DOCKER_RUNTIME" >> "$ENV_FILE"
 fi
 
+# Set or Update TARGET_DISTRO
+TARGET_DISTRO="jazzy"
+if grep -q -E "^TARGET_DISTRO=" "$ENV_FILE"; then
+    sed -i "s/^TARGET_DISTRO=.*/TARGET_DISTRO=$TARGET_DISTRO/" "$ENV_FILE"
+else
+    echo "TARGET_DISTRO=$TARGET_DISTRO" >> "$ENV_FILE"
+fi
+
 echo "Application Docker image built successfully!"
 echo "Build process completed!"

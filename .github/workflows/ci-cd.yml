@@ -1,0 +1,529 @@
+name: Build, Test & Push Docker Image
+
+on:
+  push:
+    branches:
+      - jazzy-devel
+  pull_request:
+    branches:
+      - jazzy-devel
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    env:
+      # Package Configuration - Define your ROS2 Python packages here
+      PY_PACKAGES: "face_detection face_recognition gaze_estimation visual_speech_activity"
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      # Clone EutRobAIDockers repository to build base image
+      - name: Clone EutRobAIDockers repository
+        run: |
+          git clone https://github.com/Eurecat/EutRobAIDockers.git
+          cd EutRobAIDockers
+          echo "✅ EutRobAIDockers repository cloned successfully"
+      
+      # Build the base image (eut_ros_torch_cpu:jazzy)
+      - name: Build base image from EutRobAIDockers
+        run: |
+          cd EutRobAIDockers/Docker
+          chmod +x build_container.sh
+          ./build_container.sh --cpu
+        env:
+          DOCKER_BUILDKIT: 1
+      
+      # Verify base image was built successfully
+      - name: Verify base image was built
+        run: |
+          if docker images | grep -q "eut_ros_torch_cpu.*jazzy"; then
+            echo "✅ Base image eut_ros_torch_cpu:jazzy successfully built"
+            docker images eut_ros_torch_cpu:jazzy
+          else
+            echo "❌ Base image eut_ros_torch_cpu:jazzy not found"
+            echo "Available images:"
+            docker images
+            exit 1
+          fi
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Install vcstool for dependency management
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          pip3 install --break-system-packages vcstool
+      
+      - name: Make build script executable
+        run: chmod +x Docker/build_container.sh
+      
+      # Build the EutHRIFaces Docker image (depends on base image)
+      - name: Build EutHRIFaces Docker image
+        run: cd ./Docker && ./build_container.sh --cpu
+        env:
+          DOCKER_BUILDKIT: 1
+      
+      - name: Verify EutHRIFaces image was built
+        run: |
+          if docker images | grep -q "eut_human_face_vulcanexus_cpu.*jazzy"; then
+            echo "✅ EutHRIFaces image eut_human_face_vulcanexus_cpu:jazzy successfully built"
+            docker images eut_human_face_vulcanexus_cpu:jazzy
+          else
+            echo "❌ EutHRIFaces image eut_human_face_vulcanexus_cpu:jazzy not found"
+            echo "Available images:"
+            docker images
+            exit 1
+          fi
+        
+      # 🔧 Build workspace and run test
+      - name: Build & test workspace
+        run: |
+          source Docker/.env
+          
+          # Build all packages with proper dependency order
+          # Mount to /ci_workspace to avoid shadowing pre-built /workspace in the image
+          docker run --rm \
+            -v ${{ github.workspace }}:/ci_workspace \
+            -w /ci_workspace \
+            ${BUILT_IMAGE} \
+            bash -c "
+              # Source ROS environment (jazzy is available in both vulcanexus and standard images)
+              if [ -f /opt/vulcanexus/jazzy/setup.bash ]; then
+                source /opt/vulcanexus/jazzy/setup.bash
+              elif [ -f /opt/ros/jazzy/setup.bash ]; then
+                source /opt/ros/jazzy/setup.bash
+              fi
+              
+              echo '🔧 Using pre-built dependencies from Docker image'
+              echo '📋 Pre-built packages in image:'
+              ls -la /workspace/install/ 2>/dev/null || echo 'No pre-built install found'
+              
+              # Source the pre-built workspace dependencies (hri_msgs)
+              if [ -f /workspace/install/setup.bash ]; then
+                source /workspace/install/setup.bash
+                echo '✅ Sourced pre-built dependencies from image'
+              fi
+              
+              # Copy our source packages to build directory
+              echo '📦 Copying source packages...'
+              mkdir -p src
+              cp -r /ci_workspace/face_detection src/
+              cp -r /ci_workspace/face_recognition src/
+              cp -r /ci_workspace/gaze_estimation src/
+              cp -r /ci_workspace/visual_speech_activity src/
+              
+              echo '🔍 Available packages to build:'
+              colcon list --names-only
+              
+              # Build Python packages
+              echo '🔨 Building Python packages: ${{ env.PY_PACKAGES }}'
+              
+              timeout 900 colcon build --symlink-install \
+                --packages-select ${{ env.PY_PACKAGES }} \
+                --parallel-workers 1 \
+                --event-handlers console_direct+ || echo 'Warning: Some Python packages failed to build'
+              
+              # Source the workspace to make built packages available
+              source install/setup.bash
+              
+              # Check build results and list any failed packages
+              echo '📊 Build Summary:'
+              if [ -d build ]; then
+                echo '✅ Successfully built packages:'
+                find install -name package.xml -exec dirname {} \\; 2>/dev/null | while read dir; do basename \"\$dir\"; done | sort || echo 'No packages found in install'
+                
+                echo '❌ Packages with build directories but no install:'
+                find build -maxdepth 1 -type d -not -name 'build' -exec basename {} \\; | while read pkg; do
+                  if [ ! -d \"install/\$pkg\" ]; then
+                    echo \"  - \$pkg (failed to build)\"
+                  fi
+                done
+              fi
+              
+              # Set up test environment
+              export PYTHONDONTWRITEBYTECODE=1
+              export PYTHONHASHSEED=0
+              export AI_VENV='/opt/ros_python_env'
+              # Reduce Python memory footprint
+              export MALLOC_TRIM_THRESHOLD_=100000
+              export MALLOC_MMAP_THRESHOLD_=131072
+              
+              # Run tests with coverage for Python packages (run each package separately)
+              echo '🧪 Running tests with coverage...'
+              PY_PACKAGES_LIST='${{ env.PY_PACKAGES }}'
+              
+              for pkg in \${PY_PACKAGES_LIST}; do
+                echo \"Testing package: \$pkg\"
+                
+                # Force garbage collection before each package
+                python3 -c \"import gc; gc.collect()\" 2>/dev/null || true
+                
+                # Run tests with memory-optimized settings
+                colcon test \
+                  --packages-select \$pkg \
+                  --event-handlers console_direct+ \
+                  --pytest-args \
+                    -p no:cacheprovider \
+                    --cov=\$pkg \
+                    --cov-report=html \
+                    --cov-report=term \
+                    --cov-report=lcov \
+                    --cov-report=xml:coverage.xml \
+                  --return-code-on-test-failure || true
+                
+                # Copy lcov file immediately after each package test
+                if [ -f \"build/\${pkg}/coverage.lcov\" ]; then
+                  cp \"build/\${pkg}/coverage.lcov\" /ci_workspace/coverage-py-\${pkg}.lcov
+                  echo \"✅ Copied build/\${pkg}/coverage.lcov → /ci_workspace/coverage-py-\${pkg}.lcov\"
+                fi
+                
+                # Clean up test artifacts to free memory between packages
+                echo \"🧹 Cleaning up after \${pkg} tests...\"
+                rm -rf build/\${pkg}/.pytest_cache 2>/dev/null || true
+                rm -rf build/\${pkg}/__pycache__ 2>/dev/null || true
+                python3 -c \"import gc; gc.collect()\" 2>/dev/null || true
+                
+                # Brief pause to allow memory to be freed
+                sleep 2
+              done
+              
+              # Copy build artifacts back to mounted directory for artifact upload
+              echo '📦 Copying build artifacts...'
+              cp -r build /ci_workspace/ 2>/dev/null || true
+              cp -r install /ci_workspace/ 2>/dev/null || true
+              cp -r log /ci_workspace/ 2>/dev/null || true
+            "
+
+      # Generate human-readable test summary
+      - name: Generate test summary
+        if: always()
+        run: |
+          source Docker/.env
+          docker run --rm \
+            -v ${{ github.workspace }}:/ci_workspace \
+            -w /ci_workspace \
+            ${BUILT_IMAGE} \
+            bash -c "
+              if [ -f /opt/vulcanexus/jazzy/setup.bash ]; then
+                source /opt/vulcanexus/jazzy/setup.bash
+              elif [ -f /opt/ros/jazzy/setup.bash ]; then
+                source /opt/ros/jazzy/setup.bash
+              fi
+              source install/setup.bash 2>/dev/null || true
+              colcon test-result --all --verbose
+            " > test_summary.txt
+          
+          # Display in logs
+          cat test_summary.txt
+          
+          # Create GitHub Actions summary
+          echo "## 🧪 Test Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat test_summary.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+      
+      - name: Generate test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: ROS 2 Tests
+          path: 'build/*/test_results/**/*.xml,build/*/pytest.xml'
+          reporter: java-junit
+          fail-on-error: false
+      
+      # Upload test result
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            build/*/test_results/**/*.xml
+            build/*/pytest.xml
+            log/latest_test/**/*.log
+            test_summary.txt
+      
+      # Create test badge (for README)
+      - name: Create test badge
+        if: always() && github.ref == 'refs/heads/main'
+        run: |
+          # Parse the summary line from test_summary.txt
+          # Example line: "Summary: 55 tests, 0 errors, 0 failures, 6 skipped"
+          if [ -f test_summary.txt ]; then
+            SUMMARY_LINE=$(grep "^Summary:" test_summary.txt)
+            
+            # Extract numbers using grep and cut
+            TOTAL=$(echo "$SUMMARY_LINE" | grep -oP '\d+(?= tests)' || echo "0")
+            FAILURES=$(echo "$SUMMARY_LINE" | grep -oP '\d+(?= failures)' || echo "0")
+            ERRORS=$(echo "$SUMMARY_LINE" | grep -oP '\d+(?= errors)' || echo "0")
+            
+            # Calculate passed tests (total - failures - errors)
+            PASSED=$((TOTAL - FAILURES - ERRORS))
+            FAILED=$((FAILURES + ERRORS))
+            
+            echo "📊 Badge stats: $PASSED passed / $FAILED failed (out of $TOTAL total)"
+          else
+            echo "⚠️ test_summary.txt not found, using defaults"
+            PASSED=0
+            FAILED=0
+          fi
+          
+          # Create badge JSON (shields.io endpoint format)
+          COLOR="success"
+          if [ $FAILED -gt 0 ]; then
+            COLOR="critical"
+          fi
+          
+          echo "{\"schemaVersion\": 1, \"label\": \"tests\", \"message\": \"$PASSED passed / $FAILED failed\", \"color\": \"$COLOR\"}" > test-badge.json
+          
+          cat test-badge.json
+
+      - name: Upload badge data
+        if: always() && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-badge
+          path: test-badge.json
+      
+
+      # Generate code coverage reports (from existing test data)
+      - name: Generate coverage reports
+        if: always()
+        run: |
+          source Docker/.env
+          docker run --rm \
+            -v ${{ github.workspace }}:/ci_workspace \
+            -w /ci_workspace \
+            ${BUILT_IMAGE} \
+            bash -c "
+              # Source ROS environment
+              if [ -f /opt/vulcanexus/jazzy/setup.bash ]; then
+                source /opt/vulcanexus/jazzy/setup.bash
+              elif [ -f /opt/ros/jazzy/setup.bash ]; then
+                source /opt/ros/jazzy/setup.bash
+              fi
+              
+              source install/setup.bash 2>/dev/null || true
+              
+              echo '=========================================='
+              echo '  Code Coverage Summary Display'
+              echo '=========================================='
+              echo ''
+              
+              # Display Python coverage from existing lcov files
+              for pkg in ${{ env.PY_PACKAGES }}; do
+                echo \"📊 Python Coverage (\$pkg)\"
+                echo '------------------------------------------'
+                if [ -f \"build/\$pkg/coverage.lcov\" ]; then
+                  # Display coverage summary from lcov file
+                  grep -A 5 'end_of_record' \"build/\$pkg/coverage.lcov\" | head -20 || \
+                  echo \"Coverage data available in build/\$pkg/coverage.lcov\"
+                else
+                  echo '⚠️  No coverage data found for this package'
+                fi
+                echo ''
+              done
+              
+              echo '=========================================='
+              echo '✅ Coverage Reports Displayed!'
+              echo '=========================================='
+            " > coverage_summary.txt || true
+          
+          # Display in logs
+          cat coverage_summary.txt
+          
+          # Add to GitHub Actions summary
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Code Coverage Summary" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat coverage_summary.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+      
+      # Convert lcov to Cobertura XML for better tool compatibility
+      - name: Verify and convert coverage files
+        if: always()
+        run: |
+          # First, check what coverage files exist
+          echo "🔍 Looking for coverage files..."
+          find . -name "coverage*.xml" -o -name "coverage*.lcov" 2>/dev/null || true
+          
+          echo ""
+          echo "📋 Coverage XML files found:"
+          ls -lh coverage-*.xml 2>/dev/null || echo "⚠️ No coverage-*.xml files found yet"
+          
+          # Install lcov_cobertura for coverage conversion
+          python3 -m pip install lcov_cobertura
+          
+          # Convert Python coverage for all packages
+          for pkg in ${{ env.PY_PACKAGES }}; do
+            if [ -f "build/${pkg}/coverage.lcov" ]; then
+              python3 -m lcov_cobertura build/${pkg}/coverage.lcov -o coverage-py-${pkg}.xml
+              echo "✅ Converted Python coverage for ${pkg} to XML"
+            else
+              echo "⚠️ No Python coverage file found for ${pkg}"
+            fi
+          done
+          
+          # Final check of all coverage files
+          echo ""
+          echo "📋 Final coverage XML files:"
+          ls -lh coverage-*.xml 2>/dev/null || echo "❌ No coverage XML files generated"
+      
+      # Generate Coverage Report for PR (using Cobertura XML)
+      - name: Code Coverage Report
+        uses: irongut/CodeCoverageSummary@v1.3.0
+        if: always()
+        with:
+          filename: 'coverage-*.xml'
+          badge: true
+          fail_below_min: false
+          format: markdown
+          hide_branch_rate: false
+          hide_complexity: true
+          indicators: true
+          output: both
+          thresholds: '60 80'
+      
+      # Add coverage report to PR comment
+      - name: Add Coverage PR Comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        if: github.event_name == 'pull_request'
+        with:
+          recreate: true
+          path: code-coverage-results.md
+      
+      # Upload coverage reports as artifacts
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: |
+            */htmlcov/**
+            coverage_summary.txt
+            coverage-*.xml
+      
+      # Create coverage badge (for README)
+      - name: Create coverage badge
+        if: always() && github.ref == 'refs/heads/main'
+        run: |
+          # Extract Python coverage percentage from lcov file
+          echo "🔍 Searching for Python coverage files..."
+          find . -name "coverage.lcov" -o -name ".coverage" 2>/dev/null | head -20
+          
+          # Extract Python coverage for all packages
+          PY_TOTAL_LINES_HIT=0
+          PY_TOTAL_LINES_FOUND=0
+          
+          for pkg in ${{ env.PY_PACKAGES }}; do
+            echo "🔍 Checking Python coverage for: ${pkg}"
+            PY_LCOV_FILE=""
+            
+            if [ -f "build/${pkg}/coverage.lcov" ]; then
+              PY_LCOV_FILE="build/${pkg}/coverage.lcov"
+              echo "✅ Found at: build/${pkg}/coverage.lcov"
+            elif [ -f "${pkg}/coverage.lcov" ]; then
+              PY_LCOV_FILE="${pkg}/coverage.lcov"
+              echo "✅ Found at: ${pkg}/coverage.lcov"
+            fi
+            
+            if [ -n "$PY_LCOV_FILE" ]; then
+              PKG_LINES_HIT=$(grep -E "^LH:" "$PY_LCOV_FILE" | cut -d: -f2 | awk '{s+=$1} END {print s}')
+              PKG_LINES_FOUND=$(grep -E "^LF:" "$PY_LCOV_FILE" | cut -d: -f2 | awk '{s+=$1} END {print s}')
+              PY_TOTAL_LINES_HIT=$((PY_TOTAL_LINES_HIT + PKG_LINES_HIT))
+              PY_TOTAL_LINES_FOUND=$((PY_TOTAL_LINES_FOUND + PKG_LINES_FOUND))
+              echo "📊 ${pkg}: LH=$PKG_LINES_HIT, LF=$PKG_LINES_FOUND"
+            fi
+          done
+          
+          if [ "$PY_TOTAL_LINES_FOUND" -gt 0 ]; then
+            PY_COV_PCT=$(awk "BEGIN {printf \"%.0f\", (\$1/\$2)*100}" <<< "$PY_TOTAL_LINES_HIT $PY_TOTAL_LINES_FOUND")
+            echo "✅ Total Python Coverage: $PY_COV_PCT%"
+          else
+            echo "⚠️ No Python coverage data found"
+            PY_COV_PCT=0
+          fi
+          
+          # Use Python coverage as the overall coverage
+          echo "📊 Total Coverage: ${PY_COV_PCT}%"
+          
+          # Determine badge color
+          if [ $PY_COV_PCT -ge 80 ]; then
+            COLOR="brightgreen"
+          elif [ $PY_COV_PCT -ge 60 ]; then
+            COLOR="yellow"
+          elif [ $PY_COV_PCT -ge 40 ]; then
+            COLOR="orange"
+          else
+            COLOR="red"
+          fi
+          
+          # Create badge JSON
+          echo "{\"schemaVersion\": 1, \"label\": \"coverage\", \"message\": \"${PY_COV_PCT}%\", \"color\": \"$COLOR\"}" > coverage-badge.json
+          cat coverage-badge.json
+
+      - name: Upload coverage badge data
+        if: always() && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-badge
+          path: coverage-badge.json
+      
+      # Publish badges to badges branch for shields.io endpoint
+      - name: Publish badges to badges branch
+        if: always() && github.ref == 'refs/heads/main'
+        run: |
+          # Determine branch name for badge directory
+          BRANCH_NAME="main"
+          
+          # Setup git
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Fetch and checkout badges branch (create if doesn't exist)
+          git fetch origin badges 2>/dev/null || true
+          git checkout badges 2>/dev/null || git checkout --orphan badges
+          
+          # Clean working directory and create structure
+          git rm -rf . 2>/dev/null || true
+          mkdir -p ${BRANCH_NAME}
+          
+          # Copy badge files
+          cp ${{ github.workspace }}/test-badge.json ${BRANCH_NAME}/ 2>/dev/null || echo "No test badge"
+          cp ${{ github.workspace }}/coverage-badge.json ${BRANCH_NAME}/ 2>/dev/null || echo "No coverage badge"
+          
+          # Add, commit and push
+          git add ${BRANCH_NAME}/
+          git diff --staged --quiet || git commit -m "Update badges for ${BRANCH_NAME} [skip ci]"
+          git push origin badges 2>/dev/null || git push --set-upstream origin badges
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Tag image for Docker Hub
+        if: github.ref == 'refs/heads/main'
+        run: |
+          # Get the image name from .env file
+          source Docker/.env
+          DOCKERHUB_ORG=${{ secrets.DOCKERHUB_ORG }}
+          
+          # Tag the local image with Docker Hub organization name
+          docker tag ${BUILT_IMAGE} ${DOCKERHUB_ORG}/eut_hri_faces:${TARGET_DISTRO}
+      
+      - name: Push to Docker Hub
+        if: github.ref == 'none' # IGNORE for now the push, replace it with main when ready to publish from protected branch
+        run: |
+          source Docker/.env
+          DOCKERHUB_ORG=${{ secrets.DOCKERHUB_ORG }}
+          
+          # Push the image to Docker Hub
+          docker push ${DOCKERHUB_ORG}/eut_hri_faces:${TARGET_DISTRO}
