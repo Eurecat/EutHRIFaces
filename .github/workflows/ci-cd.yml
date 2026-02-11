@@ -263,9 +263,74 @@ jobs:
           find build -type d -name "htmlcov" 2>/dev/null | while read d; do
             echo "✅ $d/ ($(find "$d" -type f | wc -l) files)"
           done
+      # Update README with actual test and coverage values
+      - name: Update README with badge values
+        if: always() && github.ref == 'refs/heads/jazzy-devel'
+        run: |
+          # Parse test results
+          if [ -f test_summary.txt ]; then
+            SUMMARY_LINE=$(grep "^Summary:" test_summary.txt)
+            TOTAL=$(echo "$SUMMARY_LINE" | grep -oP '\d+(?= tests)' || echo "0")
+            FAILURES=$(echo "$SUMMARY_LINE" | grep -oP '\d+(?= failures)' || echo "0")
+            ERRORS=$(echo "$SUMMARY_LINE" | grep -oP '\d+(?= errors)' || echo "0")
+            PASSED=$((TOTAL - FAILURES - ERRORS))
+            FAILED=$((FAILURES + ERRORS))
+          else
+            PASSED=0
+            FAILED=0
+            TOTAL=0
+          fi
+          
+          echo "📊 Test Results: $PASSED/$TOTAL passed, $FAILED failed"
+          
+          # Extract coverage percentage from available lcov files
+          PY_TOTAL_LINES_HIT=0
+          PY_TOTAL_LINES_FOUND=0
+          
+          for pkg in ${{ env.PY_PACKAGES }}; do
+            if [ -f "build/${pkg}/coverage.lcov" ]; then
+              PKG_LINES_HIT=$(grep -E "^LH:" "build/${pkg}/coverage.lcov" | cut -d: -f2 | awk '{s+=$1} END {print s}')
+              PKG_LINES_FOUND=$(grep -E "^LF:" "build/${pkg}/coverage.lcov" | cut -d: -f2 | awk '{s+=$1} END {print s}')
+              PY_TOTAL_LINES_HIT=$((PY_TOTAL_LINES_HIT + PKG_LINES_HIT))
+              PY_TOTAL_LINES_FOUND=$((PY_TOTAL_LINES_FOUND + PKG_LINES_FOUND))
+            fi
+          done
+          
+          if [ "$PY_TOTAL_LINES_FOUND" -gt 0 ]; then
+            PY_COV_PCT=$(awk "BEGIN {printf \"%.0f\", ($PY_TOTAL_LINES_HIT/$PY_TOTAL_LINES_FOUND)*100}")
+            COV_DISPLAY="$PY_COV_PCT%"
+          else
+            COV_DISPLAY="pending"
+          fi
+          
+          echo "📊 Coverage: $COV_DISPLAY"
+          
+          # Update README badges with actual values
+          echo "🔄 Updating README with badge values..."
+          
+          # Format test badge text
+          TEST_BADGE="$PASSED%2F$TOTAL%20passed"
+          
+          # Replace badges in README with actual values
+          sed -i "s/\[Tests\](https:\/\/img.shields.io\/badge\/tests-passing-brightgreen)/[Tests](https:\/\/img.shields.io\/badge\/tests-$TEST_BADGE-brightgreen)/g" README.md
+          
+          if [ "$COV_DISPLAY" != "pending" ]; then
+            # Coverage completed - use percentage color
+            if [ $PY_COV_PCT -ge 80 ]; then
+              COV_COLOR="brightgreen"
+            elif [ $PY_COV_PCT -ge 60 ]; then
+              COV_COLOR="yellow"
+            else
+              COV_COLOR="orange"
+            fi
+            sed -i "s/\[Coverage\](https:\/\/img.shields.io\/badge\/coverage-pending-blue)/[Coverage](https:\/\/img.shields.io\/badge\/coverage-$PY_COV_PCT%25-$COV_COLOR)/g" README.md
+          fi
+          
+          echo "✅ README badges updated"
+      
       # Create test badge (for README)
       - name: Create test badge
-        if: always() && github.ref == 'refs/heads/main'
+        if: always() && github.ref == 'refs/heads/jazzy-devel'
         run: |
           # Parse the summary line from test_summary.txt
           # Example line: "Summary: 55 tests, 0 errors, 0 failures, 6 skipped"
@@ -299,7 +364,7 @@ jobs:
           cat test-badge.json
 
       - name: Upload badge data
-        if: always() && github.ref == 'refs/heads/main'
+        if: always() && github.ref == 'refs/heads/jazzy-devel'
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
@@ -435,7 +500,7 @@ jobs:
       
       # Create coverage badge (for README)
       - name: Create coverage badge
-        if: always() && github.ref == 'refs/heads/main'
+        if: always() && github.ref == 'refs/heads/jazzy-devel'
         continue-on-error: true
         run: |
           echo "🔍 Searching for Python coverage files..."
@@ -495,7 +560,7 @@ jobs:
           cat coverage-badge.json
 
       - name: Upload coverage badge data
-        if: always() && github.ref == 'refs/heads/main'
+        if: always() && github.ref == 'refs/heads/jazzy-devel'
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
@@ -503,12 +568,38 @@ jobs:
           path: coverage-badge.json
           if-no-files-found: warn
       
+      # Commit updated README
+      - name: Commit updated README with badge changes
+        if: always() && github.ref == 'refs/heads/jazzy-devel'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Check if there are any changes
+          if git diff --quiet README.md; then
+            echo "⚠️ No README changes to commit"
+          else
+            echo "📝 Committing README badge updates..."
+            git add README.md
+            git commit -m "Update badges: tests and coverage [skip ci]"
+            
+            # Pull before push to avoid conflicts
+            git pull origin jazzy-devel --rebase || true
+            
+            # Push the changes
+            if git push origin jazzy-devel; then
+              echo "✅ Successfully pushed README updates"
+            else
+              echo "⚠️ Push failed, skipping (may have conflicts)"
+            fi
+          fi
+      
       # Publish badges to badges branch for shields.io endpoint
       - name: Publish badges to badges branch
-        if: always() && github.ref == 'refs/heads/main'
+        if: always() && github.ref == 'refs/heads/jazzy-devel'
         run: |
           # Determine branch name for badge directory
-          BRANCH_NAME="main"
+          BRANCH_NAME="jazzy-devel"
           
           # Setup git
           git config --global user.name "github-actions[bot]"
