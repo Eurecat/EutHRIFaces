@@ -1,0 +1,119 @@
+# ROS2 Parameters for Visual Speech Activity Detection Node
+# This file contains all configurable parameters for the VisualSpeechActivityNode
+
+visual_speech_activity_node:
+  ros__parameters:
+    # Topic Configuration
+    recognition_input_topic: "/humans/faces/recognized"
+    landmarks_input_topic: "/humans/faces/detected"
+    output_topic: "/humans/faces/speaking"
+    output_image_topic: "/humans/faces/speaking/annotated_img"
+    
+    # ROS4HRI Configuration
+    # Set to true for per-ID topics (/humans/faces/<id>/speaking)
+    # Set to false for array mode (/humans/faces/speaking with FacialRecognitionArray)
+    ros4hri_with_id: false
+    
+    # VSDLM Parameters
+    # VSDLM (Visual Speech Detection Lightweight Model) by PINTO0309
+    # Reference: https://github.com/PINTO0309/VSDLM
+    # License: MIT
+    
+    # Probability threshold for classifying as speaking (0.0-1.0)
+    # Higher values = fewer false positives but may miss speaking
+    # Recommended: 0.4-0.6
+    speaking_threshold: 0.75
+    
+    # Directory containing VSDLM weights (relative to package source)
+    vsdlm_weights_path: "weights"
+    
+    # Specific VSDLM weights filename
+    vsdlm_weights_name: "vsdlm_l.onnx"
+    
+    # Model variant for auto-download: P/N/S/M/L
+    # P: 112KB, F1=0.9502, latency=0.18ms (ultra-fast)
+    # N: 176KB, F1=0.9586, latency=0.31ms (very fast)
+    # S: 494KB, F1=0.9696, latency=0.50ms (recommended - good balance)
+    # M: 1.7MB, F1=0.9801, latency=0.70ms (high accuracy)
+    # L: 6.4MB, F1=0.9891, latency=0.91ms (maximum accuracy)
+    vsdlm_model_variant: "L"
+    
+    # ONNX execution provider: cpu, cuda, tensorrt
+    # cpu: Works everywhere, slower
+    # cuda: Requires NVIDIA GPU with CUDA, faster
+    # tensorrt: Requires TensorRT, fastest on NVIDIA GPUs
+    vsdlm_execution_provider: "cuda"
+    
+    # YOLO Landmark Mode Parameters
+    # When using YOLO 5-point landmarks instead of dlib 68-point landmarks,
+    # the mouth WIDTH is taken directly from the distance between the two mouth corner landmarks.
+    # Only the HEIGHT needs to be estimated as a ratio of the face bbox height.
+    
+    # Mouth crop height as ratio of face bbox height (default: 0.35)
+    # Increase if mouth region is too small vertically, decrease if too large
+    # Typical range: 0.25 - 0.45
+    vsdlm_mouth_height_ratio: 0.10
+    
+    # Temporal Smoothing Configuration
+    # Enable temporal smoothing to reduce speaking detection flickering
+    # Highly recommended for stable results
+    vsdlm_temporal_smoothing: true
+    
+    # Number of frames to use for temporal smoothing (default: 5)
+    # Larger values = smoother but slower response to changes
+    # Smaller values = faster response but more flickering
+    vsdlm_smoothing_window_size: 10
+    
+    # Minimum confidence difference required to change speaking state (default: 0.1)
+    # Higher values = more stable but less responsive
+    # Lower values = more responsive but potentially more flickering
+    vsdlm_min_confidence_for_change: 0.1
+    
+    # Legacy Temporal Analysis Parameters (if RNN fallback is used)
+    # Number of frames for temporal analysis window
+    window_size: 20
+    
+    # Minimum mouth aspect ratio variation to detect movement
+    movement_threshold: 0.02
+    
+    # Minimum frames required before speaking detection
+    min_frames_for_detection: 5
+    
+    # Use full 68-point dlib landmarks when available
+    use_full_landmarks: true
+    
+    # Enable RNN-based temporal classification
+    rnn_enabled: true
+    
+    # Debug Configuration
+    # Enable verbose debug output with logger.debug
+    enable_debug_output: false
+    
+    # Save mouth crops to /tmp for debugging (every 30th frame)
+    # Useful for verifying what the model sees
+    vsdlm_debug_save_crops: false
+    
+    # Camera Image Topics (same pattern as face_recognition)
+    # Use either regular image topic OR compressed topic (not both)
+    
+    # Regular image topic (uncompressed)
+    image_topic: ""
+    
+    # Compressed image topic (optional, recommended for bandwidth)
+    # Leave empty to use regular image_topic
+    # Example: "/camera/color/image_raw/compressed"
+    compressed_topic: "/camera/image_raw/compressed"
+    
+    # Face Recognition Integration
+    # Set to true to use face recognition for robust identity tracking (recommended)
+    # Set to false to work with face_id only (fallback when face recognition unavailable)
+    use_face_recognition: true
+    
+    # Image Visualization
+    # Enable/disable annotated image output with lip visualization
+    enable_image_output: true
+    
+    # Distance in pixels to position labels above mouth center (default: 50)
+    # Increase this value to move speaking labels further away from lips
+    # This prevents labels from blocking the mouth region
+    label_offset_y: 50
