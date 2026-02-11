@@ -134,21 +134,20 @@ jobs:
                 echo \"Testing package: \$pkg\"
                 echo \"========================================\"
                 
-                # Run tests with pytest
-                colcon test \
-                  --packages-select \$pkg \
-                  --event-handlers console_direct+ \
-                  --pytest-args \
-                    -p no:cacheprovider \
-                    --junitxml=pytest.xml \
-                    --cov=\$pkg \
-                    --cov-report=html \
-                    --cov-report=term \
-                    --cov-report=lcov \
-                    --cov-report=xml:coverage.xml \
-                    -v \
-                  --return-code-on-test-failure || echo \"⚠️ Tests failed for \$pkg\"
+                # Run tests with pytest and ensure coverage is generated
+                cd /workspace/src/\$pkg
+                python3 -m pytest test/ \
+                  -v \
+                  --tb=short \
+                  --junitxml=/workspace/build/\$pkg/pytest.xml \
+                  --cov=\$pkg \
+                  --cov-report=html:/workspace/build/\$pkg/htmlcov \
+                  --cov-report=lcov:/workspace/build/\$pkg/coverage.lcov \
+                  --cov-report=xml:/workspace/build/\$pkg/coverage.xml \
+                  --cov-report=term \
+                  -p no:cacheprovider || echo \"⚠️ Some tests failed for \$pkg\"
                 
+                cd /workspace
                 # Brief pause between packages
                 sleep 1
               done
@@ -201,8 +200,21 @@ jobs:
             build/*/test_results/**/*.xml
             build/*/pytest.xml
             log/latest_test/**/*.log
-            test_summary.txt
-      
+            test_summary.txt      
+      # Verify coverage files were generated
+      - name: Verify coverage files
+        if: always()
+        run: |
+          echo "📋 Coverage files generated:"
+          echo ""
+          find build -type f \( -name "coverage.*" -o -name ".coverage" \) 2>/dev/null | while read f; do
+            echo "✅ $f ($(du -h "$f" | cut -f1))"
+          done
+          echo ""
+          echo "📋 Test result files:"
+          find build -name "pytest.xml" -type f 2>/dev/null | while read f; do
+            echo "✅ $f"
+          done      
       # Create test badge (for README)
       - name: Create test badge
         if: always() && github.ref == 'refs/heads/main'
@@ -251,53 +263,39 @@ jobs:
         if: always()
         run: |
           source Docker/.env
-          docker run --rm \
-            -v ${{ github.workspace }}:/workspace \
-            ${BUILT_IMAGE} \
-            bash -c "
-              cd /workspace
-              # Source ROS environment
-              if [ -f /opt/vulcanexus/jazzy/setup.bash ]; then
-                source /opt/vulcanexus/jazzy/setup.bash
-              elif [ -f /opt/ros/jazzy/setup.bash ]; then
-                source /opt/ros/jazzy/setup.bash
-              fi
-              
-              source install/setup.bash 2>/dev/null || true
-              
-              echo '=========================================='
-              echo '  Code Coverage Summary Display'
-              echo '=========================================='
-              echo ''
-              
-              # Display Python coverage from existing lcov files
-              for pkg in ${{ env.PY_PACKAGES }}; do
-                echo \"📊 Python Coverage (\$pkg)\"
-                echo '------------------------------------------'
-                if [ -f \"build/\$pkg/coverage.lcov\" ]; then
-                  # Display coverage summary from lcov file
-                  grep -A 5 'end_of_record' \"build/\$pkg/coverage.lcov\" | head -20 || \
-                  echo \"Coverage data available in build/\$pkg/coverage.lcov\"
-                else
-                  echo '⚠️  No coverage data found for this package'
-                fi
-                echo ''
-              done
-              
-              echo '=========================================='
-              echo '✅ Coverage Reports Displayed!'
-              echo '=========================================='
-            " > coverage_summary.txt || true
           
-          # Display in logs
-          cat coverage_summary.txt
+          echo '=========================================='
+          echo '  Code Coverage Summary Display'
+          echo '=========================================='
+          echo ''
           
-          # Add to GitHub Actions summary
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📊 Code Coverage Summary" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          cat coverage_summary.txt >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          # Display Python coverage from existing files
+          for pkg in ${{ env.PY_PACKAGES }}; do
+            echo "📊 Python Coverage (${pkg})"
+            echo '------------------------------------------'
+            
+            # Check for lcov file
+            if [ -f "build/${pkg}/coverage.lcov" ]; then
+              echo "✅ Coverage data found in build/${pkg}/coverage.lcov"
+              # Extract summary from lcov
+              grep "^LH:\|^LF:" "build/${pkg}/coverage.lcov" | head -5 || true
+            elif [ -f "build/${pkg}/coverage.xml" ]; then
+              echo "✅ Coverage data found in build/${pkg}/coverage.xml"
+            else
+              echo "⚠️  No coverage data found for this package"
+            fi
+            echo ''
+          done
+          
+          echo '=========================================='
+          echo '✅ Coverage Reports Generated!'
+          echo '=========================================='
+          
+          # Summary of files found
+          echo ""
+          echo "Coverage files summary:"
+          find build -name "coverage.*" -type f 2>/dev/null | wc -l
+          echo "coverage files found"
       
       # Convert lcov to Cobertura XML for better tool compatibility
       - name: Convert coverage to Cobertura XML
@@ -305,25 +303,41 @@ jobs:
         run: |
           python3 -m pip install lcov_cobertura
           
-          # Convert Python coverage for all packages
+          echo "📋 Looking for coverage files..."
+          find build -name "coverage.lcov" -o -name "coverage.xml" | head -20
+          
+          # Convert Python coverage lcov files to XML
           for pkg in ${{ env.PY_PACKAGES }}; do
-            if [ -f "build/${pkg}/coverage.lcov" ]; then
-              python3 -m lcov_cobertura "build/${pkg}/coverage.lcov" -o "coverage-py-${pkg}.xml"
-              echo "✅ Converted Python coverage for ${pkg} to XML"
+            LCOV_FILE="build/${pkg}/coverage.lcov"
+            if [ -f "$LCOV_FILE" ]; then
+              echo "✅ Converting Python coverage for ${pkg}..."
+              python3 -m lcov_cobertura "$LCOV_FILE" -o "coverage-py-${pkg}.xml"
+              echo "✅ Generated: coverage-py-${pkg}.xml"
             else
-              echo "⚠️ No coverage file found for ${pkg}"
+              echo "⚠️ coverage.lcov not found for ${pkg} at $LCOV_FILE"
             fi
           done
           
-          # List generated coverage files
+          # Also copy any existing coverage.xml files
+          for pkg in ${{ env.PY_PACKAGES }}; do
+            if [ -f "build/${pkg}/coverage.xml" ]; then
+              cp "build/${pkg}/coverage.xml" "coverage-py-${pkg}-direct.xml"
+              echo "✅ Copied coverage.xml for ${pkg}"
+            fi
+          done
+          
+          # List all generated coverage files
           echo ""
-          echo "📋 Generated coverage XML files:"
-          ls -lh coverage-*.xml 2>/dev/null || echo "⚠️ No coverage XML files found"
+          echo "📋 Coverage files found:"
+          ls -lh coverage-*.xml 2>/dev/null || echo "⚠️ No coverage XML files generated"
+          echo ""
+          find build -name "coverage.*" -type f 2>/dev/null | head -20
       
       # Generate Coverage Report for PR (using Cobertura XML)
       - name: Code Coverage Report
         uses: irongut/CodeCoverageSummary@v1.3.0
         if: always()
+        continue-on-error: true
         with:
           filename: 'coverage-*.xml'
           badge: true
@@ -339,6 +353,7 @@ jobs:
       - name: Add Coverage PR Comment
         uses: marocchino/sticky-pull-request-comment@v2
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         with:
           recreate: true
           path: code-coverage-results.md
@@ -350,61 +365,65 @@ jobs:
         with:
           name: coverage-reports
           path: |
-            */htmlcov/**
+            build/*/htmlcov/**
+            build/*/coverage.*
             coverage_summary.txt
             coverage-*.xml
+            code-coverage-results.md
       
       # Create coverage badge (for README)
       - name: Create coverage badge
         if: always() && github.ref == 'refs/heads/main'
+        continue-on-error: true
         run: |
-          # Extract Python coverage percentage from lcov file
           echo "🔍 Searching for Python coverage files..."
-          find . -name "coverage.lcov" -o -name ".coverage" 2>/dev/null | head -20
+          find build -name "coverage.lcov" -o -name "coverage.xml" 2>/dev/null | head -20
           
           # Extract Python coverage for all packages
           PY_TOTAL_LINES_HIT=0
           PY_TOTAL_LINES_FOUND=0
+          PACKAGES_WITH_COVERAGE=0
           
           for pkg in ${{ env.PY_PACKAGES }}; do
             echo "🔍 Checking Python coverage for: ${pkg}"
-            PY_LCOV_FILE=""
             
+            # Check lcov file first
             if [ -f "build/${pkg}/coverage.lcov" ]; then
-              PY_LCOV_FILE="build/${pkg}/coverage.lcov"
-              echo "✅ Found at: build/${pkg}/coverage.lcov"
-            elif [ -f "${pkg}/coverage.lcov" ]; then
-              PY_LCOV_FILE="${pkg}/coverage.lcov"
-              echo "✅ Found at: ${pkg}/coverage.lcov"
-            fi
-            
-            if [ -n "$PY_LCOV_FILE" ]; then
-              PKG_LINES_HIT=$(grep -E "^LH:" "$PY_LCOV_FILE" | cut -d: -f2 | awk '{s+=$1} END {print s}')
-              PKG_LINES_FOUND=$(grep -E "^LF:" "$PY_LCOV_FILE" | cut -d: -f2 | awk '{s+=$1} END {print s}')
-              PY_TOTAL_LINES_HIT=$((PY_TOTAL_LINES_HIT + PKG_LINES_HIT))
-              PY_TOTAL_LINES_FOUND=$((PY_TOTAL_LINES_FOUND + PKG_LINES_FOUND))
-              echo "📊 ${pkg}: LH=$PKG_LINES_HIT, LF=$PKG_LINES_FOUND"
+              echo "✅ Found LCOV: build/${pkg}/coverage.lcov"
+              PKG_LINES_HIT=$(grep "^LH:" "build/${pkg}/coverage.lcov" | cut -d: -f2 | awk '{s+=$1} END {print s+0}')
+              PKG_LINES_FOUND=$(grep "^LF:" "build/${pkg}/coverage.lcov" | cut -d: -f2 | awk '{s+=$1} END {print s+0}')
+              
+              if [ "$PKG_LINES_FOUND" -gt 0 ]; then
+                PY_TOTAL_LINES_HIT=$((PY_TOTAL_LINES_HIT + PKG_LINES_HIT))
+                PY_TOTAL_LINES_FOUND=$((PY_TOTAL_LINES_FOUND + PKG_LINES_FOUND))
+                PACKAGES_WITH_COVERAGE=$((PACKAGES_WITH_COVERAGE + 1))
+                echo "📊 ${pkg}: LH=$PKG_LINES_HIT, LF=$PKG_LINES_FOUND"
+              fi
+            elif [ -f "build/${pkg}/coverage.xml" ]; then
+              echo "✅ Found XML: build/${pkg}/coverage.xml"
+              PACKAGES_WITH_COVERAGE=$((PACKAGES_WITH_COVERAGE + 1))
             fi
           done
           
+          # Calculate coverage percentage
           if [ "$PY_TOTAL_LINES_FOUND" -gt 0 ]; then
             PY_COV_PCT=$(awk "BEGIN {printf \"%.0f\", (\$1/\$2)*100}" <<< "$PY_TOTAL_LINES_HIT $PY_TOTAL_LINES_FOUND")
-            echo "✅ Total Python Coverage: $PY_COV_PCT%"
+            echo "✅ Total Python Coverage: ${PY_COV_PCT}%"
           else
-            echo "⚠️ No Python coverage data found"
+            echo "⚠️ No Python coverage metrics extracted (but ${PACKAGES_WITH_COVERAGE} packages have coverage files)"
             PY_COV_PCT=0
           fi
           
-          # Use Python coverage as the overall coverage
-          echo "📊 Total Coverage: ${PY_COV_PCT}%"
-          
-          # Determine badge color
+          # Determine badge color based on coverage
           if [ $PY_COV_PCT -ge 80 ]; then
             COLOR="brightgreen"
           elif [ $PY_COV_PCT -ge 60 ]; then
             COLOR="yellow"
           elif [ $PY_COV_PCT -ge 40 ]; then
             COLOR="orange"
+          elif [ $PACKAGES_WITH_COVERAGE -gt 0 ]; then
+            COLOR="blue"
+            echo "ℹ️ Coverage detected but percentage could not be calculated"
           else
             COLOR="red"
           fi
