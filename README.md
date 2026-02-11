@@ -1,4 +1,5 @@
 # EutHRIFaces: Face Detection, Recognition, Gaze Estimation, and Visual Speech Activity for Human-Robot Interaction 
+[![Build Status](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml/badge.svg?branch=jazzy-devel)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
 
 [![Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Eurecat/EutHRIFaces/badges/jazzy-devel/test-badge.json)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Eurecat/EutHRIFaces/badges/jazzy-devel/coverage-badge.json)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
