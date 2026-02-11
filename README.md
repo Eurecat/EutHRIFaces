@@ -1,7 +1,7 @@
 # EutHRIFaces: Face Detection, Recognition, Gaze Estimation, and Visual Speech Activity for Human-Robot Interaction 
 
-[![Tests](https://img.shields.io/badge/tests-21%2F21%20passed-brightgreen)](https://github.com/Eurecat/EutHRIFaces/actions)
-[![Coverage](https://img.shields.io/badge/coverage-pending-blue)](https://github.com/Eurecat/EutHRIFaces/actions)
+[![Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Eurecat/eut_speech_audio_processing/badges/jazzy-devel/test-badge.json)](https://github.com/Eurecat/eut_speech_audio_processing/actions)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Eurecat/eut_speech_audio_processing/badges/jazzy-devel/coverage-badge.json)](https://github.com/Eurecat/eut_speech_audio_processing/actions)
 
 🚀 Production-ready ROS2 (Jazzy, Humble-WIP) face perception stack with **advanced YOLO detection** 🎯 and a **custom persistent identity manager** 🆔. Uniquely integrates **MongoDB** 💾 for real-time user tracking with automatic re-identification across sessions—identities survive Docker restarts! Fully compliant with the [ros4hri](https://github.com/ros4hri) 🤖 standard, leveraging state-of-the-art open-source AI models in an enterprise-grade architecture.
 
