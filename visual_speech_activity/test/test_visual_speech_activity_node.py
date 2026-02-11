@@ -52,21 +52,23 @@ class TestVisualSpeechActivityNode:
         """Test that the node has declared parameters"""
         node = VisualSpeechActivityNode()
         
-        # Check that parameters exist
-        param_names = [param.name for param in node.get_parameters([])]
+        # Check that parameters exist by listing all parameters
+        param_list = node.list_parameters([], depth=0)
         
-        # Basic ROS parameters should exist
-        assert len(param_names) > 0
+        # Basic ROS parameters should exist (use_sim_time is always present)
+        assert len(param_list.names) > 0
         
         node.destroy_node()
     
     def test_stamp_to_float_conversion(self):
         """Test timestamp conversion utility function"""
         from visual_speech_activity.visual_speech_activity_node import _stamp_to_float
-        from rclpy.time import Time
+        from builtin_interfaces.msg import Time
         
-        # Create a test timestamp
-        test_time = Time(seconds=10, nanoseconds=500000000)  # 10.5 seconds
+        # Create a test timestamp (builtin_interfaces.msg.Time)
+        test_time = Time()
+        test_time.sec = 10
+        test_time.nanosec = 500000000  # 0.5 seconds
         
         result = _stamp_to_float(test_time)
         

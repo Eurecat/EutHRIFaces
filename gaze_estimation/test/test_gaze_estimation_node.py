@@ -61,10 +61,10 @@ class TestGazeEstimationNode:
         """Test that the node has declared parameters"""
         node = GazeEstimationNode()
         
-        # Check that parameters exist
-        param_names = [param.name for param in node.get_parameters([])]
+        # Check that parameters exist by listing all parameters
+        param_list = node.list_parameters([], depth=0)
         
-        # Basic ROS parameters should exist
-        assert len(param_names) > 0
+        # Basic ROS parameters should exist (use_sim_time is always present)
+        assert len(param_list.names) > 0
         
         node.destroy_node()

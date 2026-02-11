@@ -54,12 +54,11 @@ class TestFaceDetectorNode:
         """Test that the node has declared parameters"""
         node = FaceDetectorNode()
         
-        # Check that at least some key parameters exist
-        # (Testing parameter declaration without requiring specific values)
-        param_names = [param.name for param in node.get_parameters([])]
+        # Check that parameters exist by listing all parameters
+        param_list = node.list_parameters([], depth=0)
         
-        # Basic ROS parameters should exist
-        assert len(param_names) > 0
+        # Basic ROS parameters should exist (use_sim_time is always present)
+        assert len(param_list.names) > 0
         
         node.destroy_node()
     

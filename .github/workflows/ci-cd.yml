@@ -87,10 +87,8 @@ jobs:
           source Docker/.env
           
           # Build all packages with proper dependency order
-          # Mount to /ci_workspace to avoid shadowing pre-built /workspace in the image
           docker run --rm \
-            -v ${{ github.workspace }}:/ci_workspace \
-            -w /ci_workspace \
+            -v ${{ github.workspace }}:/workspace \
             ${BUILT_IMAGE} \
             bash -c "
               # Source ROS environment (jazzy is available in both vulcanexus and standard images)
@@ -100,23 +98,13 @@ jobs:
                 source /opt/ros/jazzy/setup.bash
               fi
               
-              echo '🔧 Using pre-built dependencies from Docker image'
-              echo '📋 Pre-built packages in image:'
-              ls -la /workspace/install/ 2>/dev/null || echo 'No pre-built install found'
+              cd /workspace
               
-              # Source the pre-built workspace dependencies (hri_msgs)
-              if [ -f /workspace/install/setup.bash ]; then
-                source /workspace/install/setup.bash
+              # Source the pre-built workspace dependencies from image (hri_msgs, etc.)
+              if [ -f /opt/workspace/install/setup.bash ]; then
+                source /opt/workspace/install/setup.bash
                 echo '✅ Sourced pre-built dependencies from image'
               fi
-              
-              # Copy our source packages to build directory
-              echo '📦 Copying source packages...'
-              mkdir -p src
-              cp -r /ci_workspace/face_detection src/
-              cp -r /ci_workspace/face_recognition src/
-              cp -r /ci_workspace/gaze_estimation src/
-              cp -r /ci_workspace/visual_speech_activity src/
               
               echo '🔍 Available packages to build:'
               colcon list --names-only
@@ -124,7 +112,7 @@ jobs:
               # Build Python packages
               echo '🔨 Building Python packages: ${{ env.PY_PACKAGES }}'
               
-              timeout 900 colcon build --symlink-install \
+              colcon build --symlink-install \
                 --packages-select ${{ env.PY_PACKAGES }} \
                 --parallel-workers 1 \
                 --event-handlers console_direct+ || echo 'Warning: Some Python packages failed to build'
@@ -132,47 +120,21 @@ jobs:
               # Source the workspace to make built packages available
               source install/setup.bash
               
-              # Check build results and list any failed packages
-              echo '📊 Build Summary:'
-              if [ -d build ]; then
-                echo '✅ Successfully built packages:'
-                find install -name package.xml -exec dirname {} \\; 2>/dev/null | while read dir; do basename \"\$dir\"; done | sort || echo 'No packages found in install'
-                
-                echo '❌ Packages with build directories but no install:'
-                find build -maxdepth 1 -type d -not -name 'build' -exec basename {} \\; | while read pkg; do
-                  if [ ! -d \"install/\$pkg\" ]; then
-                    echo \"  - \$pkg (failed to build)\"
-                  fi
-                done
-              fi
-              
               # Set up test environment
               export PYTHONDONTWRITEBYTECODE=1
               export PYTHONHASHSEED=0
               export AI_VENV='/opt/ros_python_env'
-              # Reduce Python memory footprint
-              export MALLOC_TRIM_THRESHOLD_=100000
-              export MALLOC_MMAP_THRESHOLD_=131072
               
-              # Run tests with coverage for Python packages (run each package separately)
-              echo '🧪 Running tests with coverage...'
+              # Run tests for Python packages (one at a time to reduce memory)
+              echo '🧪 Running tests...'
               PY_PACKAGES_LIST='${{ env.PY_PACKAGES }}'
               
               for pkg in \${PY_PACKAGES_LIST}; do
+                echo \"\n========================================\"
                 echo \"Testing package: \$pkg\"
+                echo \"========================================\"
                 
-                # Force garbage collection before each package
-                python3 -c \"import gc; gc.collect()\" 2>/dev/null || true
-                
-                # Verify package is installed and importable
-                echo \"🔍 Verifying \$pkg installation...\"
-                python3 -c \"import \$pkg; print(f'✅ \$pkg imported successfully')\" || echo \"⚠️ Warning: \$pkg import failed\"
-                
-                # Show test files that will be discovered
-                echo \"📋 Test files for \$pkg:\"
-                find src/\$pkg/test -name 'test_*.py' 2>/dev/null || echo \"No test files found\"
-                
-                # Run tests with memory-optimized settings
+                # Run tests with pytest
                 colcon test \
                   --packages-select \$pkg \
                   --event-handlers console_direct+ \
@@ -185,29 +147,11 @@ jobs:
                     --cov-report=lcov \
                     --cov-report=xml:coverage.xml \
                     -v \
-                  --return-code-on-test-failure || true
+                  --return-code-on-test-failure || echo \"⚠️ Tests failed for \$pkg\"
                 
-                # Copy lcov file immediately after each package test
-                if [ -f \"build/\${pkg}/coverage.lcov\" ]; then
-                  cp \"build/\${pkg}/coverage.lcov\" /ci_workspace/coverage-py-\${pkg}.lcov
-                  echo \"✅ Copied build/\${pkg}/coverage.lcov → /ci_workspace/coverage-py-\${pkg}.lcov\"
-                fi
-                
-                # Clean up test artifacts to free memory between packages
-                echo \"🧹 Cleaning up after \${pkg} tests...\"
-                rm -rf build/\${pkg}/.pytest_cache 2>/dev/null || true
-                rm -rf build/\${pkg}/__pycache__ 2>/dev/null || true
-                python3 -c \"import gc; gc.collect()\" 2>/dev/null || true
-                
-                # Brief pause to allow memory to be freed
-                sleep 2
+                # Brief pause between packages
+                sleep 1
               done
-              
-              # Copy build artifacts back to mounted directory for artifact upload
-              echo '📦 Copying build artifacts...'
-              cp -r build /ci_workspace/ 2>/dev/null || true
-              cp -r install /ci_workspace/ 2>/dev/null || true
-              cp -r log /ci_workspace/ 2>/dev/null || true
             "
 
       # Generate human-readable test summary
@@ -216,10 +160,10 @@ jobs:
         run: |
           source Docker/.env
           docker run --rm \
-            -v ${{ github.workspace }}:/ci_workspace \
-            -w /ci_workspace \
+            -v ${{ github.workspace }}:/workspace \
             ${BUILT_IMAGE} \
             bash -c "
+              cd /workspace
               if [ -f /opt/vulcanexus/jazzy/setup.bash ]; then
                 source /opt/vulcanexus/jazzy/setup.bash
               elif [ -f /opt/ros/jazzy/setup.bash ]; then
@@ -308,10 +252,10 @@ jobs:
         run: |
           source Docker/.env
           docker run --rm \
-            -v ${{ github.workspace }}:/ci_workspace \
-            -w /ci_workspace \
+            -v ${{ github.workspace }}:/workspace \
             ${BUILT_IMAGE} \
             bash -c "
+              cd /workspace
               # Source ROS environment
               if [ -f /opt/vulcanexus/jazzy/setup.bash ]; then
                 source /opt/vulcanexus/jazzy/setup.bash
@@ -356,47 +300,25 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
       
       # Convert lcov to Cobertura XML for better tool compatibility
-      - name: Verify and convert coverage files
+      - name: Convert coverage to Cobertura XML
         if: always()
         run: |
-          # First, check what coverage files exist
-          echo "🔍 Looking for coverage files..."
-          find . -name "coverage*.xml" -o -name "coverage*.lcov" 2>/dev/null || true
-          
-          echo ""
-          echo "📋 Coverage LCOV files found:"
-          ls -lh coverage-*.lcov 2>/dev/null || echo "⚠️ No coverage-*.lcov files found yet"
-          ls -lh build/*/coverage.lcov 2>/dev/null || echo "⚠️ No build/*/coverage.lcov files found yet"
-          
-          # Install lcov_cobertura for coverage conversion
           python3 -m pip install lcov_cobertura
           
           # Convert Python coverage for all packages
           for pkg in ${{ env.PY_PACKAGES }}; do
-            LCOV_FILE=""
-            
-            # Check multiple possible locations for the lcov file
-            if [ -f "coverage-py-${pkg}.lcov" ]; then
-              LCOV_FILE="coverage-py-${pkg}.lcov"
-              echo "✅ Found coverage file at workspace root: ${LCOV_FILE}"
-            elif [ -f "build/${pkg}/coverage.lcov" ]; then
-              LCOV_FILE="build/${pkg}/coverage.lcov"
-              echo "✅ Found coverage file in build directory: ${LCOV_FILE}"
-            fi
-            
-            # Convert if found
-            if [ -n "$LCOV_FILE" ]; then
-              python3 -m lcov_cobertura "$LCOV_FILE" -o "coverage-py-${pkg}.xml"
+            if [ -f "build/${pkg}/coverage.lcov" ]; then
+              python3 -m lcov_cobertura "build/${pkg}/coverage.lcov" -o "coverage-py-${pkg}.xml"
               echo "✅ Converted Python coverage for ${pkg} to XML"
             else
-              echo "⚠️ No Python coverage file found for ${pkg}"
+              echo "⚠️ No coverage file found for ${pkg}"
             fi
           done
           
-          # Final check of all coverage files
+          # List generated coverage files
           echo ""
-          echo "📋 Final coverage XML files:"
-          ls -lh coverage-*.xml 2>/dev/null || echo "❌ No coverage XML files generated"
+          echo "📋 Generated coverage XML files:"
+          ls -lh coverage-*.xml 2>/dev/null || echo "⚠️ No coverage XML files found"
       
       # Generate Coverage Report for PR (using Cobertura XML)
       - name: Code Coverage Report
