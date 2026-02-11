@@ -125,6 +125,9 @@ jobs:
               export PYTHONHASHSEED=0
               export AI_VENV='/opt/ros_python_env'
               
+              # Ensure pytest-cov is installed
+              pip3 install pytest-cov --quiet
+              
               # Run tests for Python packages (one at a time to reduce memory)
               echo '🧪 Running tests...'
               PY_PACKAGES_LIST='${{ env.PY_PACKAGES }}'
@@ -133,6 +136,9 @@ jobs:
                 echo \"\n========================================\"
                 echo \"Testing package: \$pkg\"
                 echo \"========================================\"
+                
+                # Create build directory for coverage output
+                mkdir -p /workspace/build/\$pkg/htmlcov
                 
                 # Run tests with pytest and ensure coverage is generated
                 cd /workspace/src/\$pkg
@@ -145,12 +151,21 @@ jobs:
                   --cov-report=lcov:/workspace/build/\$pkg/coverage.lcov \
                   --cov-report=xml:/workspace/build/\$pkg/coverage.xml \
                   --cov-report=term \
-                  -p no:cacheprovider || echo \"⚠️ Some tests failed for \$pkg\"
+                  -p no:cacheprovider || TEST_FAILED=1
+                
+                # Verify coverage files were created
+                echo \"\"
+                echo \"Checking coverage files for \$pkg:\"
+                ls -lh /workspace/build/\$pkg/coverage.* 2>/dev/null || echo \"⚠️ No coverage files found\"
                 
                 cd /workspace
                 # Brief pause between packages
                 sleep 1
               done
+              
+              if [ \"\$TEST_FAILED\" = \"1\" ]; then
+                echo \"⚠️ Some tests failed, but continuing with coverage report\"
+              fi
             "
 
       # Generate human-readable test summary
@@ -180,6 +195,16 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           cat test_summary.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+      # Debug: Check build directory structure
+      - name: Debug build directory structure
+        if: always()
+        run: |
+          echo "📋 Build directory contents:"
+          find build -type f | head -50
+          echo ""
+          echo "📋 Build directory tree:"
+          find build -maxdepth 3 -type d
       
       - name: Generate test Report
         uses: dorny/test-reporter@v1
@@ -193,6 +218,7 @@ jobs:
       # Upload test result
       - name: Upload test results
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: test-results
@@ -200,7 +226,8 @@ jobs:
             build/*/test_results/**/*.xml
             build/*/pytest.xml
             log/latest_test/**/*.log
-            test_summary.txt      
+            test_summary.txt
+          if-no-files-found: warn      
       # Verify coverage files were generated
       - name: Verify coverage files
         if: always()
@@ -214,7 +241,12 @@ jobs:
           echo "📋 Test result files:"
           find build -name "pytest.xml" -type f 2>/dev/null | while read f; do
             echo "✅ $f"
-          done      
+          done
+          echo ""
+          echo "📋 HTML coverage files:"
+          find build -type d -name "htmlcov" 2>/dev/null | while read d; do
+            echo "✅ $d/ ($(find "$d" -type f | wc -l) files)"
+          done
       # Create test badge (for README)
       - name: Create test badge
         if: always() && github.ref == 'refs/heads/main'
@@ -252,10 +284,12 @@ jobs:
 
       - name: Upload badge data
         if: always() && github.ref == 'refs/heads/main'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: test-badge
           path: test-badge.json
+          if-no-files-found: warn
       
 
       # Generate code coverage reports (from existing test data)
@@ -300,21 +334,29 @@ jobs:
       # Convert lcov to Cobertura XML for better tool compatibility
       - name: Convert coverage to Cobertura XML
         if: always()
+        continue-on-error: true
         run: |
-          python3 -m pip install lcov_cobertura
+          python3 -m pip install lcov_cobertura --quiet
           
           echo "📋 Looking for coverage files..."
-          find build -name "coverage.lcov" -o -name "coverage.xml" | head -20
+          echo ""
+          
+          # Track if any files were found
+          FILES_FOUND=0
           
           # Convert Python coverage lcov files to XML
           for pkg in ${{ env.PY_PACKAGES }}; do
             LCOV_FILE="build/${pkg}/coverage.lcov"
             if [ -f "$LCOV_FILE" ]; then
               echo "✅ Converting Python coverage for ${pkg}..."
-              python3 -m lcov_cobertura "$LCOV_FILE" -o "coverage-py-${pkg}.xml"
-              echo "✅ Generated: coverage-py-${pkg}.xml"
+              if python3 -m lcov_cobertura "$LCOV_FILE" -o "coverage-py-${pkg}.xml"; then
+                echo "✅ Generated: coverage-py-${pkg}.xml"
+                FILES_FOUND=$((FILES_FOUND + 1))
+              else
+                echo "⚠️ Failed to convert LCOV for ${pkg}"
+              fi
             else
-              echo "⚠️ coverage.lcov not found for ${pkg} at $LCOV_FILE"
+              echo "ℹ️ coverage.lcov not found for ${pkg} at $LCOV_FILE"
             fi
           done
           
@@ -323,14 +365,16 @@ jobs:
             if [ -f "build/${pkg}/coverage.xml" ]; then
               cp "build/${pkg}/coverage.xml" "coverage-py-${pkg}-direct.xml"
               echo "✅ Copied coverage.xml for ${pkg}"
+              FILES_FOUND=$((FILES_FOUND + 1))
             fi
           done
           
           # List all generated coverage files
           echo ""
-          echo "📋 Coverage files found:"
-          ls -lh coverage-*.xml 2>/dev/null || echo "⚠️ No coverage XML files generated"
+          echo "📋 Coverage conversion summary:"
+          ls -lh coverage-*.xml 2>/dev/null && echo "✅ Coverage XML files generated" || echo "ℹ️ No coverage XML files generated (tests may have been skipped or failed)"
           echo ""
+          echo "📋 All build coverage files:"
           find build -name "coverage.*" -type f 2>/dev/null | head -20
       
       # Generate Coverage Report for PR (using Cobertura XML)
@@ -361,15 +405,17 @@ jobs:
       # Upload coverage reports as artifacts
       - name: Upload coverage reports
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: coverage-reports
           path: |
-            build/*/htmlcov/**
-            build/*/coverage.*
+            build/*/htmlcov
+            build/*/coverage.lcov
+            build/*/coverage.xml
             coverage_summary.txt
             coverage-*.xml
-            code-coverage-results.md
+          if-no-files-found: warn
       
       # Create coverage badge (for README)
       - name: Create coverage badge
@@ -434,10 +480,12 @@ jobs:
 
       - name: Upload coverage badge data
         if: always() && github.ref == 'refs/heads/main'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: coverage-badge
           path: coverage-badge.json
+          if-no-files-found: warn
       
       # Publish badges to badges branch for shields.io endpoint
       - name: Publish badges to badges branch
