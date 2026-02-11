@@ -438,54 +438,50 @@ jobs:
         if: always() && github.ref == 'refs/heads/jazzy-devel'
         continue-on-error: true
         run: |
+          # Extract Python coverage percentage from lcov file
           echo "🔍 Searching for Python coverage files..."
-          find build -name "coverage.lcov" -o -name "coverage.xml" 2>/dev/null | head -20
+          find . -name "coverage.lcov" -o -name ".coverage" 2>/dev/null | head -20
           
           # Extract Python coverage for all packages
           PY_TOTAL_LINES_HIT=0
           PY_TOTAL_LINES_FOUND=0
-          PACKAGES_WITH_COVERAGE=0
           
           for pkg in ${{ env.PY_PACKAGES }}; do
             echo "🔍 Checking Python coverage for: ${pkg}"
+            PY_LCOV_FILE=""
             
-            # Check lcov file first
             if [ -f "build/${pkg}/coverage.lcov" ]; then
-              echo "✅ Found LCOV: build/${pkg}/coverage.lcov"
-              PKG_LINES_HIT=$(grep "^LH:" "build/${pkg}/coverage.lcov" | cut -d: -f2 | awk '{s+=$1} END {print s+0}')
-              PKG_LINES_FOUND=$(grep "^LF:" "build/${pkg}/coverage.lcov" | cut -d: -f2 | awk '{s+=$1} END {print s+0}')
-              
-              if [ "$PKG_LINES_FOUND" -gt 0 ]; then
-                PY_TOTAL_LINES_HIT=$((PY_TOTAL_LINES_HIT + PKG_LINES_HIT))
-                PY_TOTAL_LINES_FOUND=$((PY_TOTAL_LINES_FOUND + PKG_LINES_FOUND))
-                PACKAGES_WITH_COVERAGE=$((PACKAGES_WITH_COVERAGE + 1))
-                echo "📊 ${pkg}: LH=$PKG_LINES_HIT, LF=$PKG_LINES_FOUND"
-              fi
-            elif [ -f "build/${pkg}/coverage.xml" ]; then
-              echo "✅ Found XML: build/${pkg}/coverage.xml"
-              PACKAGES_WITH_COVERAGE=$((PACKAGES_WITH_COVERAGE + 1))
+              PY_LCOV_FILE="build/${pkg}/coverage.lcov"
+              echo "✅ Found at: build/${pkg}/coverage.lcov"
+            elif [ -f "${pkg}/coverage.lcov" ]; then
+              PY_LCOV_FILE="${pkg}/coverage.lcov"
+              echo "✅ Found at: ${pkg}/coverage.lcov"
+            fi
+            
+            if [ -n "$PY_LCOV_FILE" ]; then
+              PKG_LINES_HIT=$(grep -E "^LH:" "$PY_LCOV_FILE" | cut -d: -f2 | awk '{s+=$1} END {print s}')
+              PKG_LINES_FOUND=$(grep -E "^LF:" "$PY_LCOV_FILE" | cut -d: -f2 | awk '{s+=$1} END {print s}')
+              PY_TOTAL_LINES_HIT=$((PY_TOTAL_LINES_HIT + PKG_LINES_HIT))
+              PY_TOTAL_LINES_FOUND=$((PY_TOTAL_LINES_FOUND + PKG_LINES_FOUND))
+              echo "📊 ${pkg}: LH=$PKG_LINES_HIT, LF=$PKG_LINES_FOUND"
             fi
           done
           
-          # Calculate coverage percentage
           if [ "$PY_TOTAL_LINES_FOUND" -gt 0 ]; then
-            PY_COV_PCT=$(awk "BEGIN {printf \"%.0f\", (\$1/\$2)*100}" <<< "$PY_TOTAL_LINES_HIT $PY_TOTAL_LINES_FOUND")
-            echo "✅ Total Python Coverage: ${PY_COV_PCT}%"
+            PY_COV_PCT=$(awk "BEGIN {printf \"%.0f\", ($PY_TOTAL_LINES_HIT/$PY_TOTAL_LINES_FOUND)*100}")
+            echo "✅ Total Python Coverage: $PY_COV_PCT%"
           else
-            echo "⚠️ No Python coverage metrics extracted (but ${PACKAGES_WITH_COVERAGE} packages have coverage files)"
+            echo "⚠️ No Python coverage data found"
             PY_COV_PCT=0
           fi
           
-          # Determine badge color based on coverage
+          # Determine badge color
           if [ $PY_COV_PCT -ge 80 ]; then
             COLOR="brightgreen"
           elif [ $PY_COV_PCT -ge 60 ]; then
             COLOR="yellow"
           elif [ $PY_COV_PCT -ge 40 ]; then
             COLOR="orange"
-          elif [ $PACKAGES_WITH_COVERAGE -gt 0 ]; then
-            COLOR="blue"
-            echo "ℹ️ Coverage detected but percentage could not be calculated"
           else
             COLOR="red"
           fi
