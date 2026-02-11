@@ -126,11 +126,15 @@ jobs:
               export AI_VENV='/opt/ros_python_env'
               
               # Ensure pytest-cov is installed
-              pip3 install pytest-cov --quiet
+              pip3 install pytest-cov --break-system-packages --quiet || pip3 install pytest-cov --user --quiet
               
               # Run tests for Python packages (one at a time to reduce memory)
               echo '🧪 Running tests...'
               PY_PACKAGES_LIST='${{ env.PY_PACKAGES }}'
+              
+              # List workspace structure to debug
+              echo \"📁 Workspace structure:\"
+              ls -la /workspace/ | head -20
               
               for pkg in \${PY_PACKAGES_LIST}; do
                 echo \"\n========================================\"
@@ -140,8 +144,20 @@ jobs:
                 # Create build directory for coverage output
                 mkdir -p /workspace/build/\$pkg/htmlcov
                 
+                # Check where the package actually is
+                if [ -d \"/workspace/\$pkg\" ]; then
+                  PKG_PATH=\"/workspace/\$pkg\"
+                elif [ -d \"/workspace/src/\$pkg\" ]; then
+                  PKG_PATH=\"/workspace/src/\$pkg\"
+                else
+                  echo \"⚠️ Package \$pkg not found in /workspace or /workspace/src\"
+                  continue
+                fi
+                
+                echo \"ℹ️ Testing from: \$PKG_PATH\"
+                cd \"\$PKG_PATH\"
+                
                 # Run tests with pytest and ensure coverage is generated
-                cd /workspace/src/\$pkg
                 python3 -m pytest test/ \
                   -v \
                   --tb=short \
