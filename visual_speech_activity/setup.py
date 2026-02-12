@@ -27,6 +27,7 @@ setup(
     maintainer_email='josep.bravo@eurecat.org',
     description='Visual speech activity detection for HRI applications using lip movement analysis',
     license='Apache-2.0',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'visual_speech_activity_node = visual_speech_activity.visual_speech_activity_node:main',

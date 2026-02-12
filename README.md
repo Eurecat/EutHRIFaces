@@ -1,12 +1,30 @@
-# README: EutHRIFaces
+# EutHRIFaces: Face Detection, Recognition, Gaze Estimation, and Visual Speech Activity for Human-Robot Interaction 
+[![Build Status](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml/badge.svg?branch=main)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
 
-ROS2 packages for face-related perception capabilities in Human-Robot Interaction (HRI) applications.
+[![Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Eurecat/EutHRIFaces/badges/main/test-badge.json)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Eurecat/EutHRIFaces/badges/main/coverage-badge.json)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
 
-## 🏗️ Architecture Overview
+🚀 Production-ready ROS2 (Jazzy, Humble-WIP) face perception stack with **advanced YOLO detection** 🎯 and a **custom persistent identity manager** 🆔. Uniquely integrates **MongoDB** 💾 for real-time user tracking with automatic re-identification across sessions—identities survive Docker restarts! Fully compliant with the [ros4hri](https://github.com/ros4hri) 🤖 standard, leveraging state-of-the-art open-source AI models in an enterprise-grade architecture.
 
-![Perception Stack Diagram](Docker/imgs/perceptionstack_diagram.jpeg)
+## 🏗️ Architecture Overview and RVIZ Visualization
 
-This diagram shows the complete perception stack architecture organized by domain. **EutHRIFaces** is part of the Visual Perception Domain and focuses specifically on face-related processing.
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="Docker/imgs/perceptionstack_diagram.jpeg" alt="Perception Stack Architecture" width="100%"/>
+    </td>
+    <td align="center" width="50%">
+      <img src="Docker/imgs/example_Stack.jpeg" alt="RVIZ visualization output of EutHRIFaces" width="100%"/>
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><em>Perception Stack Architecture</em></td>
+    <td align="center"><em>RVIZ Visualization Output</em></td>
+  </tr>
+</table>
+
+**EutHRIFaces** is part of the Visual Perception Domain and focuses specifically on face-related processing.
+
 
 ### Key Characteristics
 
@@ -21,15 +39,17 @@ This diagram shows the complete perception stack architecture organized by domai
 ```bash
 # Any camera publisher (e.g., from EutEntityDetection/eut_utils)
 /camera/image_raw/compressed  →  [EutHRIFaces]  →  ROS4HRI topics
-                                                   ├─ /humans/faces/tracked
-                                                   ├─ /humans/faces/landmarks  (default: optimized)
+                                                   ├─ /humans/faces/tracked (with ros4hri_with_id)
+                                                   ├─ /humans/faces/detected  (default: optimized)
                                                    ├─ /humans/faces/gaze
-                                                   └─ /humans/persons/face
+                                                   ├─ /humans/faces/speaking
+                                                   └─ /humans/faces/recognized
+                                                   
 ```
 
 **Note on Topic Names:**
-- **Default mode** (optimized): Topics without individual IDs (e.g., `/humans/faces/landmarks`)
-- **With ID mode** (ros4hri_with_id): Topics include face IDs (e.g., `/humans/faces/{face_id}/landmarks`)
+- **Default mode** (optimized): Topics without individual IDs (e.g., `/humans/faces/detected`)
+- **With ID mode** (ros4hri_with_id): Topics include face IDs (e.g., `/humans/faces/{face_id}/detected`)
 - The ID mode provides full ROS4HRI compliance but with slightly higher overhead. Enable it via launch parameter `ros4hri_with_id:=true`
 
 Once you have a camera publishing images, EutHRIFaces packages will automatically detect, recognize, and analyze faces, publishing standardized HRI data for downstream multimodal fusion (e.g., EutPersonManager).
@@ -47,7 +67,7 @@ YOLO-based face detection with 5 key facial landmarks.
 - **Input**: RGB camera images
 - **Output**: `hri_msgs/FacialLandmarksArray` (ros4hri compatible)
 - **Features**: 
-  - Auto-download YOLO face model
+  - Auto-download YOLO face model (and optionally mediapipe and dlip models)
   - CPU/GPU support
   - Real-time performance
   - 5 key landmarks (eyes, nose, mouth corners)
@@ -116,6 +136,9 @@ cd EutHRIFaces
 As simple as...
    ```bash
    docker compose up
+   # Expecting camera input on /camera/image_raw/compressed 
+   # Use https://github.com/christianrauch/camera_ros to publish camera images if needed
+   # or use our EutEntityDetection package to publish both camera and entity detection results if public already
    ```
 ... within `Docker/` folder
 
@@ -186,7 +209,7 @@ All packages follow the [ros4hri](https://github.com/ros4hri) standard for human
 
 ```
 EutHRIFaces/
-├── face_detection/     # YOLO face detection (IMPLEMENTED)
+├── face_detection/     # YOLO face detection + mediapipe + dlip (IMPLEMENTED)
 ├── face_recognition/   # Face identification (TODO)
 ├── gaze_estimation/    # Gaze direction (TODO)
 └── Docker/            # Docker deployment files
@@ -245,8 +268,7 @@ then run `docker compose up` again. This cleanly removes all existing containers
 Apache-2.0
 
 ## Maintainer
-
-Josep Bravo (josep.bravo@eurecat.org)
+[Josep Bravo](https://github.com/LeBrav)
 
 ## Related Packages
 

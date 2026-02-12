@@ -33,6 +33,7 @@ setup(
     maintainer_email='josep.bravo@eurecat.org',
     description='Face recognition package for HRI applications using face embeddings and identity management',
     license='Apache-2.0',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'face_recognition_node = face_recognition.face_recognition_node:main',

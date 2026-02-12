@@ -28,6 +28,7 @@ setup(
     maintainer_email='josep.bravo@eurecat.org',
     description='Face detection package for HRI applications using YOLO',
     license='Apache-2.0',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'face_detector = face_detection.face_detector:main',

@@ -148,7 +148,7 @@ class GazeEstimationNode(Node):
                     Image, 
                     self.image_input_topic, 
                     self._store_latest_rgb, 
-                    qos_profile
+                    self.qos_profile
                 )
             
             self.image_pub = self.create_publisher(

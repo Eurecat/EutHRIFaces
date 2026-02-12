@@ -170,5 +170,4 @@ For GPU acceleration:
 Apache-2.0
 
 ## Maintainer
-
-Josep Bravo (josep.bravo@eurecat.org)
+[Josep Bravo](https://github.com/LeBrav)

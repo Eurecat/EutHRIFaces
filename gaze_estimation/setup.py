@@ -24,6 +24,7 @@ setup(
     maintainer_email='josep.bravo@eurecat.org',
     description='Gaze estimation package for HRI applications',
     license='Apache-2.0',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'gaze_estimation_node = gaze_estimation.gaze_estimation_node:main',
