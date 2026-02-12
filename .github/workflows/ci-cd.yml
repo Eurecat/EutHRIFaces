@@ -3,10 +3,10 @@ name: Build, Test & Push Docker Image
 on:
   push:
     branches:
-      - jazzy-devel
+      - main
   pull_request:
     branches:
-      - jazzy-devel
+      - main
   workflow_dispatch:
 
 jobs:
@@ -265,7 +265,7 @@ jobs:
           done
       # Create test badge (for README)
       - name: Create test badge
-        if: always() && github.ref == 'refs/heads/jazzy-devel'
+        if: always() && github.ref == 'refs/heads/main'
         run: |
           # Parse the summary line from test_summary.txt
           # Example line: "Summary: 55 tests, 0 errors, 0 failures, 6 skipped"
@@ -299,7 +299,7 @@ jobs:
           cat test-badge.json
 
       - name: Upload badge data
-        if: always() && github.ref == 'refs/heads/jazzy-devel'
+        if: always() && github.ref == 'refs/heads/main'
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
@@ -435,7 +435,7 @@ jobs:
       
       # Create coverage badge (for README)
       - name: Create coverage badge
-        if: always() && github.ref == 'refs/heads/jazzy-devel'
+        if: always() && github.ref == 'refs/heads/main'
         continue-on-error: true
         run: |
           # Extract Python coverage percentage from lcov file
@@ -491,7 +491,7 @@ jobs:
           cat coverage-badge.json
 
       - name: Upload coverage badge data
-        if: always() && github.ref == 'refs/heads/jazzy-devel'
+        if: always() && github.ref == 'refs/heads/main'
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
@@ -501,14 +501,11 @@ jobs:
       
       # Publish badges to badges branch for shields.io endpoint
       - name: Publish badges to badges branch
-        if: always() && github.ref == 'refs/heads/jazzy-devel'
+        if: always() && github.ref == 'refs/heads/main'
         run: |
           # Determine branch name for badge directory
-          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            BRANCH_NAME="main"
-          else
-            BRANCH_NAME="jazzy-devel"
-          fi
+          # Always use 'main' since workflow only runs on main branch
+          BRANCH_NAME="main"
           
           # Setup git
           git config --global user.name "github-actions[bot]"

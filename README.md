@@ -1,8 +1,8 @@
 # EutHRIFaces: Face Detection, Recognition, Gaze Estimation, and Visual Speech Activity for Human-Robot Interaction 
-[![Build Status](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml/badge.svg?branch=jazzy-devel)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
+[![Build Status](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml/badge.svg?branch=main)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
 
-[![Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Eurecat/EutHRIFaces/badges/jazzy-devel/test-badge.json)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
-[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Eurecat/EutHRIFaces/badges/jazzy-devel/coverage-badge.json)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
+[![Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Eurecat/EutHRIFaces/badges/main/test-badge.json)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Eurecat/EutHRIFaces/badges/main/coverage-badge.json)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
 
 🚀 Production-ready ROS2 (Jazzy, Humble-WIP) face perception stack with **advanced YOLO detection** 🎯 and a **custom persistent identity manager** 🆔. Uniquely integrates **MongoDB** 💾 for real-time user tracking with automatic re-identification across sessions—identities survive Docker restarts! Fully compliant with the [ros4hri](https://github.com/ros4hri) 🤖 standard, leveraging state-of-the-art open-source AI models in an enterprise-grade architecture.
 
