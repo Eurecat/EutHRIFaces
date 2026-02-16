@@ -241,8 +241,10 @@ class FaceDetectorNode(Node):
             self.get_logger().debug(f"Processing image: {cv_image.shape}, dtype: {cv_image.dtype}")
         
         # Run face detection
-        detection_results = self.detector.detect(cv_image)
-        
+        a = time.time()
+        detection_results = self.detector.detect(cv_image) # 20 ms mean
+        # self.get_logger().info(f"YOLO face detection took {(time.time() - a)*1000:.1f} ms")
+
         # Enhance with dlib 68-point landmarks if enabled
         if self.dlib_detector is not None and self.dlib_detector.is_available():
             num_faces = len(detection_results.get('faces', []))
