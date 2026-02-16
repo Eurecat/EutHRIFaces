@@ -23,6 +23,7 @@ Full landmark map: https://storage.googleapis.com/mediapipe-assets/documentation
 """
 
 import os
+import time
 import numpy as np
 from typing import List, Tuple, Optional
 import logging
@@ -210,14 +211,15 @@ class MediaPipeLandmarkDetector:
             self.logger.info(f"Loading MediaPipe Face Landmarker from: {model_path}")
             
             # Create MediaPipe FaceLandmarker options
-            base_options = python.BaseOptions(model_asset_path=model_path)
-            
+
             # Configure GPU delegation if requested
             if self.use_gpu:
                 try:
                     # Try to enable GPU delegation
-                    from mediapipe.tasks.python.core import base_options as bo
-                    base_options.delegate = bo.BaseOptions.Delegate.GPU
+                    base_options = python.BaseOptions(
+                        model_asset_path=model_path,
+                        delegate=python.BaseOptions.Delegate.GPU,
+                    )
                     light_green = "\033[38;5;82m"
                     reset = "\033[0m"
                     self.logger.info(f"{light_green}[MEDIAPIPE-GPU] GPU delegation enabled{reset}")
@@ -227,12 +229,16 @@ class MediaPipeLandmarkDetector:
             else:
                 light_green = "\033[38;5;82m"
                 reset = "\033[0m"
+                base_options = python.BaseOptions(
+                    model_asset_path=model_path,
+                    delegate=python.BaseOptions.Delegate.CPU,
+                )
                 self.logger.info(f"{light_green}[MEDIAPIPE-CPU] Using CPU{reset}")
             
             options = vision.FaceLandmarkerOptions(
                 base_options=base_options,
-                running_mode=vision.RunningMode.IMAGE,
-                num_faces=10,  # Support multiple faces
+                running_mode=vision.RunningMode.VIDEO,
+                num_faces=1,  # Support multiple faces
                 min_face_detection_confidence=self.min_detection_confidence,
                 min_tracking_confidence=self.min_tracking_confidence,
                 output_face_blendshapes=False,  # We don't need blendshapes
@@ -351,8 +357,10 @@ class MediaPipeLandmarkDetector:
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
             
             # Detect landmarks
-            detection_result = self.landmarker.detect(mp_image)
-            
+            a = time.time()
+            ts_ms = int(time.time() * 1000)
+            detection_result = self.landmarker.detect_for_video(mp_image, ts_ms)
+            # self.logger.info(f"MediaPipe detection took {(time.time() - a)*1000:.1f} ms") # 10-15ms aprox
             if not detection_result.face_landmarks or len(detection_result.face_landmarks) == 0:
                 return None
             
