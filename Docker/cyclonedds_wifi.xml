@@ -5,7 +5,7 @@
       <AllowMulticast>false</AllowMulticast>
       <Interfaces>
         <!-- Your PC wifi interface name -->
-        <NetworkInterface name="wlp47s0" priority="2" presence_required="true"/>
+        <NetworkInterface name="wlp0s20f3" priority="2" presence_required="true"/>
         <NetworkInterface name="lo" priority="0"/>
       </Interfaces>
     </General>
