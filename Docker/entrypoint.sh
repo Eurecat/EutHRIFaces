@@ -23,14 +23,14 @@ if [ ! -e "/workspace/log/runtime_latest" ]; then
 fi
 
 # Source ROS 2 environment
-if [ -f "/opt/ros/jazzy/setup.bash" ]; then
+if [ -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]; then
     echo "Sourcing ROS 2 environment..."
-    source /opt/ros/jazzy/setup.bash
+    source /opt/ros/${ROS_DISTRO}/setup.bash
     echo "Sourced ${ROS_DISTRO}"
 fi
-if [ -f "/opt/vulcanexus/jazzy/setup.bash" ]; then
+if [ -f "/opt/vulcanexus/${ROS_DISTRO}/setup.bash" ]; then
     echo "Sourcing ROS 2 environment..."
-    source /opt/vulcanexus/jazzy/setup.bash
+    source /opt/vulcanexus/${ROS_DISTRO}/setup.bash
     echo "Sourced ${ROS_DISTRO}"
 fi
 
