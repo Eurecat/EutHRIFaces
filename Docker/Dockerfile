@@ -12,14 +12,10 @@ ARG CPU_ONLY
 # Prevent interactive prompts during apt installs
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install CUDA dependencies only if not CPU_ONLY
-RUN if [ "$CPU_ONLY" = "false" ]; then \
-        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
-        dpkg -i cuda-keyring_1.1-1_all.deb; \
-    fi
+# NOTE: We use pip-only CUDA stack (nvidia-cudnn-cu12, etc.) from requirements_detailed.txt
+# No apt CUDA/cuDNN packages needed - avoiding mixing apt and pip CUDA stacks
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    $(if [ "$CPU_ONLY" = "false" ]; then echo "libcudnn9-cuda-12 cuda-libraries-12-9"; fi) \
     ffmpeg \
 && rm -rf /var/lib/apt/lists/*
 
@@ -38,20 +34,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /workspace
 
 # Copy all requirements files
-COPY requirements.txt /workspace/requirements.txt
+COPY requirements_detailed_humble.txt /workspace/requirements_detailed_humble.txt
 COPY requirements_detailed.txt /workspace/requirements_detailed.txt
 COPY requirements_detailed_cpu.txt /workspace/requirements_detailed_cpu.txt
 
 # Copy requirements files and install Python dependencies in the virtual environment
 # Use CPU or GPU detailed requirements based on build arg
+# For Humble use requirements.txt, for Jazzy use requirements_detailed.txt
 RUN if [ "$CPU_ONLY" = "true" ]; then \
         cp requirements_detailed_cpu.txt requirements_detailed_active.txt; \
     else \
-        cp requirements.txt requirements_detailed_active.txt; \
+        if [ "${ROS_DISTRO}" = "humble" ]; then \
+            cp requirements_detailed_humble.txt requirements_detailed_active.txt; \
+        else \
+            cp requirements_detailed.txt requirements_detailed_active.txt; \
+        fi; \
     fi
 
 # Install packages in the ros_python_env
 RUN /bin/bash -c "source /opt/ros_python_env/bin/activate && uv pip install -r requirements_detailed_active.txt"
+
+# ------------------------------------------------------------
+# Configure LD_LIBRARY_PATH for pip-installed CUDA libraries
+# This ensures onnxruntime-gpu can find libcudnn_adv.so.9 and other cuDNN libs
+# Python 3.10 for Humble, Python 3.12 for Jazzy
+# We add it to:
+# 1. /etc/profile.d/ - sourced by entrypoint and login shells
+# 2. /etc/bash.bashrc - sourced by interactive bash shells (docker exec)
+# 3. /etc/environment - read by PAM sessions
+# ------------------------------------------------------------
+RUN PYTHON_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')") && \
+    echo "Python version detected: ${PYTHON_VER}" && \
+    CUDA_LIB_PATH="/opt/ros_python_env/lib/python${PYTHON_VER}/site-packages/nvidia/cudnn/lib:/opt/ros_python_env/lib/python${PYTHON_VER}/site-packages/nvidia/cublas/lib:/opt/ros_python_env/lib/python${PYTHON_VER}/site-packages/nvidia/cuda_runtime/lib" && \
+    echo "export LD_LIBRARY_PATH=${CUDA_LIB_PATH}:\${LD_LIBRARY_PATH}" >> /etc/profile.d/cuda_lib_path.sh && \
+    chmod +x /etc/profile.d/cuda_lib_path.sh && \
+    echo "export LD_LIBRARY_PATH=${CUDA_LIB_PATH}:\${LD_LIBRARY_PATH}" >> /etc/bash.bashrc && \
+    echo "LD_LIBRARY_PATH=\"${CUDA_LIB_PATH}:\${LD_LIBRARY_PATH}\"" >> /etc/environment
+
 
 # ------------------------------------------------------------
 # Setup rosdep

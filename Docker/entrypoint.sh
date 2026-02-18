@@ -3,6 +3,12 @@ set -e
 
 echo "=== ENTRYPOINT START $(date) PID=$$ ==="
 
+# Source CUDA library path if it exists (for pip-installed CUDA libraries)
+if [ -f /etc/profile.d/cuda_lib_path.sh ]; then
+    echo "Sourcing CUDA library path..."
+    source /etc/profile.d/cuda_lib_path.sh
+fi
+
 # Create timestamped runtime log directory for ROS2 node logs
 # Use PACKAGE_NAME if set, otherwise use HOSTNAME
 TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)

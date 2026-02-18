@@ -129,11 +129,34 @@ else
 fi
 
 # Set or Update TARGET_DISTRO
-TARGET_DISTRO="jazzy"
 if grep -q -E "^TARGET_DISTRO=" "$ENV_FILE"; then
     sed -i "s/^TARGET_DISTRO=.*/TARGET_DISTRO=$TARGET_DISTRO/" "$ENV_FILE"
 else
     echo "TARGET_DISTRO=$TARGET_DISTRO" >> "$ENV_FILE"
+fi
+
+# Set or Update RMW_IMPLEMENTATION based on TARGET_DISTRO
+if [ "$TARGET_DISTRO" = "humble" ]; then
+    RMW_IMPLEMENTATION="rmw_cyclonedds_cpp"
+    IMG_RAW_TOPIC="/head_front_camera/color/image_raw/compressed"
+    LD_LIBRARY_PATH=/workspace/install/hri_msgs/lib:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib:/opt/ros_python_env/lib/python3.10/site-packages/nvidia/cudnn/lib:/opt/ros_python_env/lib/python3.10/site-packages/nvidia/cublas/lib:/opt/ros_python_env/lib/python3.10/site-packages/nvidia/cuda_runtime/lib:
+else
+    RMW_IMPLEMENTATION="rmw_fastrtps_cpp"
+    IMG_RAW_TOPIC="/camera/image_raw/compressed"
+    LD_LIBRARY_PATH=/workspace/install/hri_msgs/lib:/opt/ros/jazzy/opt/rviz_ogre_vendor/lib:/opt/ros/jazzy/lib/x86_64-linux-gnu:/opt/ros/jazzy/lib:/opt/ros_python_env/lib/python3.12/site-packages/nvidia/cudnn/lib:/opt/ros_python_env/lib/python3.12/site-packages/nvidia/cublas/lib:/opt/ros_python_env/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:
+fi
+
+if grep -q -E "^RMW_IMPLEMENTATION=" "$ENV_FILE"; then
+    sed -i "s|^RMW_IMPLEMENTATION=.*|RMW_IMPLEMENTATION=$RMW_IMPLEMENTATION|" "$ENV_FILE"
+else
+    echo "RMW_IMPLEMENTATION=$RMW_IMPLEMENTATION" >> "$ENV_FILE"
+fi
+
+# Set or Update IMG_RAW_TOPIC based on TARGET_DISTRO
+if grep -q -E "^IMG_RAW_TOPIC=" "$ENV_FILE"; then
+    sed -i "s|^IMG_RAW_TOPIC=.*|IMG_RAW_TOPIC=$IMG_RAW_TOPIC|" "$ENV_FILE"
+else
+    echo "IMG_RAW_TOPIC=$IMG_RAW_TOPIC" >> "$ENV_FILE"
 fi
 
 echo "Application Docker image built successfully!"
