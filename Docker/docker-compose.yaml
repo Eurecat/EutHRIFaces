@@ -146,6 +146,9 @@ services:
     tty: true
     stdin_open: true
     environment:
+      - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}  
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastdds_cpp} 
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
       - NVIDIA_VISIBLE_DEVICES=all 
       - PACKAGE_NAME=visual_speech_activity

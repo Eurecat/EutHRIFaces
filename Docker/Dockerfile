@@ -47,7 +47,7 @@ COPY requirements_detailed_cpu.txt /workspace/requirements_detailed_cpu.txt
 RUN if [ "$CPU_ONLY" = "true" ]; then \
         cp requirements_detailed_cpu.txt requirements_detailed_active.txt; \
     else \
-        cp requirements_detailed.txt requirements_detailed_active.txt; \
+        cp requirements.txt requirements_detailed_active.txt; \
     fi
 
 # Install packages in the ros_python_env
