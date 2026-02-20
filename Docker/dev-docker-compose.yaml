@@ -32,7 +32,7 @@ services:
     environment:
       - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}  
-      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastdds_cpp}      
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}      
       # - USER_ID=${USER_ID}
       # - GROUP_ID=${GROUP_ID}
       # - USERNAME=${USERNAME}

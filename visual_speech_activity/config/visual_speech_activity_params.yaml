@@ -7,7 +7,7 @@ visual_speech_activity_node:
     recognition_input_topic: "/humans/faces/recognized"
     landmarks_input_topic: "/humans/faces/detected"
     output_topic: "/humans/faces/speaking"
-    output_image_topic: "/humans/faces/speaking/annotated_img"
+    output_image_topic: "/humans/faces/speaking/annotated_img/compressed"
     
     # ROS4HRI Configuration
     # Set to true for per-ID topics (/humans/faces/<id>/speaking)

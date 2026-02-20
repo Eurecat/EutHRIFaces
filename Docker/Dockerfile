@@ -40,12 +40,16 @@ COPY requirements_detailed_cpu.txt /workspace/requirements_detailed_cpu.txt
 
 # Copy requirements files and install Python dependencies in the virtual environment
 # Use CPU or GPU detailed requirements based on build arg
-# For Humble use requirements.txt, for Jazzy use requirements_detailed.txt
-RUN if [ "$CPU_ONLY" = "true" ]; then \
-        cp requirements_detailed_cpu.txt requirements_detailed_active.txt; \
-    else \
-        if [ "${ROS_DISTRO}" = "humble" ]; then \
+# For Humble+CPU use requirements_detailed_humble_cpu.txt, for Humble use requirements_detailed_humble.txt, for Jazzy+CPU use requirements_detailed_cpu.txt, else requirements_detailed.txt
+RUN if [ "${ROS_DISTRO}" = "humble" ]; then \
+        if [ "$CPU_ONLY" = "true" ] && [ -f requirements_detailed_humble_cpu.txt ]; then \
+            cp requirements_detailed_humble_cpu.txt requirements_detailed_active.txt; \
+        else \
             cp requirements_detailed_humble.txt requirements_detailed_active.txt; \
+        fi; \
+    else \
+        if [ "$CPU_ONLY" = "true" ]; then \
+            cp requirements_detailed_cpu.txt requirements_detailed_active.txt; \
         else \
             cp requirements_detailed.txt requirements_detailed_active.txt; \
         fi; \

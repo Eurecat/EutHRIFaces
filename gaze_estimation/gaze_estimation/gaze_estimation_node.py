@@ -158,7 +158,7 @@ class GazeEstimationNode(Node):
                 durability=DurabilityPolicy.VOLATILE
             )
             self.image_pub = self.create_publisher(
-                Image,
+                CompressedImage,
                 self.output_image_topic,
                 image_qos
             )
@@ -415,9 +415,18 @@ class GazeEstimationNode(Node):
                     self.draw_single_face_visualization(annotated_image, face_msg, gaze_score, gaze_direction, pitch, yaw, roll)
                 
                 # Convert to ROS Image and publish once
-                annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
-                annotated_msg.header = landmarks_msg.header if landmarks_msg.header is not None else Header()
-                self.image_pub.publish(annotated_msg)
+                # annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
+
+                success, encoded_image = cv2.imencode('.jpg', annotated_image)
+                if not success:
+                    self.get_logger().error("Failed to encode annotated image as JPEG")
+                    return
+                compressed_msg = CompressedImage()
+                compressed_msg.header = landmarks_msg.header if landmarks_msg.header is not None else Header()
+                compressed_msg.format = 'jpeg'
+                compressed_msg.data = encoded_image.tobytes()
+
+                self.image_pub.publish(compressed_msg)
                 
                 if self.enable_debug_output:
                     self.get_logger().debug(f'Published gaze visualization with {len(gaze_visualization_data)} faces')
@@ -479,7 +488,7 @@ class GazeEstimationNode(Node):
         # Declare and get image visualization parameters
         self.declare_parameter('enable_image_output', True)
         self.declare_parameter('image_input_topic', '/camera/color/image_rect_raw')
-        self.declare_parameter('output_image_topic', '/humans/faces/gaze/annotated_img')
+        self.declare_parameter('output_image_topic', '/humans/faces/gaze/annotated_img/compressed')
         
         # ROS4HRI mode parameter - when enabled, subscribes to per-ID messages and publishes per-ID
         self.declare_parameter('ros4hri_with_id', False)  # Default to array mode (ROS4HRI array)

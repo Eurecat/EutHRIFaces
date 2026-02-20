@@ -35,7 +35,7 @@ gaze_estimation_node:
     # Image Visualization Configuration
     enable_image_output: true
     image_input_topic: "/camera/color/image_rect_raw"
-    output_image_topic: "/humans/faces/gaze/annotated_img"
+    output_image_topic: "/humans/faces/gaze/annotated_img/compressed"
     
     # Debug Configuration
     enable_debug_output: false

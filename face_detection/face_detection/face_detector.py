@@ -139,7 +139,7 @@ class FaceDetectorNode(Node):
                 durability=DurabilityPolicy.VOLATILE
             )
             self.image_publisher = self.create_publisher(
-                Image,
+                CompressedImage,
                 self.output_image_topic,
                 image_qos)
 
@@ -447,7 +447,7 @@ class FaceDetectorNode(Node):
         self.declare_parameter('compressed_topic', '')
         self.declare_parameter('input_topic', '/camera/color/image_rect_raw')
         self.declare_parameter('output_topic', '/humans/faces/detected')
-        self.declare_parameter('output_image_topic', '/humans/faces/detected/annotated_img')
+        self.declare_parameter('output_image_topic', '/humans/faces/detected/annotated_img/compressed')
         
         # Processing rate parameter (copied from perception node)
         self.declare_parameter('processing_rate_hz', 30.0)  # Default 10 Hz
@@ -959,9 +959,17 @@ class FaceDetectorNode(Node):
                 self._draw_face_on_image(annotated_image, face_bbox, face_landmarks, confidence, track_id, dlib_lm, mediapipe_lm)
             
             # Convert back to ROS Image and publish
-            annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
-            annotated_msg.header = header
-            self.image_publisher.publish(annotated_msg)
+            # annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
+            # Encode as JPEG
+            success, encoded_image = cv2.imencode('.jpg', annotated_image)
+            if not success:
+                self.get_logger().error("Failed to encode annotated image as JPEG")
+                return
+            compressed_msg = CompressedImage()
+            compressed_msg.header = header
+            compressed_msg.format = 'jpeg'
+            compressed_msg.data = encoded_image.tobytes()
+            self.image_publisher.publish(compressed_msg)
             
         except Exception as e:
             self.get_logger().error(f"Error publishing annotated image: {e}")

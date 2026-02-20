@@ -14,6 +14,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy, QoSReliabilityPolicy, QoSHistoryPolicy
 from rclpy.time import Time
+from sensor_msgs.msg import CompressedImage
 
 import numpy as np
 import cv2
@@ -177,7 +178,7 @@ class FaceRecognitionNode(Node):
         self.latest_color_image_msg = color_msg
         self.color_image_processed = False
         self.latest_color_image_timestamp = self.get_clock().now()
-        # self.get_logger().debug("Compressed color image received.")
+        self.get_logger().debug("Compressed color image received.")
 
     # -------------------------------------------------------------------------
     #                         Timer Callback for Inference
@@ -200,45 +201,43 @@ class FaceRecognitionNode(Node):
             return
 
         # If image processing is enabled, check for image data
-        if self.enable_image_output:
-            color_msg = self.latest_color_image_msg
-            color_image_processed = self.color_image_processed
-            
-            if color_msg is None:
-                # self.get_logger().warning("No image data received for face recognition")
-                return
-            if color_image_processed is True:
-                return
-            
-            # Convert image to OpenCV format
-            try:
-                compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
-                if compressed_topic and compressed_topic.strip():
-                    # Handle compressed image
-                    np_arr = np.frombuffer(color_msg.data, np.uint8)
-                    cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                    
-                    if cv_image is None:
-                        self.get_logger().error('Failed to decode compressed image')
-                        return
-                else:
-                    # Handle regular image
-                    cv_image = self.cv_bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
-            except Exception as e:
-                self.get_logger().error(f'Error converting image: {e}')
-                return
-            
-            self.color_image_processed = True
-            
-            if cv_image is None or cv_image.size == 0:
-                self.get_logger().warn("Received empty or invalid image")
-                return
+        color_msg = self.latest_color_image_msg
+        color_image_processed = self.color_image_processed
+        
+        if color_msg is None:
+            # self.get_logger().warning("No image data received for face recognition")
+            return
+        if color_image_processed is True:
+            return
+        
+        # Convert image to OpenCV format
+        try:
+            compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
+            if compressed_topic and compressed_topic.strip():
+                # Handle compressed image
+                np_arr = np.frombuffer(color_msg.data, np.uint8)
+                cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                 
-            # Store image for processing
-            self.last_image = cv_image
-            self.last_image_header = color_msg.header
-        else:
-            cv_image = None
+                if cv_image is None:
+                    self.get_logger().error('Failed to decode compressed image')
+                    return
+            else:
+                # Handle regular image
+                cv_image = self.cv_bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
+        except Exception as e:
+            self.get_logger().error(f'Error converting image: {e}')
+            return
+        
+        self.color_image_processed = True
+        
+        if cv_image is None or cv_image.size == 0:
+            self.get_logger().warn("Received empty or invalid image")
+            return
+            
+        # Store image for processing
+        self.last_image = cv_image
+        self.last_image_header = color_msg.header
+
 
         # Mark landmarks as processed
         landmarks_msg = self.latest_landmarks_array
@@ -338,7 +337,7 @@ class FaceRecognitionNode(Node):
         
         # Image output parameters
         self.declare_parameter('enable_image_output', True)
-        self.declare_parameter('output_image_topic', '/humans/faces/recognized/annotated_img')
+        self.declare_parameter('output_image_topic', '/humans/faces/recognized/annotated_img/compressed')
         
         # Face embedding parameters
         self.declare_parameter('face_embedding_model', 'vggface2')
@@ -441,11 +440,11 @@ class FaceRecognitionNode(Node):
                 durability=DurabilityPolicy.VOLATILE
             )
             self.image_output_publisher = self.create_publisher(
-                Image,
+                CompressedImage,
                 output_image_topic,
                 image_qos
             )
-            self.get_logger().debug(f"Image output enabled: {output_image_topic}")
+            self.get_logger().debug(f"Compressed image output enabled: {output_image_topic}")
         else:
             self.image_output_publisher = None
         
@@ -571,6 +570,7 @@ class FaceRecognitionNode(Node):
         # Store latest landmarks for processing
         self.latest_landmarks_array = msg
         self.landmarks_processed = False
+        # self.get_logger().info("landmarks arrive")
     
     def tracked_faces_callback(self, msg):
         """
@@ -1146,50 +1146,49 @@ class FaceRecognitionNode(Node):
     
 
     def _publish_batch_annotated_image(self, recognition_results: List):
-        """Publish annotated image with recognition results for multiple faces."""
+        """Publish annotated image with recognition results for multiple faces as CompressedImage."""
         if not self.enable_image_output or not self.image_output_publisher or self.last_image is None:
             return
-        
         try:
             # Create a copy of the image for annotation
             annotated_image = self.last_image.copy()
             if recognition_results:
-                # Annotate all faces with recognition results
                 for landmarks_msg, (unique_id, confidence) in recognition_results:
                     self._draw_recognition_annotation(annotated_image, landmarks_msg, unique_id, confidence)
-            
-            # Convert to ROS image message
-            image_msg = self.cv_bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
-            image_msg.header = self.last_image_header if self.last_image_header else recognition_results[0][0].header
-            
-            # Publish annotated image
-            self.image_output_publisher.publish(image_msg)
-            
+            # Encode as JPEG
+            success, encoded_image = cv2.imencode('.jpg', annotated_image)
+            if not success:
+                self.get_logger().error("Failed to encode annotated image as JPEG")
+                return
+            compressed_msg = CompressedImage()
+            compressed_msg.header = self.last_image_header if self.last_image_header else (recognition_results[0][0].header if recognition_results else Header())
+            compressed_msg.format = 'jpeg'
+            compressed_msg.data = encoded_image.tobytes()
+            self.image_output_publisher.publish(compressed_msg)
         except Exception as e:
             self.get_logger().error(f"Failed to publish batch annotated image: {e}")
     
     def _publish_clean_image(self):
-        """Publish the original image without any annotations when no faces are detected."""
+        """Publish the original image without any annotations when no faces are detected as CompressedImage."""
         if not self.enable_image_output or not self.image_output_publisher or self.last_image is None:
             return
-        
         try:
-            # Convert to ROS image message without any modifications
-            image_msg = self.cv_bridge.cv2_to_imgmsg(self.last_image, encoding='bgr8')
-            image_msg.header = self.last_image_header if hasattr(self, 'last_image_header') and self.last_image_header else Header()
-            
-            # Set timestamp if header doesn't have one
-            if not image_msg.header.stamp.sec and not image_msg.header.stamp.nanosec:
-                image_msg.header.stamp = self.get_clock().now().to_msg()
-            
-            # Publish clean image
-            self.image_output_publisher.publish(image_msg)
-            
+            # Encode as JPEG
+            success, encoded_image = cv2.imencode('.jpg', self.last_image)
+            if not success:
+                self.get_logger().error("Failed to encode clean image as JPEG")
+                return
+            compressed_msg = CompressedImage()
+            compressed_msg.header = self.last_image_header if hasattr(self, 'last_image_header') and self.last_image_header else Header()
+            if not compressed_msg.header.stamp.sec and not compressed_msg.header.stamp.nanosec:
+                compressed_msg.header.stamp = self.get_clock().now().to_msg()
+            compressed_msg.format = 'jpeg'
+            compressed_msg.data = encoded_image.tobytes()
+            self.image_output_publisher.publish(compressed_msg)
             if self.enable_debug_output:
-                self.get_logger().debug("Published clean image (no faces detected)")
-            
+                self.get_logger().debug("Published clean compressed image (no faces detected)")
         except Exception as e:
-            self.get_logger().error(f"Failed to publish clean image: {e}")
+            self.get_logger().error(f"Failed to publish clean compressed image: {e}")
 
     def _draw_recognition_annotation(self, image: np.ndarray, landmarks_msg, unique_id: Optional[str], confidence: float):
         """Draw recognition annotation on the image."""

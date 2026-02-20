@@ -6,7 +6,7 @@ face_detector:
     # Topic Configuration
     input_topic: "/camera/color/image_rect_raw"
     output_topic: "/humans/faces/detected"
-    output_image_topic: "/humans/faces/detected/annotated_img"
+    output_image_topic: "/humans/faces/detected/annotated_img/compressed"
     compressed_topic: ""
     
     # Processing Configuration
@@ -51,7 +51,7 @@ face_detector:
     # The lightest model (float16, ~3.7MB) will be auto-downloaded if not present
     # Note: If both dlib and MediaPipe are enabled, MediaPipe takes priority
     # GPU support: Set to false (standard mediapipe package doesn't include GPU support)
-    enable_mediapipe_landmarks: true
+    enable_mediapipe_landmarks: false
     mediapipe_use_gpu: false
     mediapipe_model_path: "face_landmarker.task"
     mediapipe_min_detection_confidence: 0.5
