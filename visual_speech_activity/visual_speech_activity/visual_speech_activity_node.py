@@ -175,7 +175,7 @@ class VisualSpeechActivityNode(Node):
         self.declare_parameter('vsdlm_weights_path', 'weights')  # Directory containing VSDLM weights
         self.declare_parameter('vsdlm_weights_name', 'vsdlm_s.onnx')  # Specific VSDLM weights filename
         self.declare_parameter('vsdlm_model_variant', 'S')  # Model variant for auto-download: P/N/S/M/L
-        self.declare_parameter('vsdlm_execution_provider', 'cpu')  # ONNX provider: cpu/cuda/tensorrt
+        self.declare_parameter('vsdlm_execution_provider', 'cuda')  # ONNX provider: cpu/cuda/tensorrt
         self.declare_parameter('vsdlm_mouth_height_ratio', 0.35)  # Mouth height as ratio of face height (YOLO mode)
         
         # Temporal smoothing parameters for VSDLM

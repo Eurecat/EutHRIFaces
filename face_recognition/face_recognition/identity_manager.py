@@ -98,7 +98,7 @@ class IdentityManager:
             clustering_threshold: Threshold for clustering embeddings into identities
             embedding_inclusion_threshold: Threshold for including embeddings in identity cluster (must be >= similarity_threshold)
             identity_timeout: Time (seconds) after which inactive identity is considered lost
-            min_detections_for_stable_identity: Minimum detections needed for stable identity
+            NOT IMPLEMENTED - min_detections_for_stable_identity: Minimum detections needed for stable identity
             enable_debug_output: Enable detailed debug prints for embedding similarities and clustering
             use_ewma_for_mean: Whether to use Exponentially Weighted Moving Average for updating mean embeddings
             ewma_alpha: Learning rate for EWMA (0 < alpha < 1). Higher values adapt faster to new embeddings.

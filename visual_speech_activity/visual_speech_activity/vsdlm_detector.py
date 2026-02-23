@@ -589,7 +589,8 @@ class VSDLMDetector:
         # Validate bbox
         if x2 <= x1 or y2 <= y1:
             if self.logger:
-                self.logger.warning(f"Invalid mouth bbox: {bbox}")
+                self.logger.debug(f"Invalid mouth bbox: {bbox}")
+                # self.logger.warning(f"Invalid mouth bbox: {bbox}")
             return False, 0.0, None
         
         # Crop mouth region
