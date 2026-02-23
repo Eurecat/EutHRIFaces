@@ -63,6 +63,9 @@ class FaceRecognitionNode(Node):
         self.color_image_processed = False
         self.latest_color_image_timestamp = None
         
+        # Minimum height size for face detection (pixels) default 40 if no ros param
+        self.min_h_size = self.get_parameter('min_h_size').get_parameter_value().integer_value
+        
         # Performance tracking
         self.total_processing_time = 0.0
         self.processed_messages = 0
@@ -331,7 +334,8 @@ class FaceRecognitionNode(Node):
         
         # Processing rate parameter (copied from perception node)
         self.declare_parameter('processing_rate_hz', 10.0)  # Default 10 Hz
-        
+        self.declare_parameter('min_h_size', 40)  # Minimum height size for valid face detection (pixels)
+
         # Get processing rate parameter (copied from perception node)
         self.processing_rate_hz = self.get_parameter('processing_rate_hz').get_parameter_value().double_value
         
@@ -1015,8 +1019,8 @@ class FaceRecognitionNode(Node):
                 w = x2 - x1
                 h = y2 - y1
 
-                #if wh is less than 30x30, consider it invalid and skip to landmark-based cropping
-                if w < 30 or h < 30:
+                #if wh is less than min_h_size pixels, consider it invalid and skip to landmark-based cropping
+                if h < self.min_h_size:
                     if self.enable_debug_output:
                         self.get_logger().warning(f"Bounding box too small (w={w}, h={h}), skipping to face id {msg.face_id}")
                     return None
@@ -1111,8 +1115,8 @@ class FaceRecognitionNode(Node):
                 if self.enable_debug_output:
                     self.get_logger().debug(f"Landmark-based crop: x={x}, y={y}, w={w}, h={h}")
                 
-                #if wh is less than 30x30, consider it invalid and skip to landmark-based cropping
-                if w < 30 or h < 30:
+                #if wh is less than min_h_size pixels, consider it invalid and skip to landmark-based cropping
+                if h < self.min_h_size:
                     if self.enable_debug_output:
                         self.get_logger().warning(f"Bounding box too small (w={w}, h={h}), skipping to face id {msg.face_id}")
                     return None
