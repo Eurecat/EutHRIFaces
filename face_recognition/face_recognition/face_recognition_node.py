@@ -1026,11 +1026,12 @@ class FaceRecognitionNode(Node):
                 h = y2 - y1
 
                 #if wh is less than min_h_size pixels, consider it invalid and skip to landmark-based cropping
-                if h < self.min_h_size:
+                # or if the box is wider than it is tall (which is unlikely for a face), also consider it invalid and skip to landmark-based cropping
+                if h < self.min_h_size or w > h:
                     if self.enable_debug_output:
-                        self.get_logger().warning(f"Bounding box too small (w={w}, h={h}), skipping to face id {msg.face_id}")
+                        self.get_logger().warning(f"Bounding box too small or too wide (w={w}, h={h}), skipping to face id {msg.face_id}")
                     return None
-                
+
                 if self.enable_debug_output:
                     self.get_logger().debug(f"Normalized bbox: ({x1_norm:.3f}, {y1_norm:.3f}, {x2_norm:.3f}, {y2_norm:.3f})")
                     self.get_logger().debug(f"Pixel bbox: x={x}, y={y}, w={w}, h={h}")
@@ -1122,9 +1123,10 @@ class FaceRecognitionNode(Node):
                     self.get_logger().debug(f"Landmark-based crop: x={x}, y={y}, w={w}, h={h}")
                 
                 #if wh is less than min_h_size pixels, consider it invalid and skip to landmark-based cropping
-                if h < self.min_h_size:
+                #or if the box is wider than it is tall (which is unlikely for a face), also consider it invalid and skip to landmark-based cropping
+                if h < self.min_h_size or w > h:
                     if self.enable_debug_output:
-                        self.get_logger().warning(f"Bounding box too small (w={w}, h={h}), skipping to face id {msg.face_id}")
+                        self.get_logger().warning(f"Bounding box too small or too wide (w={w}, h={h}), skipping to face id {msg.face_id}")
                     return None
 
                 if w > 0 and h > 0:
