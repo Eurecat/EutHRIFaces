@@ -1049,8 +1049,8 @@ class FaceRecognitionNode(Node):
                         # Save original face crop for debugging
                         if self.enable_debug_output:
                             debug_filename_original = f"/workspace/src/face_recognition/weights/imgs/face_crop_original_{msg.face_id}.jpg"
-                            cv2.imwrite(debug_filename_original, face_crop)
-                            self.get_logger().debug(f"Saved original face crop: {debug_filename_original}")
+                            # cv2.imwrite(debug_filename_original, face_crop)
+                            # self.get_logger().debug(f"Saved original face crop: {debug_filename_original}")
                         
                         # # NOT PERFORMING CORRECTLY - Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) for better lighting robustness
                         # # Convert BGR to LAB color space for better color preservation
@@ -1069,8 +1069,8 @@ class FaceRecognitionNode(Node):
                         # Save processed face crop for debugging
                         if self.enable_debug_output:
                             debug_filename_processed = f"/workspace/src/face_recognition/weights/imgs/face_crop_processed_{msg.face_id}.jpg"
-                            cv2.imwrite(debug_filename_processed, face_crop_balanced)
-                            self.get_logger().debug(f"Saved processed face crop: {debug_filename_processed}")
+                            # cv2.imwrite(debug_filename_processed, face_crop_balanced)
+                            # self.get_logger().debug(f"Saved processed face crop: {debug_filename_processed}")
                         
                         if self.enable_debug_output:
                             self.get_logger().debug(f"Extracted and processed face crop from normalized bbox: {face_crop_balanced.shape}")
