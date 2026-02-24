@@ -4,7 +4,7 @@
 [![Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Eurecat/EutHRIFaces/badges/main/test-badge.json)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Eurecat/EutHRIFaces/badges/main/coverage-badge.json)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
 
-🚀 Production-ready ROS2 (Jazzy, Humble-WIP) face perception stack with **advanced YOLO detection** 🎯 and a **custom persistent identity manager** 🆔. Uniquely integrates **MongoDB** 💾 for real-time user tracking with automatic re-identification across sessions—identities survive Docker restarts! Fully compliant with the [ros4hri](https://github.com/ros4hri) 🤖 standard, leveraging state-of-the-art open-source AI models in an enterprise-grade architecture.
+🚀 Production-ready ROS2 (Jazzy, Humble-WIP) face perception stack with **advanced YOLO detection** 🎯 and a **custom persistent identity manager** 🆔. Uniquely integrates **MongoDB** 💾 for real-time user tracking with automatic re-identification across sessions—identities survive Docker restarts! Based on the [ros4hri](https://github.com/ros4hri) 🤖 standard, with an optional ROS4HRI-compatible publication mode. The default configuration uses a scalability-oriented architecture, leveraging state-of-the-art open-source AI models in an enterprise-grade architecture.
 
 ## 🏗️ Architecture Overview and RVIZ Visualization
 
@@ -30,8 +30,8 @@
 
 - **Standalone & Independent**: This repository contains self-contained ROS2 packages that work independently
 - **Simple Input Requirements**: Only requires a camera image stream (e.g., `/camera/image_raw/compressed`)
-- **ROS4HRI Standard**: Publishes all outputs following the [ROS4HRI standard](https://github.com/ros4hri)
-- **Message Definitions**: The `hri_msgs` package is included in the `Docker/deps/` folder
+- **ROS4HRI Standard extended messages**: Publishes all outputs based on the [ROS4HRI standard](https://github.com/ros4hri) message definitions for seamless integration with other HRI components using our version of [hri_msgs](https://github.com/Eurecat/hri_msgs/)
+- **Message Definitions**: Uses a fork of `ros4hri/hri_msgs`, extended for scalability and project-specific requirements.  
 - **Docker Architecture**: Each ROS2 package runs in its own container, all built from the same base image for consistency&optimization
 
 ### Integration Example
@@ -199,9 +199,9 @@ The repository includes Docker support in the `Docker/` directory for easy deplo
 
 ## ROS4HRI Compatibility
 
-All packages follow the [ros4hri](https://github.com/ros4hri) standard for human perception in robotics:
+All packages follow and extend the [ros4hri](https://github.com/ros4hri) standard for human perception in robotics:
 
-- Uses standard `hri_msgs` message definitions
+- Uses extended `hri_msgs` message definitions
 - Compatible with other ros4hri packages
 - Follows established conventions for human tracking and identification
 
@@ -255,6 +255,21 @@ If you encounter the error `failed to bind host port for 0.0.0.0:27018:172.21.0.
 ```bash
 sudo lsof -ti:27018 | xargs -r sudo kill -9
 ```
+
+### Failed to Load Identity Database from MongoDB
+If you encounter the error
+```bash
+eut_face_recognition        | [face_recognition_node-1] [ERROR] [1771851939.048670896] [face_recognition_node]: [ERROR] Failed to load identity database from MongoDB: localhost:27018: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms), Timeout: 5.0s, Topology Description: <TopologyDescription id: 699c509d3119785fb03732f5, topology_type: Unknown, servers: [<ServerDescription ('localhost', 27018) server_type: Unknown, rtt: None, error=AutoReconnect('localhost:27018: [Errno 111] Connection refused (configured timeouts: socketTimeoutMS: 20000.0ms, connectTimeoutMS: 20000.0ms)')>]>
+```
+
+Then probably you have some bad configuration in your volumne of mongodb from previous compose, run compose down to remove all volumes and start again. When doing any change on the compose.yaml also do
+
+```bash
+docker compose down -v
+docker compose up
+```
+
+
 ### Container Name Conflicts
 
 If you switch between `dev-docker-compose.yaml` and `docker-compose.yaml`, you may encounter errors like `Conflict. The container name "/mongodb_faces" is already in use`. This happens because containers from the previous compose file are still running. To resolve this, remove all containers and restart: 
