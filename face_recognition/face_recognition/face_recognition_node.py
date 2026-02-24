@@ -360,8 +360,10 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('enable_debug_output', True)  # Temporarily enable for debugging
         self.declare_parameter('use_ewma_for_mean', False)
         self.declare_parameter('ewma_alpha', 0.6)
+        self.declare_parameter('min_embeddings_for_identity', 5)  # Minimum embeddings required to consider an identity valid (used for cleanup of inactive identities)
         
         # MongoDB parameters for identity storage
+        self.declare_parameter('use_mongodb', True)  # Whether to use MongoDB for identity persistence
         self.declare_parameter('mongo_uri', 'mongodb://eurecat:cerdanyola@localhost:27018/?authSource=admin&serverSelectionTimeoutMS=5000') #'mongodb://localhost:27018/')# #eurecat:cerdanyola@mongodb:27018/
         self.declare_parameter('mongo_db_name', 'face_recognition_db')
         self.declare_parameter('mongo_collection_name', 'identity_database')
@@ -531,8 +533,10 @@ class FaceRecognitionNode(Node):
             debug_prints = self.get_parameter('enable_debug_output').get_parameter_value().bool_value
             use_ewma = self.get_parameter('use_ewma_for_mean').get_parameter_value().bool_value
             ewma_alpha = self.get_parameter('ewma_alpha').get_parameter_value().double_value
-            
+            min_emin_embeddings_for_identity = self.get_parameter('min_embeddings_for_identity').get_parameter_value().integer_value
+
             # MongoDB parameters
+            use_mongodb = self.get_parameter('use_mongodb').get_parameter_value().bool_value    
             mongo_uri = self.get_parameter('mongo_uri').get_parameter_value().string_value
             mongo_db_name = self.get_parameter('mongo_db_name').get_parameter_value().string_value
             mongo_collection_name = self.get_parameter('mongo_collection_name').get_parameter_value().string_value
@@ -554,7 +558,9 @@ class FaceRecognitionNode(Node):
                 mongo_db_name=mongo_db_name,
                 mongo_collection_name=mongo_collection_name,
                 use_ewma_for_mean=use_ewma,
-                ewma_alpha=ewma_alpha
+                ewma_alpha=ewma_alpha,
+                use_mongodb=use_mongodb,
+                min_embeddings_for_identity=min_emin_embeddings_for_identity
             )
             
             self.get_logger().info("Identity manager initialized")

@@ -18,11 +18,14 @@ face_recognition_node:
     face_embedding_weights_name: "20180402-114759-vggface2.pt"
     
     # Identity Management Configuration
-    similarity_threshold: 0.3
-    clustering_threshold: 0.6
-    max_embeddings_per_identity: 50  # Reduced from 150 to 50 - fewer comparisons
-    identity_timeout: 5.0
-    identity_database_path: "src/face_recognition/database/identity_database.json"
+    similarity_threshold: 0.4
+    clustering_threshold: 0.35
+    max_embeddings_per_identity: 200  # Reduced from 150 to 50 - fewer comparisons
+    identity_timeout: 3.0 # delete identity if not seen for this many seconds and less than min_embeddings_for_identity
+    min_embeddings_for_identity: 100  # Minimum number of embeddings required to consider an identity valid (used for cleanup of inactive identities)
+
+    # Identity Persistence Configuration
+    use_mongodb: true  # Whether to use MongoDB for identity persistence
     
     # Performance Optimization
     # Percentage of frames to skip face recognition (0-100)
@@ -30,7 +33,7 @@ face_recognition_node:
     # For example, 50.0 means recognize every other frame, reusing cached results for skipped frames
     recognition_frame_skip_percentage: 0.0  # Default: 0.0 no skipping (process every frame)
   
-    embedding_inclusion_threshold: 0.6  # Threshold for including embeddings in identity cluster (must be >= similarity_threshold)
+    embedding_inclusion_threshold: 0.0  # Threshold for including embeddings in identity cluster (must be >= similarity_threshold)
     track_identity_stickiness_margin: 0.4  # Margin to prevent identity switching
     use_ewma_for_mean: false  # Whether to use EWMA for mean embedding calculation
     ewma_alpha: 0.6  # Learning rate for EWMA (0 < alpha < 1). Higher values adapt faster to new embeddings.

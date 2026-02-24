@@ -83,12 +83,15 @@ class IdentityManager:
                  min_detections_for_stable_identity: int = 5,
                  enable_debug_output: bool = False,
                  use_ewma_for_mean: bool = False,
-                 ewma_alpha: float = 0.6):
+                 ewma_alpha: float = 0.6,
+                 use_mongodb: bool = True,
+                 min_embeddings_for_identity: int = 5):
         """
         Initialize the identity manager.
         
         Args:
             logger: Logger instance for logging messages in ros2
+            use_mongodb: Whether to use MongoDB for identity persistence
             mongo_uri: MongoDB URI for persistent identity storage
             mongo_db_name: MongoDB database name
             mongo_collection_name: MongoDB collection name
@@ -102,6 +105,7 @@ class IdentityManager:
             enable_debug_output: Enable detailed debug prints for embedding similarities and clustering
             use_ewma_for_mean: Whether to use Exponentially Weighted Moving Average for updating mean embeddings
             ewma_alpha: Learning rate for EWMA (0 < alpha < 1). Higher values adapt faster to new embeddings.
+            min_embeddings_for_identity: Minimum number of embeddings required to consider an identity valid (used for cleanup of inactive identities)
         """
         self.logger = logger
         self.max_embeddings_per_identity = max_embeddings_per_identity
@@ -112,8 +116,10 @@ class IdentityManager:
         self.identity_timeout = identity_timeout
         self.min_detections_for_stable_identity = min_detections_for_stable_identity
         self.enable_debug_output = enable_debug_output
-        
+        self.min_embeddings_for_identity = min_embeddings_for_identity
+
         # MongoDB parameters
+        self.use_mongodb = use_mongodb
         self.mongo_uri = mongo_uri
         self.mongo_db_name = mongo_db_name
         self.mongo_collection_name = mongo_collection_name
@@ -143,22 +149,24 @@ class IdentityManager:
                                 'magenta', 'yellow', 'navy', 'lime', 'maroon', 'teal', 'silver', 'gold', 'indigo', 'coral']
         
         # Initialize MongoDB connection
-        if _PYMONGO_AVAILABLE and self.mongo_uri and self.mongo_db_name and self.mongo_collection_name:
-            try:
-                self.mongo_client = MongoClient(self.mongo_uri)
-                self.mongo_collection = self.mongo_client[self.mongo_db_name][self.mongo_collection_name]
-                self.logger.info(f"[INFO] Connected to MongoDB at {self.mongo_uri}, database: {self.mongo_db_name}, collection: {self.mongo_collection_name}")
-                
-                # Load existing identities from MongoDB on startup
-                self.load_identity_database()
-            except Exception as e:
-                self.logger.error(f"[ERROR] Failed to connect to MongoDB: {e}")
-        else:
-            if not _PYMONGO_AVAILABLE:
-                self.logger.warning("[WARNING] pymongo not available, identity persistence disabled")
+        if self.use_mongodb:
+            if _PYMONGO_AVAILABLE and self.mongo_uri and self.mongo_db_name and self.mongo_collection_name:
+                try:
+                    self.mongo_client = MongoClient(self.mongo_uri)
+                    self.mongo_collection = self.mongo_client[self.mongo_db_name][self.mongo_collection_name]
+                    self.logger.info(f"[INFO] Connected to MongoDB at {self.mongo_uri}, database: {self.mongo_db_name}, collection: {self.mongo_collection_name}")
+                    
+                    # Load existing identities from MongoDB on startup
+                    self.load_identity_database()
+                except Exception as e:
+                    self.logger.error(f"[ERROR] Failed to connect to MongoDB: {e}")
             else:
-                self.logger.warning("[WARNING] MongoDB connection parameters not provided, identity persistence disabled")
-        
+                if not _PYMONGO_AVAILABLE:
+                    self.logger.warning("[WARNING] pymongo not available, identity persistence disabled")
+                else:
+                    self.logger.warning("[WARNING] MongoDB connection parameters not provided, identity persistence disabled")
+        else:
+            self.logger.info("[INFO] MongoDB persistence disabled, identities will not be saved across sessions")
     def process_new_embedding_batch(self, track_embeddings: Dict[int, np.ndarray]) -> Dict[int, Tuple[Optional[str], float]]:
         """
         Process multiple new face embeddings in batch and assign/update identities.
@@ -217,11 +225,14 @@ class IdentityManager:
 
         if self.enable_debug_output:
             self.logger.debug(f"[IDENTITY_DEBUG] Batch processing complete. Total identities: {len(self.identity_clusters)}")
-             
+
+        self.cleanup_inactive_identities()
+
         return results
 
     def _find_best_identity_match_batch(self, embeddings: List[np.ndarray], track_ids: List[int] = None, 
-                                       mode: str = 'fast', n_recent_embeddings: int = 20, n_top_embed: int = 10) -> Tuple[np.ndarray, List[Tuple[Optional[str], float]]]:
+                                       mode: str = 'accurate', n_recent_embeddings: int = 20, n_top_embed: int = 10,
+                                       min_embeddings_for_accurate_rep: int = 20) -> Tuple[np.ndarray, List[Tuple[Optional[str], float]]]:
         """
         Find the best matching existing identities for a batch of embeddings with exclusive assignment.
         Each identity can only be assigned to one track (1:1 mapping).
@@ -246,30 +257,67 @@ class IdentityManager:
         identity_ids = list(self.identity_clusters.keys())
         
         if mode == "accurate":
-            # Use comprehensive embedding set for better matching
-            identity_embeddings_matrix = []
+            # Build one representative vector per identity (either mean-only or combined)
+            reps: List[Optional[np.ndarray]] = []
             for unique_id in identity_ids:
-                cluster = self.identity_clusters[unique_id]
-                # Combine mean, recent, and top confidence embeddings
-                cluster_embeddings = []
-                if cluster.mean_embedding is not None:
-                    cluster_embeddings.append(cluster.mean_embedding)
-                # Add recent embeddings
-                recent_embeddings = cluster.all_embeddings[-n_recent_embeddings:]
-                cluster_embeddings.extend(recent_embeddings)
-                # Add top confidence embeddings
-                if cluster.embedding_confidences:
-                    top_indices = np.argsort(cluster.embedding_confidences)[-n_top_embed:]
-                    for idx in top_indices:
-                        if idx < len(cluster.all_embeddings):
-                            cluster_embeddings.append(cluster.all_embeddings[idx])
-                
-                # Calculate average of all selected embeddings
-                if cluster_embeddings:
-                    avg_embedding = np.mean(cluster_embeddings, axis=0)
-                    identity_embeddings_matrix.append(avg_embedding)
+                c = self.identity_clusters[unique_id]
+                if c.mean_embedding is None:
+                    reps.append(None)
+                    continue
+
+                # If too few embeddings, use mean only (more stable / less noisy)
+                n_emb = len(c.all_embeddings)
+                if n_emb < min_embeddings_for_accurate_rep:
+                    rep = self._normalize_embedding(c.mean_embedding)
+                    reps.append(rep)
+                    continue
+
+                mean = c.mean_embedding
+
+                # Recent avg
+                recent = c.all_embeddings[-min(n_recent_embeddings, n_emb):]
+                recent_avg = np.mean(recent, axis=0) if len(recent) > 0 else mean
+
+                # Top confidence avg
+                if c.embedding_confidences and len(c.embedding_confidences) == n_emb:
+                    conf_emb_pairs = list(zip(c.embedding_confidences, c.all_embeddings))
+                    conf_emb_pairs.sort(key=lambda x: x[0], reverse=True)
+                    top = [emb for _, emb in conf_emb_pairs[:min(n_top_embed, n_emb)]]
                 else:
-                    identity_embeddings_matrix.append(cluster.mean_embedding)
+                    # fallback if confidences missing/misaligned
+                    top = c.all_embeddings[:min(n_top_embed, n_emb)]
+
+                top_avg = np.mean(top, axis=0) if len(top) > 0 else mean
+
+                rep = 0.3 * mean + 0.4 * recent_avg + 0.3 * top_avg
+                rep = self._normalize_embedding(rep)
+                reps.append(rep)
+
+            # Filter identities with valid reps
+            valid_cols = [j for j, r in enumerate(reps) if r is not None]
+            if not valid_cols:
+                return np.array([]), [(None, 0.0) for _ in embeddings]
+
+            reps_matrix = np.stack([reps[j] for j in valid_cols], axis=0)  # (n_valid_id, d)
+            emb_matrix = np.stack(embeddings, axis=0)                      # (n_tracks, d)
+
+            # Cosine similarity since normalized
+            sim = emb_matrix @ reps_matrix.T                               # (n_tracks, n_valid_id)
+
+            # Expand back to full (n_tracks, n_identities)
+            similarity_matrix = np.zeros((len(embeddings), len(identity_ids)), dtype=np.float32)
+            for k, j in enumerate(valid_cols):
+                similarity_matrix[:, j] = sim[:, k]
+
+            if self.enable_debug_output:
+                self.logger.debug(
+                    f"[IDENTITY_DEBUG] Accurate mode reps built. "
+                    f"min_embeddings_for_accurate_rep={min_embeddings_for_accurate_rep}, "
+                    f"matrix={similarity_matrix.shape}"
+                )
+            if self.enable_debug_output:
+                self.logger.debug(f"[IDENTITY_DEBUG] Accurate mode: computed combined similarity matrix shape: {similarity_matrix.shape}")
+        
         else:
             # Fast mode: use only mean embeddings
             identity_embeddings_matrix = [
@@ -278,16 +326,16 @@ class IdentityManager:
                 if self.identity_clusters[unique_id].mean_embedding is not None
             ]
         
-        if not identity_embeddings_matrix:
-            return np.array([]), [(None, 0.0) for _ in embeddings]
-        
-        # Calculate similarity matrix
-        similarity_matrix = np.zeros((len(embeddings), len(identity_ids)))
-        for i, embedding in enumerate(embeddings):
-            for j, identity_embedding in enumerate(identity_embeddings_matrix):
-                if identity_embedding is not None:
-                    similarity = 1 - cosine(embedding, identity_embedding)
-                    similarity_matrix[i, j] = similarity
+            if not identity_embeddings_matrix:
+                return np.array([]), [(None, 0.0) for _ in embeddings]
+            
+            # Calculate similarity matrix
+            similarity_matrix = np.zeros((len(embeddings), len(identity_ids)))
+            for i, embedding in enumerate(embeddings):
+                for j, identity_embedding in enumerate(identity_embeddings_matrix):
+                    if identity_embedding is not None:
+                        similarity = 1 - cosine(embedding, identity_embedding)
+                        similarity_matrix[i, j] = similarity
         
         # Debug: Print the similarity matrix
         if self.enable_debug_output:
@@ -505,7 +553,7 @@ class IdentityManager:
         quality = 0.5 * consistency_score + 0.3 * detection_score + 0.2 * time_score
         return quality
     
-    def _check_and_perform_merges_batch(self, mode: str = 'fast', n_recent_embeddings: int = 16, n_top_embed: int = 10):
+    def _check_and_perform_merges_batch(self, mode: str = 'fast', n_recent_embeddings: int = 16, n_top_embed: int = 10, min_embeddings_for_merge: int = 10):
         """
         Check all identities for potential merges using batch processing similar to _find_best_identity_match_batch.
         This compares all identities against each other using similarity matrices.
@@ -516,6 +564,7 @@ class IdentityManager:
                   'accurate': Uses mean + recent + top confidence embeddings for better comparison
             n_recent_embeddings: Number of recent embeddings to consider in accurate mode
             n_top_embed: Number of top confidence embeddings to consider in accurate mode
+            min_embeddings_for_merge: Minimum number of embeddings required for an identity to be considered for merging (to ensure stable representations)
         """
         if len(self.identity_clusters) < 2:
             return  # Need at least 2 identities to merge
@@ -528,7 +577,7 @@ class IdentityManager:
         valid_clusters = []
         for unique_id in identity_ids:
             cluster = self.identity_clusters[unique_id]
-            if cluster.mean_embedding is not None and len(cluster.all_embeddings) > 0:
+            if cluster.mean_embedding is not None and len(cluster.all_embeddings) >= min_embeddings_for_merge:
                 valid_identity_ids.append(unique_id)
                 valid_clusters.append(cluster)
         
@@ -994,7 +1043,7 @@ class IdentityManager:
         
         for unique_id, cluster in self.identity_clusters.items():
             time_since_last_seen = current_time - cluster.last_seen_timestamp
-            if time_since_last_seen > self.identity_timeout:
+            if time_since_last_seen > self.identity_timeout and len(cluster.all_embeddings) < self.min_embeddings_for_identity:
                 inactive_identities.append(unique_id)
         
         for unique_id in inactive_identities:
