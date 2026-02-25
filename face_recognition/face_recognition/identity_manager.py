@@ -244,7 +244,7 @@ class IdentityManager:
             mode: Matching mode ('fast' or 'accurate')
                   'fast': Uses only mean embeddings for matching
                   'accurate': Uses mean + recent + top confidence embeddings for better matching
-            
+            min_embeddings_for_accurate_rep: Minimum number of embeddings required for an identity to use the combined representation in 'accurate' mode (otherwise falls back to mean only)
         Returns:
             Tuple of (similarity_matrix, best_matches)
             - similarity_matrix: shape (n_embeddings, n_identities) with cosine similarities

@@ -961,7 +961,10 @@ class FaceDetectorNode(Node):
             # Convert back to ROS Image and publish
             # annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
             # Encode as JPEG
-            success, encoded_image = cv2.imencode('.jpg', annotated_image)
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 75]
+            small = cv2.resize(annotated_image, (640, 360))
+            success, encoded_image = cv2.imencode('.jpg', small, encode_params) # 3ms
+            # success, encoded_image = cv2.imencode('.jpg', annotated_image) # 30-40ms
             if not success:
                 self.get_logger().error("Failed to encode annotated image as JPEG")
                 return
