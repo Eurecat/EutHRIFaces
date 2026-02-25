@@ -70,9 +70,10 @@ RUN /bin/bash -c "source /opt/ros_python_env/bin/activate && uv pip install -r r
 # 
 RUN PYTHON_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')") && \
     echo "Python version detected: ${PYTHON_VER}" && \
-    CUDA_LIB_PATH="/opt/ros_python_env/lib/python${PYTHON_VER}/site-packages/nvidia/cudnn/lib:\
-/opt/ros_python_env/lib/python${PYTHON_VER}/site-packages/nvidia/cublas/lib:\
+    CUDA_LIB_PATH="/opt/ros_python_env/lib/python${PYTHON_VER}/site-packages/nvidia/cuda_nvrtc/lib:\
 /opt/ros_python_env/lib/python${PYTHON_VER}/site-packages/nvidia/cuda_runtime/lib:\
+/opt/ros_python_env/lib/python${PYTHON_VER}/site-packages/nvidia/cudnn/lib:\
+/opt/ros_python_env/lib/python${PYTHON_VER}/site-packages/nvidia/cublas/lib:\
 /opt/ros_python_env/lib/python${PYTHON_VER}/site-packages/nvidia/curand/lib:\
 /opt/ros_python_env/lib/python${PYTHON_VER}/site-packages/nvidia/cufft/lib" && \
     echo "export LD_LIBRARY_PATH=${CUDA_LIB_PATH}:\${LD_LIBRARY_PATH}" >> /etc/profile.d/cuda_lib_path.sh && \

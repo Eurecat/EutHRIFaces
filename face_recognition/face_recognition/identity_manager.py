@@ -85,6 +85,7 @@ class IdentityManager:
                  use_ewma_for_mean: bool = False,
                  ewma_alpha: float = 0.6,
                  use_mongodb: bool = True,
+                 save_last_n_embeddings: int = 20,
                  min_embeddings_for_identity: int = 5):
         """
         Initialize the identity manager.
@@ -117,9 +118,11 @@ class IdentityManager:
         self.min_detections_for_stable_identity = min_detections_for_stable_identity
         self.enable_debug_output = enable_debug_output
         self.min_embeddings_for_identity = min_embeddings_for_identity
+        
 
         # MongoDB parameters
         self.use_mongodb = use_mongodb
+        self.save_last_n_embeddings = save_last_n_embeddings  # Number of recent embeddings to save in MongoDB for each identity
         self.mongo_uri = mongo_uri
         self.mongo_db_name = mongo_db_name
         self.mongo_collection_name = mongo_collection_name
@@ -157,7 +160,7 @@ class IdentityManager:
                     self.logger.info(f"[INFO] Connected to MongoDB at {self.mongo_uri}, database: {self.mongo_db_name}, collection: {self.mongo_collection_name}")
                     
                     # Load existing identities from MongoDB on startup
-                    self.load_identity_database()
+                    self.load_identity_database(self.save_last_n_embeddings)
                 except Exception as e:
                     self.logger.error(f"[ERROR] Failed to connect to MongoDB: {e}")
             else:
@@ -1101,130 +1104,168 @@ class IdentityManager:
             self.identity_clusters[unique_id].custom_name = custom_name
             return True
         return False
-    
-    def save_identity_database(self):
+        
+    def save_identity_database(self, n_embeddings: int = 1):
         """Save identities to MongoDB persistent storage."""
+
         if not _PYMONGO_AVAILABLE:
             self.logger.error("[ERROR] pymongo not available, cannot save identity database")
             return
-        
+
         if self.mongo_collection is None:
             self.logger.error("[ERROR] MongoDB connection not established, cannot save identity database")
             return
-        
+
         if not self.identity_clusters:
             self.logger.info("[INFO] No identities to save to MongoDB")
             return
-        
+
         try:
-            self.logger.info(f"[INFO] Saving {len(self.identity_clusters)} identities to MongoDB...")
-            
+            self.logger.info(
+                f"[INFO] Saving {len(self.identity_clusters)} identities "
+                f"(last {n_embeddings} embeddings each) to MongoDB..."
+            )
+
             saved_count = 0
+
             for unique_id, cluster in self.identity_clusters.items():
-                # Convert identity cluster to MongoDB document format
-                # Only save last embedding, last confidence, and mean embedding to reduce storage
-                last_embedding = cluster.all_embeddings[-1].tolist() if cluster.all_embeddings else None
-                last_confidence = cluster.embedding_confidences[-1] if cluster.embedding_confidences else None
-                
+
+                # Select last N embeddings
+                selected_embeddings = cluster.all_embeddings[-n_embeddings:] if cluster.all_embeddings else []
+                selected_confidences = cluster.embedding_confidences[-n_embeddings:] if cluster.embedding_confidences else []
+
+                # Convert embeddings to pure Python floats
+                embeddings_serializable = [
+                    emb.astype(float).tolist() for emb in selected_embeddings
+                ]
+
+                confidences_serializable = [
+                    float(c) for c in selected_confidences
+                ]
+
+                mean_embedding_serializable = (
+                    cluster.mean_embedding.astype(float).tolist()
+                    if cluster.mean_embedding is not None else None
+                )
+
                 doc = {
                     "unique_id": unique_id,
-                    "creation_timestamp": cluster.creation_timestamp,
-                    "last_seen_timestamp": cluster.last_seen_timestamp,
-                    "total_detections": cluster.total_detections,
-                    "quality_score": cluster.quality_score,
+                    "creation_timestamp": float(cluster.creation_timestamp),
+                    "last_seen_timestamp": float(cluster.last_seen_timestamp),
+                    "total_detections": int(cluster.total_detections),
+                    "quality_score": float(cluster.quality_score),
                     "custom_name": cluster.custom_name,
                     "metadata": cluster.metadata,
-                    "last_embedding": last_embedding,
-                    "last_embedding_confidence": last_confidence,
-                    "mean_embedding": cluster.mean_embedding.tolist() if cluster.mean_embedding is not None else None,
-                    "updated_at": time.time()
+                    "embeddings": embeddings_serializable,
+                    "embedding_confidences": confidences_serializable,
+                    "mean_embedding": mean_embedding_serializable,
+                    "updated_at": float(time.time())
                 }
-                
-                # Upsert: update if exists, insert if not
+
                 self.mongo_collection.update_one(
                     {"unique_id": unique_id},
                     {"$set": doc},
                     upsert=True
                 )
+
                 saved_count += 1
-                
+
                 if self.enable_debug_output:
-                    self.logger.info(f"[INFO] Saved identity {unique_id} to MongoDB")
-            
+                    self.logger.info(
+                        f"[INFO] Saved identity {unique_id} "
+                        f"(stored embeddings: {len(selected_embeddings)})"
+                    )
+
             self.logger.info(f"[INFO] Successfully saved {saved_count} identities to MongoDB")
-            
+
         except Exception as e:
             self.logger.error(f"[ERROR] Failed to save identity database to MongoDB: {e}")
-    
-    def load_identity_database(self):
+
+    def load_identity_database(self, n_embeddings: int = 1):
         """Load identities from MongoDB persistent storage."""
+
         if not _PYMONGO_AVAILABLE:
             self.logger.warning("[WARNING] pymongo not available, cannot load identity database")
             return
-        
+
         if self.mongo_collection is None:
             self.logger.warning("[WARNING] MongoDB connection not established, cannot load identity database")
             return
-        
+
         try:
-            # Query all identity documents from MongoDB
             documents = list(self.mongo_collection.find())
-            
+
             if not documents:
                 self.logger.info("[INFO] No existing identities found in MongoDB")
                 return
-            
+
             self.logger.info(f"[INFO] Loading {len(documents)} identities from MongoDB...")
-            
+
             loaded_count = 0
+
             for doc in documents:
                 unique_id = doc["unique_id"]
-                
-                # Create identity cluster from MongoDB document
+
                 cluster = IdentityCluster(
                     unique_id=unique_id,
-                    creation_timestamp=doc["creation_timestamp"],
-                    last_seen_timestamp=doc["last_seen_timestamp"],
-                    total_detections=doc["total_detections"],
-                    quality_score=doc["quality_score"],
+                    creation_timestamp=float(doc["creation_timestamp"]),
+                    last_seen_timestamp=float(doc["last_seen_timestamp"]),
+                    total_detections=int(doc["total_detections"]),
+                    quality_score=float(doc["quality_score"]),
                     custom_name=doc.get("custom_name"),
                     metadata=doc.get("metadata", {})
                 )
-                
-                # Restore embeddings - only load last embedding if available
-                if doc.get("last_embedding"):
-                    cluster.all_embeddings = [np.array(doc["last_embedding"])]
-                    cluster.embedding_confidences = [doc.get("last_embedding_confidence", 0.0)]
-                else:
-                    # Fallback for old format with full embeddings array
-                    if doc.get("embeddings"):
-                        cluster.all_embeddings = [np.array(emb) for emb in doc["embeddings"]]
-                        cluster.embedding_confidences = doc.get("embedding_confidences", [])
-                
-                if doc.get("mean_embedding"):
-                    cluster.mean_embedding = np.array(doc["mean_embedding"])
-                
+
+                # Restore embeddings
+                if doc.get("embeddings"):
+                    embeddings = doc["embeddings"][-n_embeddings:]
+                    confidences = doc.get("embedding_confidences", [])[-n_embeddings:]
+
+                    cluster.all_embeddings = [
+                        np.array(e, dtype=np.float32) for e in embeddings
+                    ]
+
+                    cluster.embedding_confidences = [
+                        float(c) for c in confidences
+                    ]
+
+                # Backward compatibility
+                elif doc.get("last_embedding"):
+                    cluster.all_embeddings = [
+                        np.array(doc["last_embedding"], dtype=np.float32)
+                    ]
+                    cluster.embedding_confidences = [
+                        float(doc.get("last_embedding_confidence", 0.0))
+                    ]
+
+                if doc.get("mean_embedding") is not None:
+                    cluster.mean_embedding = np.array(
+                        doc["mean_embedding"], dtype=np.float32
+                    )
+
                 self.identity_clusters[unique_id] = cluster
                 loaded_count += 1
-                
-                # Update next user number to avoid ID conflicts
+
+                # Update next user number
                 if unique_id.startswith('U'):
                     try:
                         user_num = int(unique_id[1:]) + 1
                         self.next_user_number = max(self.next_user_number, user_num)
                     except ValueError:
                         pass
-                
+
                 if self.enable_debug_output:
-                    self.logger.info(f"[INFO] Loaded identity {unique_id} from MongoDB (embeddings: {len(cluster.all_embeddings)})")
-            
+                    self.logger.info(
+                        f"[INFO] Loaded identity {unique_id} "
+                        f"(embeddings restored: {len(cluster.all_embeddings)})"
+                    )
+
             self.logger.info(f"[INFO] Successfully loaded {loaded_count} identities from MongoDB")
             self.logger.info(f"[INFO] Next user number will be: U{self.next_user_number}")
-            
+
         except Exception as e:
             self.logger.error(f"[ERROR] Failed to load identity database from MongoDB: {e}")
-    
-    
+            
     def _normalize_embedding(self, embedding: np.ndarray) -> np.ndarray:
         """Normalize an embedding vector."""
         embedding = embedding.flatten()

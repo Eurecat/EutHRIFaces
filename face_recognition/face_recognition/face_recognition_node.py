@@ -65,7 +65,7 @@ class FaceRecognitionNode(Node):
         
         # Minimum height size for face detection (pixels) default 40 if no ros param
         self.min_h_size = self.get_parameter('min_h_size').get_parameter_value().integer_value
-        
+        self.save_last_n_embeddings = self.get_parameter('save_last_n_embeddings').get_parameter_value().integer_value
         # Performance tracking
         self.total_processing_time = 0.0
         self.processed_messages = 0
@@ -365,6 +365,7 @@ class FaceRecognitionNode(Node):
         
         # MongoDB parameters for identity storage
         self.declare_parameter('use_mongodb', True)  # Whether to use MongoDB for identity persistence
+        self.declare_parameter('save_last_n_embeddings', 1)  # Number of recent embeddings to save in MongoDB for each identity
         self.declare_parameter('mongo_uri', 'mongodb://eurecat:cerdanyola@localhost:27018/?authSource=admin&serverSelectionTimeoutMS=5000') #'mongodb://localhost:27018/')# #eurecat:cerdanyola@mongodb:27018/
         self.declare_parameter('mongo_db_name', 'face_recognition_db')
         self.declare_parameter('mongo_collection_name', 'identity_database')
@@ -538,7 +539,8 @@ class FaceRecognitionNode(Node):
             min_emin_embeddings_for_identity = self.get_parameter('min_embeddings_for_identity').get_parameter_value().integer_value
 
             # MongoDB parameters
-            use_mongodb = self.get_parameter('use_mongodb').get_parameter_value().bool_value    
+            use_mongodb = self.get_parameter('use_mongodb').get_parameter_value().bool_value   
+            save_last_n_embeddings = self.get_parameter('save_last_n_embeddings').get_parameter_value().integer_value
             mongo_uri = self.get_parameter('mongo_uri').get_parameter_value().string_value
             mongo_db_name = self.get_parameter('mongo_db_name').get_parameter_value().string_value
             mongo_collection_name = self.get_parameter('mongo_collection_name').get_parameter_value().string_value
@@ -562,6 +564,7 @@ class FaceRecognitionNode(Node):
                 use_ewma_for_mean=use_ewma,
                 ewma_alpha=ewma_alpha,
                 use_mongodb=use_mongodb,
+                save_last_n_embeddings=save_last_n_embeddings,
                 min_embeddings_for_identity=min_emin_embeddings_for_identity
             )
             
@@ -1299,7 +1302,7 @@ class FaceRecognitionNode(Node):
         # Save identity database before shutdown
         if self.identity_manager and hasattr(self.identity_manager, 'save_identity_database'):
             try:
-                self.identity_manager.save_identity_database()
+                self.identity_manager.save_identity_database(self.save_last_n_embeddings)
                 self.get_logger().debug("Identity database saved")
             except Exception as e:
                 self.get_logger().error(f"Failed to save identity database: {e}")

@@ -26,6 +26,8 @@ face_recognition_node:
 
     # Identity Persistence Configuration
     use_mongodb: true  # Whether to use MongoDB for identity persistence
+    save_last_n_embeddings: 50  # Number of recent embeddings to save in MongoDB for each identity
+
     
     # Performance Optimization
     # Percentage of frames to skip face recognition (0-100)
