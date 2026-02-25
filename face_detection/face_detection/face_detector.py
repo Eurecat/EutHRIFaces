@@ -132,10 +132,16 @@ class FaceDetectorNode(Node):
         # Create image publisher for visualization
         self.image_publisher = None
         if self.enable_image_output:
+            image_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,   # 1–5 is ideal for images over Wi-Fi
+                durability=DurabilityPolicy.VOLATILE
+            )
             self.image_publisher = self.create_publisher(
-                Image,
+                CompressedImage,
                 self.output_image_topic,
-                 10)
+                image_qos)
 
         # Timer for periodic inference (copied from perception node pattern)
         timer_period = 1.0 / self.processing_rate_hz  # Use processing_rate_hz parameter
@@ -241,8 +247,10 @@ class FaceDetectorNode(Node):
             self.get_logger().debug(f"Processing image: {cv_image.shape}, dtype: {cv_image.dtype}")
         
         # Run face detection
-        detection_results = self.detector.detect(cv_image)
-        
+        a = time.time()
+        detection_results = self.detector.detect(cv_image) # 20 ms mean
+        # self.get_logger().info(f"YOLO face detection took {(time.time() - a)*1000:.1f} ms")
+
         # Enhance with dlib 68-point landmarks if enabled
         if self.dlib_detector is not None and self.dlib_detector.is_available():
             num_faces = len(detection_results.get('faces', []))
@@ -439,7 +447,7 @@ class FaceDetectorNode(Node):
         self.declare_parameter('compressed_topic', '')
         self.declare_parameter('input_topic', '/camera/color/image_rect_raw')
         self.declare_parameter('output_topic', '/humans/faces/detected')
-        self.declare_parameter('output_image_topic', '/humans/faces/detected/annotated_img')
+        self.declare_parameter('output_image_topic', '/humans/faces/detected/annotated_img/compressed')
         
         # Processing rate parameter (copied from perception node)
         self.declare_parameter('processing_rate_hz', 30.0)  # Default 10 Hz
@@ -464,6 +472,7 @@ class FaceDetectorNode(Node):
         
         # Image visualization parameters
         self.declare_parameter('enable_image_output', True)
+        self.declare_parameter('img_published_reshape_size', [640,360])  # New parameter for published image resolution
         self.declare_parameter('face_bbox_thickness', 2)
         self.declare_parameter('face_landmark_radius', 3)
         self.declare_parameter('face_bbox_color', [0, 255, 0])  # Green
@@ -531,6 +540,7 @@ class FaceDetectorNode(Node):
         
         # Image visualization parameters
         self.enable_image_output = self.get_parameter('enable_image_output').get_parameter_value().bool_value
+        self.img_published_reshape_size = self.get_parameter('img_published_reshape_size').get_parameter_value().integer_array_value
         self.face_bbox_thickness = self.get_parameter('face_bbox_thickness').get_parameter_value().integer_value
         self.face_landmark_radius = self.get_parameter('face_landmark_radius').get_parameter_value().integer_value
         self.face_bbox_color = self.get_parameter('face_bbox_color').get_parameter_value().integer_array_value
@@ -951,9 +961,20 @@ class FaceDetectorNode(Node):
                 self._draw_face_on_image(annotated_image, face_bbox, face_landmarks, confidence, track_id, dlib_lm, mediapipe_lm)
             
             # Convert back to ROS Image and publish
-            annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
-            annotated_msg.header = header
-            self.image_publisher.publish(annotated_msg)
+            # annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
+            # Encode as JPEG
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 75]
+            small = cv2.resize(annotated_image, tuple(self.img_published_reshape_size), interpolation=cv2.INTER_AREA)
+            success, encoded_image = cv2.imencode('.jpg', small, encode_params) # 3ms
+            # success, encoded_image = cv2.imencode('.jpg', annotated_image) # 30-40ms
+            if not success:
+                self.get_logger().error("Failed to encode annotated image as JPEG")
+                return
+            compressed_msg = CompressedImage()
+            compressed_msg.header = header
+            compressed_msg.format = 'jpeg'
+            compressed_msg.data = encoded_image.tobytes()
+            self.image_publisher.publish(compressed_msg)
             
         except Exception as e:
             self.get_logger().error(f"Error publishing annotated image: {e}")

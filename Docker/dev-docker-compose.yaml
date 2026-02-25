@@ -23,11 +23,16 @@ services:
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
       - ../Docker/deps/hri_msgs:/workspace/src/hri_msgs
+      - ../Docker/deps/tts_msgs:/workspace/src/tts_msgs
+      # Cyclone DDS configuration for TiagoPro WiFi
+      - ./cyclonedds_wifi.xml:/etc/cyclonedds.xml:ro
 
     tty: true
     stdin_open: true
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}    
+      - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}  
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}      
       # - USER_ID=${USER_ID}
       # - GROUP_ID=${GROUP_ID}
       # - USERNAME=${USERNAME}

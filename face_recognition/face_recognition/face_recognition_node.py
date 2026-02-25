@@ -14,6 +14,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy, QoSReliabilityPolicy, QoSHistoryPolicy
 from rclpy.time import Time
+from sensor_msgs.msg import CompressedImage
 
 import numpy as np
 import cv2
@@ -62,6 +63,9 @@ class FaceRecognitionNode(Node):
         self.color_image_processed = False
         self.latest_color_image_timestamp = None
         
+        # Minimum height size for face detection (pixels) default 40 if no ros param
+        self.min_h_size = self.get_parameter('min_h_size').get_parameter_value().integer_value
+        self.save_last_n_embeddings = self.get_parameter('save_last_n_embeddings').get_parameter_value().integer_value
         # Performance tracking
         self.total_processing_time = 0.0
         self.processed_messages = 0
@@ -177,7 +181,7 @@ class FaceRecognitionNode(Node):
         self.latest_color_image_msg = color_msg
         self.color_image_processed = False
         self.latest_color_image_timestamp = self.get_clock().now()
-        # self.get_logger().debug("Compressed color image received.")
+        self.get_logger().debug("Compressed color image received.")
 
     # -------------------------------------------------------------------------
     #                         Timer Callback for Inference
@@ -200,45 +204,43 @@ class FaceRecognitionNode(Node):
             return
 
         # If image processing is enabled, check for image data
-        if self.enable_image_output:
-            color_msg = self.latest_color_image_msg
-            color_image_processed = self.color_image_processed
-            
-            if color_msg is None:
-                # self.get_logger().warning("No image data received for face recognition")
-                return
-            if color_image_processed is True:
-                return
-            
-            # Convert image to OpenCV format
-            try:
-                compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
-                if compressed_topic and compressed_topic.strip():
-                    # Handle compressed image
-                    np_arr = np.frombuffer(color_msg.data, np.uint8)
-                    cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                    
-                    if cv_image is None:
-                        self.get_logger().error('Failed to decode compressed image')
-                        return
-                else:
-                    # Handle regular image
-                    cv_image = self.cv_bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
-            except Exception as e:
-                self.get_logger().error(f'Error converting image: {e}')
-                return
-            
-            self.color_image_processed = True
-            
-            if cv_image is None or cv_image.size == 0:
-                self.get_logger().warn("Received empty or invalid image")
-                return
+        color_msg = self.latest_color_image_msg
+        color_image_processed = self.color_image_processed
+        
+        if color_msg is None:
+            # self.get_logger().warning("No image data received for face recognition")
+            return
+        if color_image_processed is True:
+            return
+        
+        # Convert image to OpenCV format
+        try:
+            compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
+            if compressed_topic and compressed_topic.strip():
+                # Handle compressed image
+                np_arr = np.frombuffer(color_msg.data, np.uint8)
+                cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                 
-            # Store image for processing
-            self.last_image = cv_image
-            self.last_image_header = color_msg.header
-        else:
-            cv_image = None
+                if cv_image is None:
+                    self.get_logger().error('Failed to decode compressed image')
+                    return
+            else:
+                # Handle regular image
+                cv_image = self.cv_bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
+        except Exception as e:
+            self.get_logger().error(f'Error converting image: {e}')
+            return
+        
+        self.color_image_processed = True
+        
+        if cv_image is None or cv_image.size == 0:
+            self.get_logger().warn("Received empty or invalid image")
+            return
+            
+        # Store image for processing
+        self.last_image = cv_image
+        self.last_image_header = color_msg.header
+
 
         # Mark landmarks as processed
         landmarks_msg = self.latest_landmarks_array
@@ -332,13 +334,15 @@ class FaceRecognitionNode(Node):
         
         # Processing rate parameter (copied from perception node)
         self.declare_parameter('processing_rate_hz', 10.0)  # Default 10 Hz
-        
+        self.declare_parameter('min_h_size', 40)  # Minimum height size for valid face detection (pixels)
+
         # Get processing rate parameter (copied from perception node)
         self.processing_rate_hz = self.get_parameter('processing_rate_hz').get_parameter_value().double_value
         
         # Image output parameters
         self.declare_parameter('enable_image_output', True)
-        self.declare_parameter('output_image_topic', '/humans/faces/recognized/annotated_img')
+        self.declare_parameter('img_published_reshape_size', [640, 360])  # Resolution for published annotated images
+        self.declare_parameter('output_image_topic', '/humans/faces/recognized/annotated_img/compressed')
         
         # Face embedding parameters
         self.declare_parameter('face_embedding_model', 'vggface2')
@@ -357,9 +361,12 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('enable_debug_output', True)  # Temporarily enable for debugging
         self.declare_parameter('use_ewma_for_mean', False)
         self.declare_parameter('ewma_alpha', 0.6)
+        self.declare_parameter('min_embeddings_for_identity', 5)  # Minimum embeddings required to consider an identity valid (used for cleanup of inactive identities)
         
         # MongoDB parameters for identity storage
-        self.declare_parameter('mongo_uri', 'mongodb://eurecat:cerdanyola@localhost:27018/?authSource=admin&serverSelectionTimeoutMS=5000') #'mongodb://localhost:27018/')#
+        self.declare_parameter('use_mongodb', True)  # Whether to use MongoDB for identity persistence
+        self.declare_parameter('save_last_n_embeddings', 1)  # Number of recent embeddings to save in MongoDB for each identity
+        self.declare_parameter('mongo_uri', 'mongodb://eurecat:cerdanyola@localhost:27018/?authSource=admin&serverSelectionTimeoutMS=5000') #'mongodb://localhost:27018/')# #eurecat:cerdanyola@mongodb:27018/
         self.declare_parameter('mongo_db_name', 'face_recognition_db')
         self.declare_parameter('mongo_collection_name', 'identity_database')
         
@@ -432,14 +439,21 @@ class FaceRecognitionNode(Node):
         
         # Image output publisher (optional)
         self.enable_image_output = self.get_parameter('enable_image_output').get_parameter_value().bool_value
+        self.img_published_reshape_size = self.get_parameter('img_published_reshape_size').get_parameter_value().integer_array_value
         if self.enable_image_output:
             output_image_topic = self.get_parameter('output_image_topic').get_parameter_value().string_value
-            self.image_output_publisher = self.create_publisher(
-                Image,
-                output_image_topic,
-                self.qos_profile
+            image_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,   # 1–5 is ideal for images over Wi-Fi
+                durability=DurabilityPolicy.VOLATILE
             )
-            self.get_logger().debug(f"Image output enabled: {output_image_topic}")
+            self.image_output_publisher = self.create_publisher(
+                CompressedImage,
+                output_image_topic,
+                image_qos
+            )
+            self.get_logger().debug(f"Compressed image output enabled: {output_image_topic}")
         else:
             self.image_output_publisher = None
         
@@ -522,8 +536,11 @@ class FaceRecognitionNode(Node):
             debug_prints = self.get_parameter('enable_debug_output').get_parameter_value().bool_value
             use_ewma = self.get_parameter('use_ewma_for_mean').get_parameter_value().bool_value
             ewma_alpha = self.get_parameter('ewma_alpha').get_parameter_value().double_value
-            
+            min_emin_embeddings_for_identity = self.get_parameter('min_embeddings_for_identity').get_parameter_value().integer_value
+
             # MongoDB parameters
+            use_mongodb = self.get_parameter('use_mongodb').get_parameter_value().bool_value   
+            save_last_n_embeddings = self.get_parameter('save_last_n_embeddings').get_parameter_value().integer_value
             mongo_uri = self.get_parameter('mongo_uri').get_parameter_value().string_value
             mongo_db_name = self.get_parameter('mongo_db_name').get_parameter_value().string_value
             mongo_collection_name = self.get_parameter('mongo_collection_name').get_parameter_value().string_value
@@ -545,7 +562,10 @@ class FaceRecognitionNode(Node):
                 mongo_db_name=mongo_db_name,
                 mongo_collection_name=mongo_collection_name,
                 use_ewma_for_mean=use_ewma,
-                ewma_alpha=ewma_alpha
+                ewma_alpha=ewma_alpha,
+                use_mongodb=use_mongodb,
+                save_last_n_embeddings=save_last_n_embeddings,
+                min_embeddings_for_identity=min_emin_embeddings_for_identity
             )
             
             self.get_logger().info("Identity manager initialized")
@@ -565,6 +585,7 @@ class FaceRecognitionNode(Node):
         # Store latest landmarks for processing
         self.latest_landmarks_array = msg
         self.landmarks_processed = False
+        # self.get_logger().info("landmarks arrive")
     
     def tracked_faces_callback(self, msg):
         """
@@ -1008,7 +1029,14 @@ class FaceRecognitionNode(Node):
                 y = y1
                 w = x2 - x1
                 h = y2 - y1
-                
+
+                #if wh is less than min_h_size pixels, consider it invalid and skip to landmark-based cropping
+                # or if the box is wider than it is tall (which is unlikely for a face), also consider it invalid and skip to landmark-based cropping
+                if h < self.min_h_size or w > h:
+                    if self.enable_debug_output:
+                        self.get_logger().warning(f"Bounding box too small or too wide (w={w}, h={h}), skipping to face id {msg.face_id}")
+                    return None
+
                 if self.enable_debug_output:
                     self.get_logger().debug(f"Normalized bbox: ({x1_norm:.3f}, {y1_norm:.3f}, {x2_norm:.3f}, {y2_norm:.3f})")
                     self.get_logger().debug(f"Pixel bbox: x={x}, y={y}, w={w}, h={h}")
@@ -1025,29 +1053,30 @@ class FaceRecognitionNode(Node):
                     # Apply histogram equalization for color balancing while maintaining compatibility
                     if face_crop.size > 0:
                         # Save original face crop for debugging
-                        # if self.enable_debug_output:
-                        #     debug_filename_original = f"/workspace/src/face_recognition/weights/imgs/face_crop_original_{msg.face_id}.jpg"
-                        #     cv2.imwrite(debug_filename_original, face_crop)
-                        #     self.get_logger().debug(f"Saved original face crop: {debug_filename_original}")
+                        if self.enable_debug_output:
+                            debug_filename_original = f"/workspace/src/face_recognition/weights/imgs/face_crop_original_{msg.face_id}.jpg"
+                            # cv2.imwrite(debug_filename_original, face_crop)
+                            # self.get_logger().debug(f"Saved original face crop: {debug_filename_original}")
                         
-                        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) for better lighting robustness
-                        # Convert BGR to LAB color space for better color preservation
-                        lab = cv2.cvtColor(face_crop, cv2.COLOR_BGR2LAB)
-                        l_channel, a_channel, b_channel = cv2.split(lab)
+                        # # NOT PERFORMING CORRECTLY - Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) for better lighting robustness
+                        # # Convert BGR to LAB color space for better color preservation
+                        # lab = cv2.cvtColor(face_crop, cv2.COLOR_BGR2LAB)
+                        # l_channel, a_channel, b_channel = cv2.split(lab)
                         
-                        # Apply CLAHE to the L (lightness) channel only to preserve color information
-                        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                        l_channel_clahe = clahe.apply(l_channel)
+                        # # Apply CLAHE to the L (lightness) channel only to preserve color information
+                        # clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                        # l_channel_clahe = clahe.apply(l_channel)
                         
-                        # Merge channels back and convert to BGR
-                        lab_clahe = cv2.merge([l_channel_clahe, a_channel, b_channel])
-                        face_crop_balanced = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
-                        
+                        # # Merge channels back and convert to BGR
+                        # lab_clahe = cv2.merge([l_channel_clahe, a_channel, b_channel])
+                        # face_crop_balanced = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
+                        face_crop_balanced = face_crop  # Skip processing for now to maintain compatibility and avoid issues
+
                         # Save processed face crop for debugging
-                        # if self.enable_debug_output:
-                        #     debug_filename_processed = f"/workspace/src/face_recognition/weights/imgs/face_crop_processed_{msg.face_id}.jpg"
-                        #     cv2.imwrite(debug_filename_processed, face_crop_balanced)
-                        #     self.get_logger().debug(f"Saved processed face crop: {debug_filename_processed}")
+                        if self.enable_debug_output:
+                            debug_filename_processed = f"/workspace/src/face_recognition/weights/imgs/face_crop_processed_{msg.face_id}.jpg"
+                            # cv2.imwrite(debug_filename_processed, face_crop_balanced)
+                            # self.get_logger().debug(f"Saved processed face crop: {debug_filename_processed}")
                         
                         if self.enable_debug_output:
                             self.get_logger().debug(f"Extracted and processed face crop from normalized bbox: {face_crop_balanced.shape}")
@@ -1098,24 +1127,32 @@ class FaceRecognitionNode(Node):
                 if self.enable_debug_output:
                     self.get_logger().debug(f"Landmark-based crop: x={x}, y={y}, w={w}, h={h}")
                 
+                #if wh is less than min_h_size pixels, consider it invalid and skip to landmark-based cropping
+                #or if the box is wider than it is tall (which is unlikely for a face), also consider it invalid and skip to landmark-based cropping
+                if h < self.min_h_size or w > h:
+                    if self.enable_debug_output:
+                        self.get_logger().warning(f"Bounding box too small or too wide (w={w}, h={h}), skipping to face id {msg.face_id}")
+                    return None
+
                 if w > 0 and h > 0:
                     face_crop = self.last_image[y:y+h, x:x+w]
                     
                     # Apply histogram equalization for color balancing while maintaining compatibility
                     if face_crop.size > 0:
-                        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) for better lighting robustness
-                        # Convert BGR to LAB color space for better color preservation
-                        lab = cv2.cvtColor(face_crop, cv2.COLOR_BGR2LAB)
-                        l_channel, a_channel, b_channel = cv2.split(lab)
+                        # # NOT PERFORMING CORRECTLY - Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) for better lighting robustness
+                        # # Convert BGR to LAB color space for better color preservation
+                        # lab = cv2.cvtColor(face_crop, cv2.COLOR_BGR2LAB)
+                        # l_channel, a_channel, b_channel = cv2.split(lab)
                         
-                        # Apply CLAHE to the L (lightness) channel only to preserve color information
-                        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                        l_channel_clahe = clahe.apply(l_channel)
+                        # # Apply CLAHE to the L (lightness) channel only to preserve color information
+                        # clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                        # l_channel_clahe = clahe.apply(l_channel)
                         
-                        # Merge channels back and convert to BGR
-                        lab_clahe = cv2.merge([l_channel_clahe, a_channel, b_channel])
-                        face_crop_balanced = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
-                                                
+                        # # Merge channels back and convert to BGR
+                        # lab_clahe = cv2.merge([l_channel_clahe, a_channel, b_channel])
+                        # face_crop_balanced = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
+                        face_crop_balanced = face_crop  # Skip processing for now to maintain compatibility and avoid issues
+
                         if self.enable_debug_output:
                             self.get_logger().debug(f"Extracted and processed face crop from landmarks: {face_crop_balanced.shape}")
                         
@@ -1140,50 +1177,55 @@ class FaceRecognitionNode(Node):
     
 
     def _publish_batch_annotated_image(self, recognition_results: List):
-        """Publish annotated image with recognition results for multiple faces."""
+        """Publish annotated image with recognition results for multiple faces as CompressedImage."""
         if not self.enable_image_output or not self.image_output_publisher or self.last_image is None:
             return
-        
         try:
             # Create a copy of the image for annotation
             annotated_image = self.last_image.copy()
             if recognition_results:
-                # Annotate all faces with recognition results
                 for landmarks_msg, (unique_id, confidence) in recognition_results:
                     self._draw_recognition_annotation(annotated_image, landmarks_msg, unique_id, confidence)
-            
-            # Convert to ROS image message
-            image_msg = self.cv_bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
-            image_msg.header = self.last_image_header if self.last_image_header else recognition_results[0][0].header
-            
-            # Publish annotated image
-            self.image_output_publisher.publish(image_msg)
-            
+            # Encode as JPEG
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 75]
+            small = cv2.resize(annotated_image, tuple(self.img_published_reshape_size), interpolation=cv2.INTER_AREA)
+            success, encoded_image = cv2.imencode('.jpg', small, encode_params) # 3ms
+            # success, encoded_image = cv2.imencode('.jpg', annotated_image) # 30-40ms
+            if not success:
+                self.get_logger().error("Failed to encode annotated image as JPEG")
+                return
+            compressed_msg = CompressedImage()
+            compressed_msg.header = self.last_image_header if self.last_image_header else (recognition_results[0][0].header if recognition_results else Header())
+            compressed_msg.format = 'jpeg'
+            compressed_msg.data = encoded_image.tobytes()
+            self.image_output_publisher.publish(compressed_msg)
         except Exception as e:
             self.get_logger().error(f"Failed to publish batch annotated image: {e}")
     
     def _publish_clean_image(self):
-        """Publish the original image without any annotations when no faces are detected."""
+        """Publish the original image without any annotations when no faces are detected as CompressedImage."""
         if not self.enable_image_output or not self.image_output_publisher or self.last_image is None:
             return
-        
         try:
-            # Convert to ROS image message without any modifications
-            image_msg = self.cv_bridge.cv2_to_imgmsg(self.last_image, encoding='bgr8')
-            image_msg.header = self.last_image_header if hasattr(self, 'last_image_header') and self.last_image_header else Header()
-            
-            # Set timestamp if header doesn't have one
-            if not image_msg.header.stamp.sec and not image_msg.header.stamp.nanosec:
-                image_msg.header.stamp = self.get_clock().now().to_msg()
-            
-            # Publish clean image
-            self.image_output_publisher.publish(image_msg)
-            
+            # Encode as JPEG
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 75]
+            small = cv2.resize(self.last_image, tuple(self.img_published_reshape_size), interpolation=cv2.INTER_AREA)
+            success, encoded_image = cv2.imencode('.jpg', small, encode_params) # 3ms
+            # success, encoded_image = cv2.imencode('.jpg', annotated_image) # 30-40ms
+            if not success:
+                self.get_logger().error("Failed to encode clean image as JPEG")
+                return
+            compressed_msg = CompressedImage()
+            compressed_msg.header = self.last_image_header if hasattr(self, 'last_image_header') and self.last_image_header else Header()
+            if not compressed_msg.header.stamp.sec and not compressed_msg.header.stamp.nanosec:
+                compressed_msg.header.stamp = self.get_clock().now().to_msg()
+            compressed_msg.format = 'jpeg'
+            compressed_msg.data = encoded_image.tobytes()
+            self.image_output_publisher.publish(compressed_msg)
             if self.enable_debug_output:
-                self.get_logger().debug("Published clean image (no faces detected)")
-            
+                self.get_logger().debug("Published clean compressed image (no faces detected)")
         except Exception as e:
-            self.get_logger().error(f"Failed to publish clean image: {e}")
+            self.get_logger().error(f"Failed to publish clean compressed image: {e}")
 
     def _draw_recognition_annotation(self, image: np.ndarray, landmarks_msg, unique_id: Optional[str], confidence: float):
         """Draw recognition annotation on the image."""
@@ -1260,7 +1302,7 @@ class FaceRecognitionNode(Node):
         # Save identity database before shutdown
         if self.identity_manager and hasattr(self.identity_manager, 'save_identity_database'):
             try:
-                self.identity_manager.save_identity_database()
+                self.identity_manager.save_identity_database(self.save_last_n_embeddings)
                 self.get_logger().debug("Identity database saved")
             except Exception as e:
                 self.get_logger().error(f"Failed to save identity database: {e}")

@@ -216,3 +216,4 @@ logs/
 # Docker logs - ignore all except README
 Docker/logs/*
 !Docker/logs/README.md
+face_recognition/weights/imgs/

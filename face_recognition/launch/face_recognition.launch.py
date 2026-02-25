@@ -67,10 +67,10 @@ def _setup_face_recognition(context, *args, **kwargs):
         'clustering_threshold',
         'max_embeddings_per_identity',
         'identity_timeout',
-        'identity_database_path',
         'enable_debug_output',
         'receiver_id',
-        'ros4hri_with_id'
+        'ros4hri_with_id',
+        'min_h_size'
     ]
 
     for param in params_to_expose:
@@ -127,10 +127,10 @@ def generate_launch_description():
         'clustering_threshold',
         'max_embeddings_per_identity',
         'identity_timeout',
-        'identity_database_path',
         'enable_debug_output',
         'receiver_id',
-        'ros4hri_with_id'
+        'ros4hri_with_id',
+        'min_h_size'
     ]
 
     for param in params_to_expose:

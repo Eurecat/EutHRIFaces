@@ -244,7 +244,13 @@ To delete the database, remove the associated Docker volume.
 You can also manage entries via the web interface at [http://0.0.0.0:8081/db/face_recognition_db/identity_database/](http://0.0.0.0:8081/db/face_recognition_db/identity_database/).
 
 
-## Troubleshooting
+## Launch test with a sample video:
+
+Launch the stack and use video publisher on EutEntityDetection with the following sample [youtube video](https://www.youtube.com/watch?v=fHnfaaUPozE), and mongodb false on face recognition yaml.
+
+You should expect to see constant face recognition resoluts, specifically from left to right:
+U5, U2, U3, U1, U4. Stable and not changing across video.
+
 
 ## Troubleshooting
 

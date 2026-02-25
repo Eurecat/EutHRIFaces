@@ -165,8 +165,8 @@ class VisualSpeechActivityNode(Node):
         self.declare_parameter('recognition_input_topic', '/humans/faces/recognized')
         self.declare_parameter('landmarks_input_topic', '/humans/faces/detected')
         self.declare_parameter('output_topic', '/humans/faces/speaking')
-        self.declare_parameter('output_image_topic', '/humans/faces/speaking/annotated_img')
-        
+        self.declare_parameter('output_image_topic', '/humans/faces/speaking/annotated_img/compressed')
+        self.declare_parameter('img_published_reshape_size', [1080, 720])  # Size to reshape published annotated images for visualization (format: [width, height])
         # ROS4HRI mode parameter
         self.declare_parameter('ros4hri_with_id', False)  # Default to array mode
         
@@ -175,7 +175,7 @@ class VisualSpeechActivityNode(Node):
         self.declare_parameter('vsdlm_weights_path', 'weights')  # Directory containing VSDLM weights
         self.declare_parameter('vsdlm_weights_name', 'vsdlm_s.onnx')  # Specific VSDLM weights filename
         self.declare_parameter('vsdlm_model_variant', 'S')  # Model variant for auto-download: P/N/S/M/L
-        self.declare_parameter('vsdlm_execution_provider', 'cpu')  # ONNX provider: cpu/cuda/tensorrt
+        self.declare_parameter('vsdlm_execution_provider', 'cuda')  # ONNX provider: cpu/cuda/tensorrt
         self.declare_parameter('vsdlm_mouth_height_ratio', 0.35)  # Mouth height as ratio of face height (YOLO mode)
         
         # Temporal smoothing parameters for VSDLM
@@ -205,7 +205,7 @@ class VisualSpeechActivityNode(Node):
         self.landmarks_input_topic = self.get_parameter('landmarks_input_topic').get_parameter_value().string_value
         self.output_topic = self.get_parameter('output_topic').get_parameter_value().string_value
         self.output_image_topic = self.get_parameter('output_image_topic').get_parameter_value().string_value
-        
+        self.img_published_reshape_size = self.get_parameter('img_published_reshape_size').get_parameter_value().integer_array_value
         # ROS4HRI mode
         self.ros4hri_with_id = self.get_parameter('ros4hri_with_id').get_parameter_value().bool_value
         
@@ -227,7 +227,7 @@ class VisualSpeechActivityNode(Node):
         self.compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
         
         # Map provider string to ONNX provider list with intelligent fallbacks
-        if vsdlm_provider == 'cuda':
+        if 'cuda' in vsdlm_provider.lower():
             # Try CUDA first, with CPU fallback
             self.vsdlm_providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
         elif vsdlm_provider == 'tensorrt':
@@ -370,7 +370,7 @@ class VisualSpeechActivityNode(Node):
         self.image_publisher = None
         if self.enable_image_output:
             self.image_publisher = self.create_publisher(
-                Image,
+                CompressedImage,
                 self.output_image_topic,
                 10
             )
@@ -1192,10 +1192,20 @@ class VisualSpeechActivityNode(Node):
                 )
             
             # Publish the final annotated image
-            annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
-            annotated_msg.header = header
-            self.image_publisher.publish(annotated_msg)
-            
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 75]
+            small = cv2.resize(annotated_image, tuple(self.img_published_reshape_size), interpolation=cv2.INTER_AREA)
+            success, encoded_image = cv2.imencode('.jpg', small, encode_params) # 3ms
+            # success, encoded_image = cv2.imencode('.jpg', annotated_image) # 30-40ms
+            if not success:
+                self.get_logger().error("Failed to encode annotated image as JPEG")
+                return
+            compressed_msg = CompressedImage()
+            compressed_msg.header = header
+            compressed_msg.format = 'jpeg'
+            compressed_msg.data = encoded_image.tobytes()
+
+            self.image_publisher.publish(compressed_msg)
+                
             if self.enable_debug_output:
                 face_ids = [data['face_id'] for data in self.pending_visualizations]
                 self.get_logger().debug(

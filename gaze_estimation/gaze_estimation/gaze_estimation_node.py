@@ -151,10 +151,16 @@ class GazeEstimationNode(Node):
                     self.qos_profile
                 )
             
+            image_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,   # 1–5 is ideal for images over Wi-Fi
+                durability=DurabilityPolicy.VOLATILE
+            )
             self.image_pub = self.create_publisher(
-                Image,
+                CompressedImage,
                 self.output_image_topic,
-                10
+                image_qos
             )
 
         # Timer for periodic inference (copied from perception node pattern)
@@ -409,9 +415,21 @@ class GazeEstimationNode(Node):
                     self.draw_single_face_visualization(annotated_image, face_msg, gaze_score, gaze_direction, pitch, yaw, roll)
                 
                 # Convert to ROS Image and publish once
-                annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
-                annotated_msg.header = landmarks_msg.header if landmarks_msg.header is not None else Header()
-                self.image_pub.publish(annotated_msg)
+                # annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
+
+                encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 75]
+                small = cv2.resize(annotated_image, self.img_published_reshape_size, interpolation=cv2.INTER_AREA)
+                success, encoded_image = cv2.imencode('.jpg', small, encode_params) # 3ms
+                # success, encoded_image = cv2.imencode('.jpg', annotated_image) # 30-40ms
+                if not success:
+                    self.get_logger().error("Failed to encode annotated image as JPEG")
+                    return
+                compressed_msg = CompressedImage()
+                compressed_msg.header = landmarks_msg.header if landmarks_msg.header is not None else Header()
+                compressed_msg.format = 'jpeg'
+                compressed_msg.data = encoded_image.tobytes()
+
+                self.image_pub.publish(compressed_msg)
                 
                 if self.enable_debug_output:
                     self.get_logger().debug(f'Published gaze visualization with {len(gaze_visualization_data)} faces')
@@ -472,8 +490,9 @@ class GazeEstimationNode(Node):
         
         # Declare and get image visualization parameters
         self.declare_parameter('enable_image_output', True)
+        self.declare_parameter('img_published_reshape_size', [1080, 720])  # Size to reshape published annotated images for visualization
         self.declare_parameter('image_input_topic', '/camera/color/image_rect_raw')
-        self.declare_parameter('output_image_topic', '/humans/faces/gaze/annotated_img')
+        self.declare_parameter('output_image_topic', '/humans/faces/gaze/annotated_img/compressed')
         
         # ROS4HRI mode parameter - when enabled, subscribes to per-ID messages and publishes per-ID
         self.declare_parameter('ros4hri_with_id', False)  # Default to array mode (ROS4HRI array)
@@ -481,6 +500,7 @@ class GazeEstimationNode(Node):
         self.enable_debug_output = self.get_parameter('enable_debug_output').get_parameter_value().bool_value
         self.publish_rate = self.get_parameter('publish_rate').get_parameter_value().double_value
         self.enable_image_output = self.get_parameter('enable_image_output').get_parameter_value().bool_value
+        self.img_published_reshape_size = self.get_parameter('img_published_reshape_size').get_parameter_value().integer_array_value
         self.image_input_topic = self.get_parameter('image_input_topic').get_parameter_value().string_value
         self.output_image_topic = self.get_parameter('output_image_topic').get_parameter_value().string_value
         self.ros4hri_with_id = self.get_parameter('ros4hri_with_id').get_parameter_value().bool_value

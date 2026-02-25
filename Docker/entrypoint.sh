@@ -3,6 +3,12 @@ set -e
 
 echo "=== ENTRYPOINT START $(date) PID=$$ ==="
 
+# Source CUDA library path if it exists (for pip-installed CUDA libraries)
+if [ -f /etc/profile.d/cuda_lib_path.sh ]; then
+    echo "Sourcing CUDA library path..."
+    source /etc/profile.d/cuda_lib_path.sh
+fi
+
 # Create timestamped runtime log directory for ROS2 node logs
 # Use PACKAGE_NAME if set, otherwise use HOSTNAME
 TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
@@ -23,14 +29,14 @@ if [ ! -e "/workspace/log/runtime_latest" ]; then
 fi
 
 # Source ROS 2 environment
-if [ -f "/opt/ros/jazzy/setup.bash" ]; then
+if [ -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]; then
     echo "Sourcing ROS 2 environment..."
-    source /opt/ros/jazzy/setup.bash
+    source /opt/ros/${ROS_DISTRO}/setup.bash
     echo "Sourced ${ROS_DISTRO}"
 fi
-if [ -f "/opt/vulcanexus/jazzy/setup.bash" ]; then
+if [ -f "/opt/vulcanexus/${ROS_DISTRO}/setup.bash" ]; then
     echo "Sourcing ROS 2 environment..."
-    source /opt/vulcanexus/jazzy/setup.bash
+    source /opt/vulcanexus/${ROS_DISTRO}/setup.bash
     echo "Sourced ${ROS_DISTRO}"
 fi
 
@@ -73,6 +79,8 @@ if [ -f "/workspace/install/setup.bash" ]; then
 fi
 
 echo "=== ENTRYPOINT END $(date) ==="
+
+printenv | grep -E 'RMW|CYCLONEDDS|ROS_DOMAIN'
 
 # Export ROS_LOG_DIR for the command that follows
 # This ensures ros2 launch commands will use our timestamped directory
