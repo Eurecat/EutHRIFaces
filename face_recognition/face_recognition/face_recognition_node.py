@@ -341,6 +341,7 @@ class FaceRecognitionNode(Node):
         
         # Image output parameters
         self.declare_parameter('enable_image_output', True)
+        self.declare_parameter('img_published_reshape_size', [640, 360])  # Resolution for published annotated images
         self.declare_parameter('output_image_topic', '/humans/faces/recognized/annotated_img/compressed')
         
         # Face embedding parameters
@@ -437,6 +438,7 @@ class FaceRecognitionNode(Node):
         
         # Image output publisher (optional)
         self.enable_image_output = self.get_parameter('enable_image_output').get_parameter_value().bool_value
+        self.img_published_reshape_size = self.get_parameter('img_published_reshape_size').get_parameter_value().integer_array_value
         if self.enable_image_output:
             output_image_topic = self.get_parameter('output_image_topic').get_parameter_value().string_value
             image_qos = QoSProfile(
@@ -1183,7 +1185,7 @@ class FaceRecognitionNode(Node):
                     self._draw_recognition_annotation(annotated_image, landmarks_msg, unique_id, confidence)
             # Encode as JPEG
             encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 75]
-            small = cv2.resize(annotated_image, (640, 360))
+            small = cv2.resize(annotated_image, tuple(self.img_published_reshape_size), interpolation=cv2.INTER_AREA)
             success, encoded_image = cv2.imencode('.jpg', small, encode_params) # 3ms
             # success, encoded_image = cv2.imencode('.jpg', annotated_image) # 30-40ms
             if not success:
@@ -1204,7 +1206,7 @@ class FaceRecognitionNode(Node):
         try:
             # Encode as JPEG
             encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 75]
-            small = cv2.resize(self.last_image, (640, 360))
+            small = cv2.resize(self.last_image, tuple(self.img_published_reshape_size), interpolation=cv2.INTER_AREA)
             success, encoded_image = cv2.imencode('.jpg', small, encode_params) # 3ms
             # success, encoded_image = cv2.imencode('.jpg', annotated_image) # 30-40ms
             if not success:

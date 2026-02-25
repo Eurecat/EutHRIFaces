@@ -112,6 +112,7 @@ visual_speech_activity_node:
     # Image Visualization
     # Enable/disable annotated image output with lip visualization
     enable_image_output: true
+    img_published_reshape_size: [1080, 720]  # Size to reshape published annotated images for visualization (format: [width, height])
     
     # Distance in pixels to position labels above mouth center (default: 50)
     # Increase this value to move speaking labels further away from lips

@@ -23,6 +23,7 @@ face_detector:
     
     # Image Output Configuration
     enable_image_output: true
+    img_published_reshape_size: [1080,720]  # New parameter for published image resolution
     face_bbox_thickness: 2
     face_landmark_radius: 3
     face_bbox_color: [0, 255, 0]
@@ -51,7 +52,7 @@ face_detector:
     # The lightest model (float16, ~3.7MB) will be auto-downloaded if not present
     # Note: If both dlib and MediaPipe are enabled, MediaPipe takes priority
     # GPU support: Set to false (standard mediapipe package doesn't include GPU support)
-    enable_mediapipe_landmarks: false
+    enable_mediapipe_landmarks: true
     mediapipe_use_gpu: false
     mediapipe_model_path: "face_landmarker.task"
     mediapipe_min_detection_confidence: 0.5

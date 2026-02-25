@@ -472,6 +472,7 @@ class FaceDetectorNode(Node):
         
         # Image visualization parameters
         self.declare_parameter('enable_image_output', True)
+        self.declare_parameter('img_published_reshape_size', [640,360])  # New parameter for published image resolution
         self.declare_parameter('face_bbox_thickness', 2)
         self.declare_parameter('face_landmark_radius', 3)
         self.declare_parameter('face_bbox_color', [0, 255, 0])  # Green
@@ -539,6 +540,7 @@ class FaceDetectorNode(Node):
         
         # Image visualization parameters
         self.enable_image_output = self.get_parameter('enable_image_output').get_parameter_value().bool_value
+        self.img_published_reshape_size = self.get_parameter('img_published_reshape_size').get_parameter_value().integer_array_value
         self.face_bbox_thickness = self.get_parameter('face_bbox_thickness').get_parameter_value().integer_value
         self.face_landmark_radius = self.get_parameter('face_landmark_radius').get_parameter_value().integer_value
         self.face_bbox_color = self.get_parameter('face_bbox_color').get_parameter_value().integer_array_value
@@ -962,7 +964,7 @@ class FaceDetectorNode(Node):
             # annotated_msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding='bgr8')
             # Encode as JPEG
             encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 75]
-            small = cv2.resize(annotated_image, (640, 360))
+            small = cv2.resize(annotated_image, tuple(self.img_published_reshape_size), interpolation=cv2.INTER_AREA)
             success, encoded_image = cv2.imencode('.jpg', small, encode_params) # 3ms
             # success, encoded_image = cv2.imencode('.jpg', annotated_image) # 30-40ms
             if not success:

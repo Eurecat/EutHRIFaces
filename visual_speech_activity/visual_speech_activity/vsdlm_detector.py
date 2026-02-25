@@ -153,6 +153,10 @@ class VSDLMDetector:
             self._download_model()
         
         # Initialize ONNX session
+        # if 'CUDAExecutionProvider' not in ort.get_available_providers():
+        #     self.logger.warn(f"\033[91m[WARNING] onnxruntime-gpu not installed! Install with: pip install onnxruntime-gpu\033[0m")
+        # else:
+        #     providers = ['CUDAExecutionProvider']   
         if providers is None:
             providers = ['CPUExecutionProvider']
         

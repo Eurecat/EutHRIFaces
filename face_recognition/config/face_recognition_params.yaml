@@ -41,8 +41,10 @@ face_recognition_node:
         
 
     # Debug Configuration
-    enable_debug_output: true
-    
+    enable_debug_output: false
+    enable_image_output: true
+    img_published_reshape_size: [1080, 720]  # Resolution for published annotated images
+
     # Receiver Configuration
     receiver_id: "face_recognition"
     

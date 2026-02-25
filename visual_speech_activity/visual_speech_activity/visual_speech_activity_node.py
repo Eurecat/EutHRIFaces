@@ -166,7 +166,7 @@ class VisualSpeechActivityNode(Node):
         self.declare_parameter('landmarks_input_topic', '/humans/faces/detected')
         self.declare_parameter('output_topic', '/humans/faces/speaking')
         self.declare_parameter('output_image_topic', '/humans/faces/speaking/annotated_img/compressed')
-        
+        self.declare_parameter('img_published_reshape_size', [1080, 720])  # Size to reshape published annotated images for visualization (format: [width, height])
         # ROS4HRI mode parameter
         self.declare_parameter('ros4hri_with_id', False)  # Default to array mode
         
@@ -205,7 +205,7 @@ class VisualSpeechActivityNode(Node):
         self.landmarks_input_topic = self.get_parameter('landmarks_input_topic').get_parameter_value().string_value
         self.output_topic = self.get_parameter('output_topic').get_parameter_value().string_value
         self.output_image_topic = self.get_parameter('output_image_topic').get_parameter_value().string_value
-        
+        self.img_published_reshape_size = self.get_parameter('img_published_reshape_size').get_parameter_value().integer_array_value
         # ROS4HRI mode
         self.ros4hri_with_id = self.get_parameter('ros4hri_with_id').get_parameter_value().bool_value
         
@@ -227,7 +227,7 @@ class VisualSpeechActivityNode(Node):
         self.compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
         
         # Map provider string to ONNX provider list with intelligent fallbacks
-        if vsdlm_provider == 'cuda':
+        if 'cuda' in vsdlm_provider.lower():
             # Try CUDA first, with CPU fallback
             self.vsdlm_providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
         elif vsdlm_provider == 'tensorrt':
@@ -1193,7 +1193,7 @@ class VisualSpeechActivityNode(Node):
             
             # Publish the final annotated image
             encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 75]
-            small = cv2.resize(annotated_image, (640, 360))
+            small = cv2.resize(annotated_image, tuple(self.img_published_reshape_size), interpolation=cv2.INTER_AREA)
             success, encoded_image = cv2.imencode('.jpg', small, encode_params) # 3ms
             # success, encoded_image = cv2.imencode('.jpg', annotated_image) # 30-40ms
             if not success:
