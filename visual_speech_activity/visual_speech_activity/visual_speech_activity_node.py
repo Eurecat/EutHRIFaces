@@ -17,7 +17,7 @@ Architecture:
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, DurabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy, QoSReliabilityPolicy, QoSHistoryPolicy
 from rclpy.time import Time
 
 import numpy as np
@@ -365,14 +365,19 @@ class VisualSpeechActivityNode(Node):
                 self._store_latest_rgb,
                 self.sensor_qos
             )
-        
+        image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,   # 1–5 is ideal for images over Wi-Fi
+            durability=DurabilityPolicy.VOLATILE
+        )
         # Create image publisher for visualization
         self.image_publisher = None
         if self.enable_image_output:
             self.image_publisher = self.create_publisher(
                 CompressedImage,
                 self.output_image_topic,
-                10
+                image_qos
             )
             self.get_logger().debug(f"Publishing annotated images to {self.output_image_topic}")
     
