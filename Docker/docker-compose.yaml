@@ -157,7 +157,7 @@ services:
     devices:
       - /dev/dri:/dev/dri
       - /dev/snd:/dev/snd
-    command: bash -c "source /workspace/install/setup.bash && exec ros2 launch visual_speech_activity visual_speech_activity.launch.py compressed_topic:=/camera/image_raw/compressed"
+    command: bash -c "source /workspace/install/setup.bash && exec ros2 launch visual_speech_activity visual_speech_activity.launch.py compressed_topic:=${IMG_RAW_TOPIC:-/camera/image_raw/compressed}"
     stop_signal: SIGINT
     stop_grace_period: 30s
 
