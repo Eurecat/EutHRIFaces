@@ -453,16 +453,16 @@ class FaceRecognitionNode(Node):
                 output_image_topic,
                 image_qos
             )
-            self.get_logger().debug(f"Compressed image output enabled: {output_image_topic}")
+            self.get_logger().info(f"Compressed image output enabled: {output_image_topic}")
         else:
             self.image_output_publisher = None
         
-        self.get_logger().debug(f"Subscribed to: {input_topic}")
-        self.get_logger().debug(f"Publishing to: {output_topic}")
+        self.get_logger().info(f"Subscribed to: {input_topic}")
+        self.get_logger().info(f"Publishing to: {output_topic}")
         if self.ros4hri_with_id:
-            self.get_logger().debug("Publishing individual FacialRecognition messages")
+            self.get_logger().info("Publishing individual FacialRecognition messages")
         else:
-            self.get_logger().debug("Publishing FacialRecognitionArray messages")
+            self.get_logger().info("Publishing FacialRecognitionArray messages")
     
     def _initialize_components(self):
         """Initialize face embedding extractor and identity manager."""
