@@ -29,8 +29,6 @@ pytubefix
 boxmot>=13.0.0
 lapx>=0.5   
 
-# Ultralytics-----------------------------------
-ultralytics
 
 # Numpy -----------------------------------
 # Core numeric stack (py3.12 compatible) --
