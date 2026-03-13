@@ -155,8 +155,6 @@ typing-extensions==4.15.0
 typing-inspection==0.4.2
 tzdata==2025.3
 uc-micro-py==1.0.3
-ultralytics==8.4.9
-ultralytics-thop==2.0.18
 urllib3==2.6.3
 uvicorn==0.40.0
 wcwidth==0.5.2
