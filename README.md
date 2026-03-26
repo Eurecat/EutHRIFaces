@@ -241,7 +241,10 @@ db.identity_database.find()
 
 To delete the database, remove the associated Docker volume.
 
-You can also manage entries via the web interface at [http://0.0.0.0:8081/db/face_recognition_db/identity_database/](http://0.0.0.0:8081/db/face_recognition_db/identity_database/).
+You can also manage entries via the web interface at [http://0.0.0.0:8082/db/face_recognition_db/identity_database/](http://0.0.0.0:8081/db/face_recognition_db/identity_database/).
+
+user: admin
+password: pass
 
 
 ## Launch test with a sample video:

@@ -2,7 +2,7 @@ name: coghri_faces
 
 services:
   eut_face_detection:
-    container_name: "eut_face_detection"
+    container_name: "eth_eut_face_detection"
     network_mode: host 
     ipc: host
     shm_size: 1gb
@@ -20,8 +20,8 @@ services:
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
       - ./logs:/workspace/log
-      # Cyclone DDS configuration for TiagoPro WiFi
-      - ./cyclonedds_wifi.xml:/etc/cyclonedds.xml:ro
+      # Cyclone DDS configuration for TiagoPro Ethernet
+      - ./cyclonedds_ethernet.xml:/etc/cyclonedds.xml:ro
 
     tty: true
     stdin_open: true
@@ -43,7 +43,7 @@ services:
     stop_grace_period: 30s
   
   eut_face_recognition:
-    container_name: "eut_face_recognition"
+    container_name: "eth_eut_face_recognition"
     network_mode: host 
     ipc: host
     shm_size: 1gb
@@ -60,8 +60,8 @@ services:
       - ../face_recognition:/workspace/src/face_recognition
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
-      # Cyclone DDS configuration for TiagoPro WiFi
-      - ./cyclonedds_wifi.xml:/etc/cyclonedds.xml:ro
+      # Cyclone DDS configuration for TiagoPro Ethernet
+      - ./cyclonedds_ethernet.xml:/etc/cyclonedds.xml:ro
       - ./logs:/workspace/log
       
     tty: true
@@ -83,7 +83,7 @@ services:
     stop_grace_period: 30s
 
   eut_gaze_estimation:
-    container_name: "eut_gaze_estimation"
+    container_name: "eth_eut_gaze_estimation"
     network_mode: host 
     ipc: host
     shm_size: 1gb
@@ -100,8 +100,8 @@ services:
       - ../face_recognition:/workspace/src/face_recognition
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
-      # Cyclone DDS configuration for TiagoPro WiFi
-      - ./cyclonedds_wifi.xml:/etc/cyclonedds.xml:ro
+      # Cyclone DDS configuration for TiagoPro Ethernet
+      - ./cyclonedds_ethernet.xml:/etc/cyclonedds.xml:ro
       - ./logs:/workspace/log
 
     tty: true
@@ -123,7 +123,7 @@ services:
     stop_grace_period: 30s
 
   eut_visual_speech_activity:
-    container_name: "eut_visual_speech_activity"
+    container_name: "eth_eut_visual_speech_activity"
     network_mode: host 
     ipc: host
     shm_size: 1gb
@@ -141,8 +141,8 @@ services:
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
       - ./logs:/workspace/log
-      # Cyclone DDS configuration for TiagoPro WiFi
-      - ./cyclonedds_wifi.xml:/etc/cyclonedds.xml:ro
+      # Cyclone DDS configuration for TiagoPro Ethernet
+      - ./cyclonedds_ethernet.xml:/etc/cyclonedds.xml:ro
     tty: true
     stdin_open: true
     environment:
@@ -179,7 +179,7 @@ services:
 
   mongo_express_faces:
     image: mongo-express:latest
-    container_name: "mongo-express-faces"
+    container_name: "eth-mongo-express-faces"
     restart: unless-stopped
     depends_on:
       - mongodb_faces_service
