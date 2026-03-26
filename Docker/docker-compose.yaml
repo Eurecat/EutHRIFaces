@@ -3,6 +3,8 @@ name: coghri_faces
 services:
   eut_face_detection:
     container_name: "eut_face_detection"
+    env_file:
+      - ./.env
     network_mode: host 
     ipc: host
     shm_size: 1gb
@@ -28,7 +30,7 @@ services:
     environment:
       - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
-      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}  
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}  
       - PACKAGE_NAME=face_detection
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
@@ -44,6 +46,8 @@ services:
   
   eut_face_recognition:
     container_name: "eut_face_recognition"
+    env_file:
+      - ./.env
     network_mode: host 
     ipc: host
     shm_size: 1gb
@@ -69,7 +73,7 @@ services:
     environment:
       - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
-      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp} 
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp} 
       - PACKAGE_NAME=face_recognition
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
@@ -84,6 +88,8 @@ services:
 
   eut_gaze_estimation:
     container_name: "eut_gaze_estimation"
+    env_file:
+      - ./.env
     network_mode: host 
     ipc: host
     shm_size: 1gb
@@ -109,7 +115,7 @@ services:
     environment:
       - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
-      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}   
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}   
       - PACKAGE_NAME=gaze_estimation
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
@@ -124,6 +130,8 @@ services:
 
   eut_visual_speech_activity:
     container_name: "eut_visual_speech_activity"
+    env_file:
+      - ./.env
     network_mode: host 
     ipc: host
     shm_size: 1gb
@@ -148,7 +156,7 @@ services:
     environment:
       - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
-      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp} 
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp} 
       - NVIDIA_VISIBLE_DEVICES=all 
       - PACKAGE_NAME=visual_speech_activity
       - DISPLAY=$DISPLAY
