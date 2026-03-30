@@ -25,7 +25,7 @@ services:
       - ../Docker/deps/hri_msgs:/workspace/src/hri_msgs
       - ../Docker/deps/tts_msgs:/workspace/src/tts_msgs
       # Cyclone DDS configuration for TiagoPro WiFi
-      - ./cyclonedds_wifi.xml:/etc/cyclonedds.xml:ro
+      - ./cyclone_xmls/${CYCLONE_CONFIG_FILE:-cyclonedds_ethernet.xml}:/etc/cyclonedds.xml:ro
 
     tty: true
     stdin_open: true
