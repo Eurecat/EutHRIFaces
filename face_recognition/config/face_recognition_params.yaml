@@ -16,6 +16,11 @@ face_recognition_node:
     # Face Embedding Model Configuration
     face_embedding_model: "vggface2"
     face_embedding_weights_name: "20180402-114759-vggface2.pt"
+
+    # Face Alignment
+    # When enabled, each face crop is rotated before embedding so that both eyes
+    # are on the same horizontal line.  Uses only OpenCV + YOLO pupil landmarks
+    enable_face_alignment: True
     
     # Identity Management Configuration
     similarity_threshold: 0.4

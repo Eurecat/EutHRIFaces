@@ -352,26 +352,6 @@ class FaceEmbeddingExtractor:
             print(f"Error extracting face embedding: {e}")
             return None
     
-    def extract_embedding_from_bbox(self, image: np.ndarray, face_bbox: Tuple[int, int, int, int],
-                                  scaling_factor: float = 1.0) -> Optional[np.ndarray]:
-        """
-        Extract face embedding directly from image and bounding box.
-        
-        Args:
-            image: Input image as numpy array (BGR format)
-            face_bbox: Face bounding box as (x, y, width, height)
-            scaling_factor: Factor to scale the bounding box (default: 1.0)
-            
-        Returns:
-            Face embedding as numpy array or None if extraction fails
-        """
-        # Crop face from image
-        face_crop = self.crop_face_from_image(image, face_bbox, scaling_factor)
-        if face_crop is None:
-            return None
-            
-        # Extract embedding from cropped face
-        return self.extract_embedding(face_crop)
     
     def extract_embeddings_batch(self, face_images: List[np.ndarray], gaze_scores: Optional[List[float]] = None) -> List[Optional[np.ndarray]]:
         """

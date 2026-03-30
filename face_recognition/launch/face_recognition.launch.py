@@ -70,7 +70,8 @@ def _setup_face_recognition(context, *args, **kwargs):
         'enable_debug_output',
         'receiver_id',
         'ros4hri_with_id',
-        'min_h_size'
+        'min_h_size',
+        'enable_face_alignment',
     ]
 
     for param in params_to_expose:
@@ -130,7 +131,8 @@ def generate_launch_description():
         'enable_debug_output',
         'receiver_id',
         'ros4hri_with_id',
-        'min_h_size'
+        'min_h_size',
+        'enable_face_alignment',
     ]
 
     for param in params_to_expose:

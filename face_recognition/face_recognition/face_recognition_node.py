@@ -349,7 +349,12 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('device', 'cpu')  # or 'cuda'
         self.declare_parameter('weights_path', 'weights')
         self.declare_parameter('face_embedding_weights_name', '')
-        
+
+        # Face alignment: rotate crop using YOLO pupil landmarks so eyes are horizontal
+        # Uses only cv2 (already installed) - no extra deps needed
+        self.declare_parameter('enable_face_alignment', False)
+        self.enable_face_alignment = self.get_parameter('enable_face_alignment').get_parameter_value().bool_value
+
         # Identity management parameters
         self.declare_parameter('max_embeddings_per_identity', 50)
         self.declare_parameter('similarity_threshold', 0.6)
@@ -1003,6 +1008,107 @@ class FaceRecognitionNode(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to publish recognition array: {e}")
     
+    # -------------------------------------------------------------------------
+    #                  Face Alignment (eye-angle, cv2 only)
+    # -------------------------------------------------------------------------
+
+    def _align_face_crop(self, full_image: np.ndarray, landmarks_msg,
+                         crop_x: int, crop_y: int, crop_w: int, crop_h: int) -> np.ndarray:
+        """
+        Rotate the FULL image so both eyes are horizontal, then re-crop the face.
+
+        By rotating the full frame instead of the small crop, all border pixels
+        come from real image content rather than being synthesised (BORDER_REPLICATE).
+
+        Algorithm (Sefiks eye-alignment):
+          1. YOLO 5-point landmarks that are always populated:
+               RIGHT_EYE_INSIDE = index 39  (image-right side)
+               LEFT_EYE_INSIDE  = index 42  (image-left  side)
+             (Indices 68/69 – pupils – are never filled by YOLO; always c=0.)
+          2. Compute the signed tilt angle of the eye-to-eye vector.
+          3. Rotate the FULL IMAGE around the eye midpoint.
+          4. Re-crop [crop_y : crop_y+crop_h, crop_x : crop_x+crop_w].
+
+        Args:
+            full_image:               Full BGR frame (self.last_image).
+            landmarks_msg:            FacialLandmarks message.
+            crop_x, crop_y:           Top-left of the crop region in full-image coords.
+            crop_w, crop_h:           Width / height of the crop region.
+
+        Returns:
+            Aligned BGR crop.  Falls back to the unrotated crop on any failure.
+        """
+        # Fallback crop (unaligned)
+        original_crop = full_image[crop_y:crop_y + crop_h, crop_x:crop_x + crop_w]
+
+        try:
+            lm_arr = landmarks_msg.landmarks  # never shadow with loop variable
+            img_w = float(landmarks_msg.width)
+            img_h = float(landmarks_msg.height)
+
+            # YOLO 5-point face landmark mapping (dlib convention):
+            #   RIGHT_EYE_INSIDE = 39  (image-right / person's left eye)
+            #   LEFT_EYE_INSIDE  = 42  (image-left  / person's right eye)
+            RIGHT_EYE_IDX = 39
+            LEFT_EYE_IDX  = 42
+
+            if len(lm_arr) <= max(RIGHT_EYE_IDX, LEFT_EYE_IDX):
+                return original_crop  # not enough landmarks
+
+            rp = lm_arr[RIGHT_EYE_IDX]
+            lp = lm_arr[LEFT_EYE_IDX]
+
+            # Require non-zero confidence for both eyes
+            if rp.c == 0 or lp.c == 0:
+                return original_crop
+
+            # Eye coordinates in FULL-IMAGE pixel space
+            rx = rp.x * img_w
+            ry = rp.y * img_h
+            lx = lp.x * img_w
+            ly = lp.y * img_h
+
+            # Always compute the angle from the image-LEFT eye to the image-RIGHT eye
+            # (by x-coordinate), regardless of which dlib index happens to be where.
+            # This prevents a ~180° flip when the detector swaps the two eye points
+            # under extreme yaw or tracking errors.
+            if rx <= lx:
+                # index 39 is to the left in image  (normal case)
+                eye_left_x, eye_left_y   = rx, ry
+                eye_right_x, eye_right_y = lx, ly
+            else:
+                # index 42 is to the left in image  (swapped / extreme yaw)
+                eye_left_x, eye_left_y   = lx, ly
+                eye_right_x, eye_right_y = rx, ry
+
+            dx = eye_right_x - eye_left_x   # always > 0
+            dy = eye_right_y - eye_left_y
+            angle = np.degrees(np.arctan2(dy, dx))  # in (-90°, +90°) for any upright face
+
+            # Skip negligible tilt to avoid unnecessary resampling
+            if abs(angle) < 1.0:
+                return original_crop
+
+            # Rotation center = eye midpoint in FULL-IMAGE coords
+            cx = (rx + lx) / 2.0
+            cy = (ry + ly) / 2.0
+
+            # Rotate the full frame around that midpoint
+            fh, fw = full_image.shape[:2]
+            M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+            rotated_full = cv2.warpAffine(
+                full_image, M, (fw, fh),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REPLICATE,
+            )
+
+            # Re-crop from the rotated full image
+            return rotated_full[crop_y:crop_y + crop_h, crop_x:crop_x + crop_w]
+
+        except Exception as e:
+            self.get_logger().warning(f"Face alignment failed: {e}")
+            return original_crop
+
     def _extract_face_crop_from_landmarks(self, msg) -> Optional[np.ndarray]:
         """Extract face crop from landmarks message using bounding box."""
         try:
@@ -1030,9 +1136,9 @@ class FaceRecognitionNode(Node):
                 w = x2 - x1
                 h = y2 - y1
 
-                #if wh is less than min_h_size pixels, consider it invalid and skip to landmark-based cropping
-                # or if the box is wider than it is tall (which is unlikely for a face), also consider it invalid and skip to landmark-based cropping
-                if h < self.min_h_size or w > h:
+                #if h is less than min_h_size pixels, consider it invalid
+                # w > h check is skipped when face alignment is enabled (tilted faces can appear wider than tall)
+                if h < self.min_h_size or (not self.enable_face_alignment and w > h):
                     if self.enable_debug_output:
                         self.get_logger().warning(f"Bounding box too small or too wide (w={w}, h={h}), skipping to face id {msg.face_id}")
                     return None
@@ -1050,37 +1156,29 @@ class FaceRecognitionNode(Node):
                 if w > 0 and h > 0:
                     face_crop = self.last_image[y:y+h, x:x+w]
                     
-                    # Apply histogram equalization for color balancing while maintaining compatibility
                     if face_crop.size > 0:
-                        # Save original face crop for debugging
-                        if self.enable_debug_output:
-                            debug_filename_original = f"/workspace/src/face_recognition/weights/imgs/face_crop_original_{msg.face_id}.jpg"
-                            # cv2.imwrite(debug_filename_original, face_crop)
-                            # self.get_logger().debug(f"Saved original face crop: {debug_filename_original}")
-                        
-                        # # NOT PERFORMING CORRECTLY - Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) for better lighting robustness
-                        # # Convert BGR to LAB color space for better color preservation
-                        # lab = cv2.cvtColor(face_crop, cv2.COLOR_BGR2LAB)
-                        # l_channel, a_channel, b_channel = cv2.split(lab)
-                        
-                        # # Apply CLAHE to the L (lightness) channel only to preserve color information
-                        # clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                        # l_channel_clahe = clahe.apply(l_channel)
-                        
-                        # # Merge channels back and convert to BGR
-                        # lab_clahe = cv2.merge([l_channel_clahe, a_channel, b_channel])
-                        # face_crop_balanced = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
-                        face_crop_balanced = face_crop  # Skip processing for now to maintain compatibility and avoid issues
+                        face_crop_balanced = face_crop  # no extra colour processing
 
-                        # Save processed face crop for debugging
+                        # ---- Face alignment ----
+                        if self.enable_face_alignment:
+                            # import os as _os
+                            # debug_dir = "/workspace/src/face_recognition/weights/imgs"
+                            # _os.makedirs(debug_dir, exist_ok=True)
+                            # cv2.imwrite(
+                            #     f"{debug_dir}/align_before_{msg.face_id}.jpg",
+                            #     face_crop_balanced,
+                            # )
+                            face_crop_balanced = self._align_face_crop(
+                                self.last_image, msg, x, y, w, h
+                            )
+                            # cv2.imwrite(
+                            #     f"{debug_dir}/align_after_{msg.face_id}.jpg",
+                            #     face_crop_balanced,
+                            # )
+
                         if self.enable_debug_output:
-                            debug_filename_processed = f"/workspace/src/face_recognition/weights/imgs/face_crop_processed_{msg.face_id}.jpg"
-                            # cv2.imwrite(debug_filename_processed, face_crop_balanced)
-                            # self.get_logger().debug(f"Saved processed face crop: {debug_filename_processed}")
-                        
-                        if self.enable_debug_output:
-                            self.get_logger().debug(f"Extracted and processed face crop from normalized bbox: {face_crop_balanced.shape}")
-                        
+                            self.get_logger().debug(f"Extracted face crop from normalized bbox: {face_crop_balanced.shape}")
+
                         return face_crop_balanced
                     else:
                         if self.enable_debug_output:
@@ -1127,9 +1225,9 @@ class FaceRecognitionNode(Node):
                 if self.enable_debug_output:
                     self.get_logger().debug(f"Landmark-based crop: x={x}, y={y}, w={w}, h={h}")
                 
-                #if wh is less than min_h_size pixels, consider it invalid and skip to landmark-based cropping
-                #or if the box is wider than it is tall (which is unlikely for a face), also consider it invalid and skip to landmark-based cropping
-                if h < self.min_h_size or w > h:
+                #if h is less than min_h_size pixels, consider it invalid
+                # w > h check is skipped when face alignment is enabled (tilted faces can appear wider than tall)
+                if h < self.min_h_size or (not self.enable_face_alignment and w > h):
                     if self.enable_debug_output:
                         self.get_logger().warning(f"Bounding box too small or too wide (w={w}, h={h}), skipping to face id {msg.face_id}")
                     return None
@@ -1137,25 +1235,29 @@ class FaceRecognitionNode(Node):
                 if w > 0 and h > 0:
                     face_crop = self.last_image[y:y+h, x:x+w]
                     
-                    # Apply histogram equalization for color balancing while maintaining compatibility
                     if face_crop.size > 0:
-                        # # NOT PERFORMING CORRECTLY - Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) for better lighting robustness
-                        # # Convert BGR to LAB color space for better color preservation
-                        # lab = cv2.cvtColor(face_crop, cv2.COLOR_BGR2LAB)
-                        # l_channel, a_channel, b_channel = cv2.split(lab)
-                        
-                        # # Apply CLAHE to the L (lightness) channel only to preserve color information
-                        # clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                        # l_channel_clahe = clahe.apply(l_channel)
-                        
-                        # # Merge channels back and convert to BGR
-                        # lab_clahe = cv2.merge([l_channel_clahe, a_channel, b_channel])
-                        # face_crop_balanced = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
-                        face_crop_balanced = face_crop  # Skip processing for now to maintain compatibility and avoid issues
+                        face_crop_balanced = face_crop  # no extra colour processing
+
+                        # ---- Face alignment ----
+                        if self.enable_face_alignment:
+                            # import os as _os
+                            # debug_dir = "/workspace/src/face_recognition/weights/imgs"
+                            # _os.makedirs(debug_dir, exist_ok=True)
+                            # cv2.imwrite(
+                            #     f"{debug_dir}/align_before_{msg.face_id}.jpg",
+                            #     face_crop_balanced,
+                            # )
+                            face_crop_balanced = self._align_face_crop(
+                                self.last_image, msg, x, y, w, h
+                            )
+                            # cv2.imwrite(
+                            #     f"{debug_dir}/align_after_{msg.face_id}.jpg",
+                            #     face_crop_balanced,
+                            # )
 
                         if self.enable_debug_output:
-                            self.get_logger().debug(f"Extracted and processed face crop from landmarks: {face_crop_balanced.shape}")
-                        
+                            self.get_logger().debug(f"Extracted face crop from landmarks fallback: {face_crop_balanced.shape}")
+
                         return face_crop_balanced
                     else:
                         if self.enable_debug_output:
