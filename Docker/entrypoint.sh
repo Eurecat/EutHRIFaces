@@ -52,22 +52,34 @@ cd /workspace
 # rm -rf build/ install/
 colcon build --event-handlers console_direct+ --symlink-install 
 
-# Cleanup: Keep only the last 2 build and runtime logs
-echo "Cleaning up old logs (keeping last 2)..."
+# Cleanup: Keep only the last N build/runtime logs
+# BUILD_LOGS_TO_KEEP:   number of build log sessions to retain.   -1 = never delete.
+# RUNTIME_LOGS_TO_KEEP: number of runtime log sessions to retain. -1 = never delete.
+BUILD_LOGS_TO_KEEP=${BUILD_LOGS_TO_KEEP:-2}
+RUNTIME_LOGS_TO_KEEP=${RUNTIME_LOGS_TO_KEEP:-2}
+echo "Cleaning up old logs (build: keep last ${BUILD_LOGS_TO_KEEP}, runtime: keep last ${RUNTIME_LOGS_TO_KEEP}; -1 = keep all)..."
 cd /workspace/log
 
-# Keep only last 2 build logs (excluding symlinks and COLCON_IGNORE)
-BUILD_COUNT=$(ls -dt build_* 2>/dev/null | wc -l)
-if [ "$BUILD_COUNT" -gt 2 ]; then
-    ls -dt build_* | tail -n +3 | xargs rm -rf
-    echo "Removed old build logs, kept last 2"
+# Keep only last N build logs
+if [ "$BUILD_LOGS_TO_KEEP" -ne -1 ]; then
+    BUILD_COUNT=$(ls -dt build_* 2>/dev/null | wc -l)
+    if [ "$BUILD_COUNT" -gt "$BUILD_LOGS_TO_KEEP" ]; then
+        ls -dt build_* | tail -n +"$((BUILD_LOGS_TO_KEEP + 1))" | xargs rm -rf
+        echo "Removed old build logs, kept last ${BUILD_LOGS_TO_KEEP}"
+    fi
+else
+    echo "Build log retention disabled (BUILD_LOGS_TO_KEEP=-1), keeping all build logs."
 fi
 
-# Keep only last 2 runtime logs (excluding symlinks)
-RUNTIME_COUNT=$(ls -dt runtime_20* 2>/dev/null | wc -l)
-if [ "$RUNTIME_COUNT" -gt 2 ]; then
-    ls -dt runtime_20* | tail -n +3 | xargs rm -rf
-    echo "Removed old runtime logs, kept last 2"
+# Keep only last N runtime logs
+if [ "$RUNTIME_LOGS_TO_KEEP" -ne -1 ]; then
+    RUNTIME_COUNT=$(ls -dt runtime_20* 2>/dev/null | wc -l)
+    if [ "$RUNTIME_COUNT" -gt "$RUNTIME_LOGS_TO_KEEP" ]; then
+        ls -dt runtime_20* | tail -n +"$((RUNTIME_LOGS_TO_KEEP + 1))" | xargs rm -rf
+        echo "Removed old runtime logs, kept last ${RUNTIME_LOGS_TO_KEEP}"
+    fi
+else
+    echo "Runtime log retention disabled (RUNTIME_LOGS_TO_KEEP=-1), keeping all runtime logs."
 fi
 
 cd /workspace
