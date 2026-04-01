@@ -32,6 +32,8 @@ services:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
       - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}  
       - PACKAGE_NAME=face_detection
+      - BUILD_LOGS_TO_KEEP=${BUILD_LOGS_TO_KEEP:-2}
+      - RUNTIME_LOGS_TO_KEEP=${RUNTIME_LOGS_TO_KEEP:-2}
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
@@ -75,6 +77,8 @@ services:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
       - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp} 
       - PACKAGE_NAME=face_recognition
+      - BUILD_LOGS_TO_KEEP=${BUILD_LOGS_TO_KEEP:-2}
+      - RUNTIME_LOGS_TO_KEEP=${RUNTIME_LOGS_TO_KEEP:-2}
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
@@ -117,6 +121,8 @@ services:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
       - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}   
       - PACKAGE_NAME=gaze_estimation
+      - BUILD_LOGS_TO_KEEP=${BUILD_LOGS_TO_KEEP:-2}
+      - RUNTIME_LOGS_TO_KEEP=${RUNTIME_LOGS_TO_KEEP:-2}
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
@@ -159,6 +165,8 @@ services:
       - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp} 
       - NVIDIA_VISIBLE_DEVICES=all 
       - PACKAGE_NAME=visual_speech_activity
+      - BUILD_LOGS_TO_KEEP=${BUILD_LOGS_TO_KEEP:-2}
+      - RUNTIME_LOGS_TO_KEEP=${RUNTIME_LOGS_TO_KEEP:-2}
       - DISPLAY=$DISPLAY
       - QT_X11_NO_MITSHM=1
       - XAUTHORITY=/tmp/xauth/.docker.xauth     
