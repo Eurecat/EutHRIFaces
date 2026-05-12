@@ -46,6 +46,21 @@ if [ -f "/workspace/install/setup.bash" ]; then
     source /workspace/install/setup.bash
 fi
 
+# Restore MediaPipe model from the baked copy if the src copy is missing or corrupt.
+# /opt/mediapipe_weights/ is outside any volume mount so always has the valid file.
+MP_SRC="/opt/mediapipe_weights/face_landmarker.task"
+MP_DST="/workspace/src/face_detection/weights/face_landmarker.task"
+if [ -f "$MP_SRC" ]; then
+    MP_MIN_BYTES=1048576  # 1 MB
+    MP_DST_SIZE=$(stat -c%s "$MP_DST" 2>/dev/null || echo 0)
+    if [ ! -f "$MP_DST" ] || [ "$MP_DST_SIZE" -lt "$MP_MIN_BYTES" ]; then
+        echo "Restoring face_landmarker.task from baked copy (dst size=${MP_DST_SIZE})..."
+        mkdir -p "$(dirname "$MP_DST")"
+        cp "$MP_SRC" "$MP_DST"
+        echo "Restored face_landmarker.task ($(stat -c%s "$MP_DST") bytes)"
+    fi
+fi
+
 # Build face detection packages
 echo "Building ros2 packages of this repo..."
 cd /workspace
