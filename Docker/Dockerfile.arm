@@ -70,11 +70,11 @@ RUN pip install --no-cache-dir --force-reinstall \
     && echo "[OK] onnxruntime-gpu 1.24.0 (sbsa/cu130) installed" \
     || echo "[WARN] onnxruntime-gpu Jetson wheel install failed; GPU inference unavailable"
 
-# onnxruntime-gpu 1.24.0 pulls in numpy>=2 and protobuf>=4 as transitive deps:
-#   - numpy>=2 breaks cv_bridge and the NGC PyTorch wheel (compiled against 1.x ABI)
-#   - protobuf>=4 removed MessageFactory.GetPrototype(), breaking mediapipe
-# Pin both back at the system level.
-RUN pip install --no-cache-dir "numpy>=1.26,<2" "protobuf>=3.20,<4"
+# onnxruntime-gpu 1.24.0 pulls in numpy>=2 as a transitive dep, but cv_bridge
+# and the NGC PyTorch wheel are compiled against NumPy 1.x ABI. Downgrade numpy.
+# protobuf: mediapipe>=0.10.14 needs 4.x (uses GetMessageClass); the GetPrototype
+# warning from ROS tools is non-fatal. Allow 4.x, block 5.x+ until tested.
+RUN pip install --no-cache-dir "numpy>=1.26,<2" "protobuf>=4.21,<5"
 
 # The entrypoint injects /opt/ros_python_env/lib/python3.12/site-packages into
 # sys.path first, so any CPU-only onnxruntime installed there shadows the system
@@ -82,7 +82,7 @@ RUN pip install --no-cache-dir "numpy>=1.26,<2" "protobuf>=3.20,<4"
 RUN if [ -d /opt/ros_python_env/bin ]; then \
     /opt/ros_python_env/bin/pip install --no-cache-dir --force-reinstall \
         "https://pypi.jetson-ai-lab.io/sbsa/cu130/+f/012/c10bef23a39f0/onnxruntime_gpu-1.24.0-cp312-cp312-linux_aarch64.whl#sha256=012c10bef23a39f074730d158b72f797a7314f2695c65835a0669b57282422f6" \
-    && /opt/ros_python_env/bin/pip install --no-cache-dir "numpy>=1.26,<2" "protobuf>=3.20,<4" \
+    && /opt/ros_python_env/bin/pip install --no-cache-dir "numpy>=1.26,<2" "protobuf>=4.21,<5" \
     && echo "[OK] onnxruntime-gpu + pins applied to /opt/ros_python_env"; \
 fi
 
@@ -106,15 +106,17 @@ COPY Docker/deps/hri_msgs     /workspace/src/hri_msgs
 
 # ------------------------------------------------------------
 # Pre-bake MediaPipe face_landmarker.task into the image.
-# Avoids runtime download failures from partial/corrupted files.
+# Stored at /opt/mediapipe_weights/ so it survives dev-mode src volume mounts
+# that shadow /workspace/src/face_detection/weights/.
+# The entrypoint restores it to the src path if the copy there is missing/corrupt.
 # Float16 variant (~5.5 MB). Verify size > 1 MB to catch partial fetches.
 # ------------------------------------------------------------
-RUN mkdir -p /workspace/src/face_detection/weights && \
+RUN mkdir -p /opt/mediapipe_weights && \
     curl -fL "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task" \
-         -o /workspace/src/face_detection/weights/face_landmarker.task && \
+         -o /opt/mediapipe_weights/face_landmarker.task && \
     python3 -c "\
 import os, sys; \
-size = os.path.getsize('/workspace/src/face_detection/weights/face_landmarker.task'); \
+size = os.path.getsize('/opt/mediapipe_weights/face_landmarker.task'); \
 print(f'face_landmarker.task: {size} bytes'); \
 sys.exit(0 if size > 1*1024*1024 else 1)"
 
