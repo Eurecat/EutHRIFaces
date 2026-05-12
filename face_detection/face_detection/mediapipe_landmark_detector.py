@@ -201,6 +201,17 @@ class MediaPipeLandmarkDetector:
             True if initialization successful, False otherwise
         """
         try:
+            # face_landmarker.task is a flatbuffer+zip archive (~5.5 MB).
+            # Treat files under 1 MB as corrupted (e.g. partial/failed download)
+            # and delete so they get re-fetched.
+            _MIN_VALID_BYTES = 1 * 1024 * 1024  # 1 MB
+            if os.path.exists(model_path) and os.path.getsize(model_path) < _MIN_VALID_BYTES:
+                self.logger.warn(
+                    f"[WARNING] MediaPipe model at {model_path} appears incomplete "
+                    f"({os.path.getsize(model_path)} bytes < {_MIN_VALID_BYTES}). "
+                    "Removing and re-downloading.")
+                os.remove(model_path)
+
             if not os.path.exists(model_path):
                 self.logger.error(f"MediaPipe model file not found: {model_path}")
                 self.logger.info(

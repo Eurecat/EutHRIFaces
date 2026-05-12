@@ -208,6 +208,33 @@ class YoloFaceDetector:
             
             self.session = ort.InferenceSession(self.model_path, providers=providers)
             
+            # Probe the session with a tiny synthetic input to catch
+            # cudaErrorNoKernelImageForDevice at init time (Jetson Blackwell SM10 vs.
+            # ORT wheel compiled for x86 SM targets). Fall back to CPU if it fires.
+            if 'cuda' in self.device.lower() and providers[0] != 'CPUExecutionProvider':
+                try:
+                    _in_shape = self.session.get_inputs()[0].shape
+                    # Replace dynamic dims (strings/None) with 1
+                    _probe_shape = [d if isinstance(d, int) and d > 0 else 1
+                                    for d in _in_shape]
+                    _probe = {self.session.get_inputs()[0].name:
+                              np.zeros(_probe_shape, dtype=np.float32)}
+                    self.session.run(None, _probe)
+                except Exception as _probe_err:
+                    _msg = str(_probe_err)
+                    if 'cudaErrorNoKernelImageForDevice' in _msg or 'no kernel image' in _msg.lower():
+                        self.logger.warn(
+                            "\033[93m[WARNING] onnxruntime CUDA kernel not compiled for "
+                            "this GPU architecture (SM mismatch). "
+                            "Falling back to CPUExecutionProvider for ONNX inference. "
+                            "For native GPU support on Jetson, install the JetPack onnxruntime "
+                            "wheel from https://elinux.org/Jetson_Zoo\033[0m")
+                        self.session = ort.InferenceSession(
+                            self.model_path, providers=['CPUExecutionProvider'])
+                    else:
+                        # Re-raise unexpected errors so they surface clearly
+                        raise
+            
             # Generate anchors
             self.anchors = self._make_anchors(self.feats_hw)
             
@@ -427,7 +454,21 @@ class YoloFaceDetector:
         # Create blob and run inference
         blob = cv2.dnn.blobFromImage(input_img)
         inputs = {self.session.get_inputs()[0].name: blob}
-        outputs = self.session.run(None, inputs)
+        try:
+            outputs = self.session.run(None, inputs)
+        except Exception as _run_err:
+            _msg = str(_run_err)
+            if 'cudaErrorNoKernelImageForDevice' in _msg or 'no kernel image' in _msg.lower():
+                # ORT GPU kernel not compiled for this GPU's SM version.
+                # Permanently downgrade to CPU so subsequent frames succeed.
+                self.logger.warn(
+                    "\033[93m[WARNING] onnxruntime CUDA kernel failed (SM mismatch). "
+                    "Permanently switching ONNX session to CPUExecutionProvider.\033[0m")
+                self.session = ort.InferenceSession(
+                    self.model_path, providers=['CPUExecutionProvider'])
+                outputs = self.session.run(None, inputs)
+            else:
+                raise
         
         # Post-process results
         det_bboxes, det_conf, det_classid, landmarks = self._post_process(

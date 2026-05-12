@@ -13,6 +13,7 @@ import numpy as np
 from typing import Tuple, Optional, List, Dict
 from pathlib import Path
 import logging
+import traceback
 import urllib.request
 import cv2
 from collections import deque, defaultdict
@@ -640,7 +641,24 @@ class VSDLMDetector:
         
         # Run inference
         try:
-            outputs = self.session.run([self.output_name], {self.input_name: input_tensor})
+            try:
+                outputs = self.session.run([self.output_name], {self.input_name: input_tensor})
+            except Exception as cuda_err:
+                # cudaErrorNoKernelImageForDevice and similar CUDA failures mean the
+                # compiled CUDA kernel doesn't support this GPU.  Fall back to CPU.
+                err_str = str(cuda_err)
+                if 'cuda' in err_str.lower() or 'CUDAExecutionProvider' in err_str:
+                    if self.logger:
+                        self.logger.warning(
+                            f"[VSDLM] CUDA inference failed ({err_str}); "
+                            "recreating session with CPUExecutionProvider"
+                        )
+                    self.session = ort.InferenceSession(
+                        str(self.model_path), providers=['CPUExecutionProvider']
+                    )
+                    outputs = self.session.run([self.output_name], {self.input_name: input_tensor})
+                else:
+                    raise
             
             if self.logger:
                 self.logger.debug(f"[VSDLM] Raw output: {outputs}, type: {type(outputs)}")
@@ -704,5 +722,5 @@ class VSDLMDetector:
             
         except Exception as e:
             if self.logger:
-                self.logger.error(f"VSDLM inference failed: {e}", exc_info=True)
+                self.logger.error(f"VSDLM inference failed: {e}\n{traceback.format_exc()}")
             return False, 0.0, None

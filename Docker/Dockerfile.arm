@@ -58,6 +58,23 @@ RUN pip install --no-cache-dir --ignore-installed blinker && \
     pip install --no-cache-dir --no-deps "facenet-pytorch>=2.5.2"
 
 # ------------------------------------------------------------
+# GPU-capable onnxruntime (TensorrtExecutionProvider / CUDAExecutionProvider)
+# The standard PyPI onnxruntime has no aarch64 GPU wheels.
+# Try the Microsoft CUDA 13 ORT feed; falls back gracefully to the CPU
+# version installed from requirements_arm_thor.txt above.
+# Alternative: NVIDIA JetPack wheel for JetPack 6+:
+#   pip install onnxruntime-gpu --extra-index-url \
+#     https://developer.download.nvidia.com/compute/redist/jp/v61/onnxruntime/
+
+# 2. ORT SM mismatch — CUDAExecutionProvider installed (from Microsoft CUDA 13 feed) but compiled for x86 SM targets, not Jetson Thor SM 11.0. Probe fallback to CPU correct behavior. True GPU ORT needs build from source with CUDA_ARCH=SM_110 — no prebuilt wheel exists for JetPack 7.0 yet. Per CONTEXT.md, check when dusty-nv/jetson-containers publishes r38.x images for GPU ORT wheel. Face detection on CPU at 55-85ms still functional.
+
+# ------------------------------------------------------------
+RUN pip install --no-cache-dir onnxruntime-gpu \
+        --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-13/pypi/simple/ \
+    && echo "[OK] onnxruntime-gpu installed (GPU providers available)" \
+    || echo "[WARN] onnxruntime-gpu not available for this platform/CUDA version; using CPU-only onnxruntime"
+
+# ------------------------------------------------------------
 # rosdep setup
 # ------------------------------------------------------------
 RUN [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ] && \
@@ -74,6 +91,20 @@ COPY face_recognition         /workspace/src/face_recognition
 COPY gaze_estimation          /workspace/src/gaze_estimation
 COPY visual_speech_activity   /workspace/src/visual_speech_activity
 COPY Docker/deps/hri_msgs     /workspace/src/hri_msgs
+
+# ------------------------------------------------------------
+# Pre-bake MediaPipe face_landmarker.task into the image.
+# Avoids runtime download failures from partial/corrupted files.
+# Float16 variant (~5.5 MB). Verify size > 1 MB to catch partial fetches.
+# ------------------------------------------------------------
+RUN mkdir -p /workspace/src/face_detection/weights && \
+    curl -fL "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task" \
+         -o /workspace/src/face_detection/weights/face_landmarker.task && \
+    python3 -c "\
+import os, sys; \
+size = os.path.getsize('/workspace/src/face_detection/weights/face_landmarker.task'); \
+print(f'face_landmarker.task: {size} bytes'); \
+sys.exit(0 if size > 1*1024*1024 else 1)"
 
 # ------------------------------------------------------------
 # Install ROS dependencies from package.xmls
