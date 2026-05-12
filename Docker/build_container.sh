@@ -8,7 +8,12 @@
 # - Humble Vulcanexus: ./build_container.sh --humble --vulcanexus
 # - CPU-only version: ./build_container.sh --cpu
 # - CPU-only Vulcanexus: ./build_container.sh --cpu --vulcanexus
-# - Clean rebuild: ./build_container.sh --clean-rebuild [--standard-ros] [--cpu]
+# - Jetson Thor / ARM64:  ./build_container.sh --arm
+# - Clean rebuild: ./build_container.sh --clean-rebuild [--standard-ros] [--cpu] [--arm]
+#
+# --arm uses Dockerfile.arm and base image eut_ros_torch:jazzy (ARM).
+# Build context is the EutHRIFaces repo root so COPY of ROS packages works.
+# Mutually exclusive with --vulcanexus / --humble / --cpu (Jazzy + GPU only).
 #
 
 export DOCKER_BUILDKIT=1
@@ -40,6 +45,8 @@ REBUILD=false
 NO_VCS=false
 USE_VULCANEXUS=false
 USE_HUMBLE=false
+USE_ARM=false
+PLATFORM_ARCH="amd"
 for arg in "$@"; do
     if [ "$arg" == "--clean-rebuild" ]; then
         REBUILD=true
@@ -57,10 +64,33 @@ for arg in "$@"; do
     if [ "$arg" == "--no-vcs" ]; then
         NO_VCS=true
     fi
+    if [ "$arg" == "--arm" ]; then
+        USE_ARM=true
+    fi
 done
 
+# --arm validation: mutually exclusive with --vulcanexus / --humble / --cpu
+if $USE_ARM; then
+    if $USE_VULCANEXUS; then
+        echo "Error: --arm is not supported with --vulcanexus (ARM base is standard ROS 2 Jazzy)."
+        exit 1
+    fi
+    if $USE_HUMBLE; then
+        echo "Error: --arm is not supported with --humble (ARM base is forced to Jazzy)."
+        exit 1
+    fi
+    if [ "$CPU_ONLY" = "true" ]; then
+        echo "Error: --arm requires the Jetson GPU-enabled base image; --cpu is incompatible."
+        exit 1
+    fi
+    TARGET_DISTRO="jazzy"
+    PLATFORM_ARCH="arm"
+fi
+
 # Resolve base image from selected flags
-if $USE_VULCANEXUS; then
+if $USE_ARM; then
+    BASE_IMAGE="eut_ros_torch:${TARGET_DISTRO}"
+elif $USE_VULCANEXUS; then
     BASE_IMAGE="eut_ros_vulcanexus_torch:${TARGET_DISTRO}"
 else
     BASE_IMAGE="eut_ros_torch:${TARGET_DISTRO}"
@@ -93,16 +123,19 @@ else
     echo "Skipping VCS operations..."
 fi
 
-# Set image name based on the base image choice and CPU flag
-if [[ "${BASE_IMAGE}" == *"vulcanexus"* ]]; then
+# Display build configuration
+if $USE_ARM; then
+    echo "Building Jetson Thor / ARM64 (Jazzy + PyTorch ARM) image..."
+elif [[ "${BASE_IMAGE}" == *"vulcanexus"* ]]; then
     echo "Building with Vulcanexus ${TARGET_DISTRO} base image..."
 else
     echo "Building with standard ROS2 ${TARGET_DISTRO} base image..."
 fi
 
-
-# Set image name based on the base image choice and CPU flag
-if [[ "${BASE_IMAGE}" == *"vulcanexus"* ]]; then
+# Set image name based on the base image choice and CPU/ARM flags
+if $USE_ARM; then
+    IMAGE_NAME="eut_human_face_arm:${TARGET_DISTRO}"
+elif [[ "${BASE_IMAGE}" == *"vulcanexus"* ]]; then
     if [ "$CPU_ONLY" = "true" ]; then
         IMAGE_NAME="eut_human_face_vulcanexus_cpu:${TARGET_DISTRO}"
     else
@@ -116,16 +149,44 @@ else
     fi
 fi
 
-
 echo "Base image: ${BASE_IMAGE}"
+echo "Platform: ${PLATFORM_ARCH}"
 echo "CPU Only: ${CPU_ONLY}"
+echo "ARM build: ${USE_ARM}"
 echo "Output image: ${IMAGE_NAME}"
 
-if $REBUILD; then
-    echo "Rebuilding the application Docker image..."
-    docker build --no-cache . --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg CPU_ONLY="${CPU_ONLY}" -t ${IMAGE_NAME} -f Dockerfile
+# Build:
+# - --arm uses Dockerfile.arm with build context = repo root (..) so it can
+#   COPY face_detection / face_recognition / gaze_estimation / visual_speech_activity
+#   and Docker/deps/hri_msgs.
+# - x86_64 path keeps existing behaviour: build context = Docker dir.
+if $USE_ARM; then
+    DOCKERFILE="Dockerfile.arm"
+    BUILD_CONTEXT=".."
+    BUILD_PLATFORM="linux/arm64"
+    BUILD_ARGS=(
+        --platform "${BUILD_PLATFORM}"
+        --build-arg BASE_IMAGE="${BASE_IMAGE}"
+        --build-arg PLATFORM_ARCH="arm"
+        -t "${IMAGE_NAME}"
+        -f "${DOCKERFILE}"
+        "${BUILD_CONTEXT}"
+    )
+    if $REBUILD; then
+        echo "Rebuilding ARM image (no cache)..."
+        docker build --no-cache "${BUILD_ARGS[@]}"
+    else
+        docker build "${BUILD_ARGS[@]}"
+    fi
 else
-    docker build . --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg CPU_ONLY="${CPU_ONLY}" -t ${IMAGE_NAME} -f Dockerfile
+    # Set Docker platform based on architecture
+    DOCKER_PLATFORM="linux/amd64"
+    if $REBUILD; then
+        echo "Rebuilding the application Docker image..."
+        docker build --platform ${DOCKER_PLATFORM} --no-cache . --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg CPU_ONLY="${CPU_ONLY}" --build-arg PLATFORM_ARCH="${PLATFORM_ARCH}" -t ${IMAGE_NAME} -f Dockerfile
+    else
+        docker build --platform ${DOCKER_PLATFORM} . --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg CPU_ONLY="${CPU_ONLY}" --build-arg PLATFORM_ARCH="${PLATFORM_ARCH}" -t ${IMAGE_NAME} -f Dockerfile
+    fi
 fi
 
 # Set or Update BUILT_IMAGE 

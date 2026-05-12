@@ -19,7 +19,12 @@ This directly maps to the ros4hri FacialLandmarks message format.
 """
 
 import os
-import dlib
+try:
+    import dlib
+    _DLIB_AVAILABLE = True
+except ImportError:
+    dlib = None  # type: ignore[assignment]
+    _DLIB_AVAILABLE = False
 import numpy as np
 from typing import List, Tuple, Optional
 import logging

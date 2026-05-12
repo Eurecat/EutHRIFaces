@@ -1,0 +1,62 @@
+# EutHRIFaces — ARM64 / Jetson Thor Python deps
+# Installed on top of EutRobAIDockers ARM base image (ROS 2 Jazzy + PyTorch ARM64).
+# Build the base first:
+#   cd EutRobAIDockers/Docker && ./build_container.sh --platform arm
+# Then build this image:
+#   ./build_container.sh --arm
+#
+# Explicitly excluded vs. x86 requirements.txt:
+#   - mediapipe      : no Linux ARM64 wheels on PyPI
+#   - dlib           : C++ compilation on ARM requires manual setup; excluded for stability
+#   - insightface    : C++ compilation issues on ARM aarch64
+#   - onnxruntime-gpu: Jetson Thor requires the NVIDIA-provided wheel
+#                      (from https://elinux.org/Jetson_Zoo or JetPack SDK),
+#                      NOT the PyPI version — use system or NVIDIA wheel instead
+#   - All nvidia-* CUDA pip packages (cuda_runtime, cudnn, cublas, etc.)
+#                    : already shipped by the NVIDIA JetPack PyTorch base image
+#   - boxmot         : depends on lap/lapx which may have ARM build issues;
+#                      include lapx only (pure C fallback available)
+#   - gradio, pytubefix : optional/dev tooling, excluded to keep image lean
+
+# ── Core vision ───────────────────────────────────────────────────
+# Use headless OpenCV to avoid X11/display dependency bloat
+opencv-python-headless>=4.8.0
+Pillow>=10.0.0
+matplotlib>=3.8
+
+# ── Numerics / data ───────────────────────────────────────────────
+numpy>=1.26,<2
+scipy>=1.12
+pandas>=2.1
+PyYAML>=6.0
+tqdm>=4.66.0
+requests>=2.31.0
+
+# ── ONNX (face detection model) ───────────────────────────────────
+# NOTE: For GPU-accelerated ONNX inference on Jetson Thor,
+# replace this with the NVIDIA-provided onnxruntime wheel:
+#   pip install onnxruntime-gpu --extra-index-url <nvidia-jetson-url>
+# or install from apt: python3-onnxruntime (JetPack 6+)
+onnxruntime>=1.17
+onnx>=1.14
+
+# ── Face embeddings ───────────────────────────────────────────────
+# facenet-pytorch: pure PyTorch, ARM64 compatible.
+# NOTE: installed with --no-deps in Dockerfile.arm to prevent pip from
+# replacing the NGC CUDA torch (pre-release 2.8.0a0+nv) with the latest
+# stable CPU-only PyPI torch. torch/torchvision are provided by the NGC base.
+facenet-pytorch>=2.5.2
+
+# ── CLIP (visual embeddings) ──────────────────────────────────────
+clip
+
+# ── Tracking ─────────────────────────────────────────────────────
+# boxmot excluded — depends on heavy compute packages with ARM build friction.
+# lapx provides the lap solver used internally; boxmot re-enabled once verified.
+lapx>=0.5
+
+# ── MongoDB client ────────────────────────────────────────────────
+pymongo>=4.5
+
+# ── GPU monitoring ────────────────────────────────────────────────
+pynvml>=12.0.0

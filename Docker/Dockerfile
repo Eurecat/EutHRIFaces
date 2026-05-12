@@ -1,6 +1,7 @@
 # Choose the base image at build time. Defaults to Vulcanexus.
 ARG BASE_IMAGE="eut_ros_vulcanexus_torch:jazzy"
 ARG CPU_ONLY="false"
+ARG PLATFORM_ARCH="amd"
 
 FROM ${BASE_IMAGE}
 #https://github.com/Eurecat/EutRobAIDockers
@@ -8,6 +9,7 @@ FROM ${BASE_IMAGE}
 # (Optional) re-declare the args if you want to use them in later instructions
 ARG BASE_IMAGE
 ARG CPU_ONLY
+ARG PLATFORM_ARCH
 
 # Prevent interactive prompts during apt installs
 ENV DEBIAN_FRONTEND=noninteractive
@@ -35,14 +37,18 @@ WORKDIR /workspace
 
 # Copy all requirements files
 COPY requirements_detailed_humble.txt /workspace/requirements_detailed_humble.txt
+COPY requirements_detailed_humble_arm64.txt /workspace/requirements_detailed_humble_arm64.txt
 COPY requirements_detailed.txt /workspace/requirements_detailed.txt
 COPY requirements_detailed_cpu.txt /workspace/requirements_detailed_cpu.txt
 
 # Copy requirements files and install Python dependencies in the virtual environment
-# Use CPU or GPU detailed requirements based on build arg
+# Use CPU or GPU detailed requirements based on build arg and platform architecture
+# For ARM64+Humble use requirements_detailed_humble_arm64.txt
 # For Humble+CPU use requirements_detailed_humble_cpu.txt, for Humble use requirements_detailed_humble.txt, for Jazzy+CPU use requirements_detailed_cpu.txt, else requirements_detailed.txt
 RUN if [ "${ROS_DISTRO}" = "humble" ]; then \
-        if [ "$CPU_ONLY" = "true" ] && [ -f requirements_detailed_humble_cpu.txt ]; then \
+        if [ "$PLATFORM_ARCH" = "arm" ]; then \
+            cp requirements_detailed_humble_arm64.txt requirements_detailed_active.txt; \
+        elif [ "$CPU_ONLY" = "true" ] && [ -f requirements_detailed_humble_cpu.txt ]; then \
             cp requirements_detailed_humble_cpu.txt requirements_detailed_active.txt; \
         else \
             cp requirements_detailed_humble.txt requirements_detailed_active.txt; \

@@ -170,18 +170,39 @@ class YoloFaceDetector:
             light_green = "\033[38;5;82m"
             reset = "\033[0m"
             print(f"{light_green}[INFO] Using device on yolo face detector: {self.device}{reset}")            
-            # Check for onnxruntime-gpu if CUDA is requested
+            # Check for GPU onnxruntime providers if CUDA is requested.
+            # On Jetson/aarch64: onnxruntime-gpu is not on PyPI; only CPUExecutionProvider is
+            # available from the standard wheel.  If you need GPU inference, install the
+            # NVIDIA-provided Jetson onnxruntime wheel from https://elinux.org/Jetson_Zoo
+            # (TensorrtExecutionProvider) or build onnxruntime from source with CUDA support.
             if 'cuda' in self.device.lower():
                 try:
-                    if 'CUDAExecutionProvider' not in ort.get_available_providers():
-                        self.logger.warn(f"\033[91m[WARNING] onnxruntime-gpu not installed! Install with: pip install onnxruntime-gpu\033[0m")
-                except: pass
+                    available = ort.get_available_providers()
+                    has_gpu = any(p in available for p in
+                                  ('TensorrtExecutionProvider', 'CUDAExecutionProvider'))
+                    if not has_gpu:
+                        self.logger.warn(
+                            "\033[91m[WARNING] No GPU onnxruntime provider available "
+                            "(CUDAExecutionProvider / TensorrtExecutionProvider). "
+                            "Running ONNX inference on CPU. "
+                            "On Jetson, install the NVIDIA onnxruntime wheel from "
+                            "https://elinux.org/Jetson_Zoo for GPU acceleration.\033[0m")
+                except Exception:
+                    pass
             
             # Initialize OpenCV DNN (backup method)
             self.net = cv2.dnn.readNet(self.model_path)
             
-            # Initialize ONNX InferenceSession with GPU/CPU support
-            providers = ['CUDAExecutionProvider'] if 'cuda' in self.device.lower() else ['CPUExecutionProvider']
+            # Initialize ONNX InferenceSession with GPU/CPU support.
+            # Provider priority: TensorRT (Jetson) → CUDA → CPU fallback.
+            if 'cuda' in self.device.lower():
+                providers = [
+                    'TensorrtExecutionProvider',
+                    'CUDAExecutionProvider',
+                    'CPUExecutionProvider',
+                ]
+            else:
+                providers = ['CPUExecutionProvider']
             
             self.logger.info(f"[INFO] Providers: {providers}")
             

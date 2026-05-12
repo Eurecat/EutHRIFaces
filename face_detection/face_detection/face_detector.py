@@ -28,7 +28,12 @@ import numpy as np
 from ament_index_python.packages import get_package_share_directory
 
 from .yolo_face_detector import YoloFaceDetector
-from .dlib_landmark_detector import DlibLandmarkDetector
+try:
+    from .dlib_landmark_detector import DlibLandmarkDetector
+    _DLIB_AVAILABLE = True
+except ImportError:
+    DlibLandmarkDetector = None  # type: ignore[assignment,misc]
+    _DLIB_AVAILABLE = False
 from .mediapipe_landmark_detector import MediaPipeLandmarkDetector
 
 
@@ -640,15 +645,19 @@ class FaceDetectorNode(Node):
             
             # Initialize dlib landmark detector if enabled
             if self.enable_dlib_landmarks:
-                self.get_logger().info("Initializing dlib 68-point landmark detector...")
-                self.dlib_detector = DlibLandmarkDetector(
-                    model_path=self.dlib_model_path,
-                    logger=self.get_logger()
-                )
-                if self.dlib_detector.is_available():
+                if not _DLIB_AVAILABLE:
+                    self.get_logger().warning("dlib is not installed — dlib landmark detection disabled")
+                    self.dlib_detector = None
+                else:
+                    self.get_logger().info("Initializing dlib 68-point landmark detector...")
+                    self.dlib_detector = DlibLandmarkDetector(
+                        model_path=self.dlib_model_path,
+                        logger=self.get_logger()
+                    )
+                if self.dlib_detector is not None and self.dlib_detector.is_available():
                     self.get_logger().info("Dlib landmark detector initialized successfully")
                     self.get_logger().info("Face detection will use YOLO + dlib (68-point landmarks)")
-                else:
+                elif self.dlib_detector is not None:
                     self.get_logger().warning("Dlib landmark detector initialization failed")
                     self.get_logger().warning("Falling back to YOLO 5-point landmarks only")
                     self.dlib_detector = None
