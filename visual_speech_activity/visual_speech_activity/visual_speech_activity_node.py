@@ -231,8 +231,9 @@ class VisualSpeechActivityNode(Node):
             # Try CUDA first, with CPU fallback
             self.vsdlm_providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
         elif vsdlm_provider == 'tensorrt':
-            # Try TensorRT, then CUDA, then CPU
-            self.vsdlm_providers = ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']
+            # TensorRT triggers silent engine compilation on first inference
+            # (~5-30 min on Jetson). Fall through to CUDA only.
+            self.vsdlm_providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
         else:
             # CPU-only mode
             self.vsdlm_providers = ['CPUExecutionProvider']
