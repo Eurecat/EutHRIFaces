@@ -50,7 +50,9 @@ fi
 echo "Building ros2 packages of this repo..."
 cd /workspace
 # rm -rf build/ install/
-colcon build --event-handlers console_direct+ --symlink-install 
+# --base-paths restricts package discovery to src/ only, preventing colcon from
+# scanning build/ or install/ and picking up stale CMake packages (e.g. LibreYOLO internals).
+colcon build --base-paths /workspace/src --event-handlers console_direct+ --symlink-install
 
 # Cleanup: Keep only the last N build/runtime logs
 # BUILD_LOGS_TO_KEEP:   number of build log sessions to retain.   -1 = never delete.
