@@ -170,70 +170,29 @@ class YoloFaceDetector:
             light_green = "\033[38;5;82m"
             reset = "\033[0m"
             print(f"{light_green}[INFO] Using device on yolo face detector: {self.device}{reset}")            
-            # Check for GPU onnxruntime providers if CUDA is requested.
-            # On Jetson/aarch64: onnxruntime-gpu is not on PyPI; only CPUExecutionProvider is
-            # available from the standard wheel.  If you need GPU inference, install the
-            # NVIDIA-provided Jetson onnxruntime wheel from https://elinux.org/Jetson_Zoo
-            # (TensorrtExecutionProvider) or build onnxruntime from source with CUDA support.
-            if 'cuda' in self.device.lower():
-                try:
-                    available = ort.get_available_providers()
-                    has_gpu = any(p in available for p in
-                                  ('TensorrtExecutionProvider', 'CUDAExecutionProvider'))
-                    if not has_gpu:
-                        self.logger.warn(
-                            "\033[91m[WARNING] No GPU onnxruntime provider available "
-                            "(CUDAExecutionProvider / TensorrtExecutionProvider). "
-                            "Running ONNX inference on CPU. "
-                            "On Jetson, install the NVIDIA onnxruntime wheel from "
-                            "https://elinux.org/Jetson_Zoo for GPU acceleration.\033[0m")
-                except Exception:
-                    pass
-            
             # Initialize OpenCV DNN (backup method)
             self.net = cv2.dnn.readNet(self.model_path)
             
             # Initialize ONNX InferenceSession with GPU/CPU support.
-            # Provider priority: TensorRT (Jetson) → CUDA → CPU fallback.
+            # Only include providers that are actually installed to avoid spurious warnings.
             if 'cuda' in self.device.lower():
-                providers = [
-                    'TensorrtExecutionProvider',
-                    'CUDAExecutionProvider',
-                    'CPUExecutionProvider',
-                ]
+                _available = ort.get_available_providers()
+                # TensorrtExecutionProvider triggers silent engine compilation on first
+                # inference (~5-30 min on Jetson). Use CUDAExecutionProvider only.
+                _candidates = ['CUDAExecutionProvider']
+                providers = [p for p in _candidates if p in _available]
+                if not providers:
+                    self.logger.warn(
+                        "\033[91m[WARNING] No GPU onnxruntime provider available "
+                        "(neither TensorrtExecutionProvider nor CUDAExecutionProvider). "
+                        "Running ONNX inference on CPU.\033[0m")
+                    providers = ['CPUExecutionProvider']
             else:
                 providers = ['CPUExecutionProvider']
             
             self.logger.info(f"[INFO] Providers: {providers}")
             
             self.session = ort.InferenceSession(self.model_path, providers=providers)
-            
-            # Probe the session with a tiny synthetic input to catch
-            # cudaErrorNoKernelImageForDevice at init time (Jetson Blackwell SM10 vs.
-            # ORT wheel compiled for x86 SM targets). Fall back to CPU if it fires.
-            if 'cuda' in self.device.lower() and providers[0] != 'CPUExecutionProvider':
-                try:
-                    _in_shape = self.session.get_inputs()[0].shape
-                    # Replace dynamic dims (strings/None) with 1
-                    _probe_shape = [d if isinstance(d, int) and d > 0 else 1
-                                    for d in _in_shape]
-                    _probe = {self.session.get_inputs()[0].name:
-                              np.zeros(_probe_shape, dtype=np.float32)}
-                    self.session.run(None, _probe)
-                except Exception as _probe_err:
-                    _msg = str(_probe_err)
-                    if 'cudaErrorNoKernelImageForDevice' in _msg or 'no kernel image' in _msg.lower():
-                        self.logger.warn(
-                            "\033[93m[WARNING] onnxruntime CUDA kernel not compiled for "
-                            "this GPU architecture (SM mismatch). "
-                            "Falling back to CPUExecutionProvider for ONNX inference. "
-                            "For native GPU support on Jetson, install the JetPack onnxruntime "
-                            "wheel from https://elinux.org/Jetson_Zoo\033[0m")
-                        self.session = ort.InferenceSession(
-                            self.model_path, providers=['CPUExecutionProvider'])
-                    else:
-                        # Re-raise unexpected errors so they surface clearly
-                        raise
             
             # Generate anchors
             self.anchors = self._make_anchors(self.feats_hw)
@@ -459,8 +418,8 @@ class YoloFaceDetector:
         except Exception as _run_err:
             _msg = str(_run_err)
             if 'cudaErrorNoKernelImageForDevice' in _msg or 'no kernel image' in _msg.lower():
-                # ORT GPU kernel not compiled for this GPU's SM version.
-                # Permanently downgrade to CPU so subsequent frames succeed.
+                # ORT CUDA kernel not compiled for this GPU's SM version.
+                # Permanently downgrade to CPU so all subsequent frames succeed.
                 self.logger.warn(
                     "\033[93m[WARNING] onnxruntime CUDA kernel failed (SM mismatch). "
                     "Permanently switching ONNX session to CPUExecutionProvider.\033[0m")

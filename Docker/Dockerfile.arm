@@ -58,21 +58,33 @@ RUN pip install --no-cache-dir --ignore-installed blinker && \
     pip install --no-cache-dir --no-deps "facenet-pytorch>=2.5.2"
 
 # ------------------------------------------------------------
-# GPU-capable onnxruntime (TensorrtExecutionProvider / CUDAExecutionProvider)
-# The standard PyPI onnxruntime has no aarch64 GPU wheels.
-# Try the Microsoft CUDA 13 ORT feed; falls back gracefully to the CPU
-# version installed from requirements_arm_thor.txt above.
-# Alternative: NVIDIA JetPack wheel for JetPack 6+:
-#   pip install onnxruntime-gpu --extra-index-url \
-#     https://developer.download.nvidia.com/compute/redist/jp/v61/onnxruntime/
-
-# 2. ORT SM mismatch — CUDAExecutionProvider installed (from Microsoft CUDA 13 feed) but compiled for x86 SM targets, not Jetson Thor SM 11.0. Probe fallback to CPU correct behavior. True GPU ORT needs build from source with CUDA_ARCH=SM_110 — no prebuilt wheel exists for JetPack 7.0 yet. Per CONTEXT.md, check when dusty-nv/jetson-containers publishes r38.x images for GPU ORT wheel. Face detection on CPU at 55-85ms still functional.
-
+# GPU-capable onnxruntime (CUDAExecutionProvider) — Jetson Thor / sbsa aarch64
+# Official NVIDIA wheel for JetPack 7 / CUDA 13.0, Python 3.12:
+#   https://pypi.jetson-ai-lab.io/sbsa/cu130
+# This wheel is compiled with the correct SM targets for Jetson Thor (SM 10+)
+# and replaces any CPU-only onnxruntime installed earlier.
+# SHA-256 is embedded in the URL fragment for pip verification.
 # ------------------------------------------------------------
-RUN pip install --no-cache-dir onnxruntime-gpu \
-        --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-13/pypi/simple/ \
-    && echo "[OK] onnxruntime-gpu installed (GPU providers available)" \
-    || echo "[WARN] onnxruntime-gpu not available for this platform/CUDA version; using CPU-only onnxruntime"
+RUN pip install --no-cache-dir --force-reinstall \
+    "https://pypi.jetson-ai-lab.io/sbsa/cu130/+f/012/c10bef23a39f0/onnxruntime_gpu-1.24.0-cp312-cp312-linux_aarch64.whl#sha256=012c10bef23a39f074730d158b72f797a7314f2695c65835a0669b57282422f6" \
+    && echo "[OK] onnxruntime-gpu 1.24.0 (sbsa/cu130) installed" \
+    || echo "[WARN] onnxruntime-gpu Jetson wheel install failed; GPU inference unavailable"
+
+# onnxruntime-gpu 1.24.0 pulls in numpy>=2 and protobuf>=4 as transitive deps:
+#   - numpy>=2 breaks cv_bridge and the NGC PyTorch wheel (compiled against 1.x ABI)
+#   - protobuf>=4 removed MessageFactory.GetPrototype(), breaking mediapipe
+# Pin both back at the system level.
+RUN pip install --no-cache-dir "numpy>=1.26,<2" "protobuf>=3.20,<4"
+
+# The entrypoint injects /opt/ros_python_env/lib/python3.12/site-packages into
+# sys.path first, so any CPU-only onnxruntime installed there shadows the system
+# GPU wheel. Install the GPU wheel + version pins into the venv as well.
+RUN if [ -d /opt/ros_python_env/bin ]; then \
+    /opt/ros_python_env/bin/pip install --no-cache-dir --force-reinstall \
+        "https://pypi.jetson-ai-lab.io/sbsa/cu130/+f/012/c10bef23a39f0/onnxruntime_gpu-1.24.0-cp312-cp312-linux_aarch64.whl#sha256=012c10bef23a39f074730d158b72f797a7314f2695c65835a0669b57282422f6" \
+    && /opt/ros_python_env/bin/pip install --no-cache-dir "numpy>=1.26,<2" "protobuf>=3.20,<4" \
+    && echo "[OK] onnxruntime-gpu + pins applied to /opt/ros_python_env"; \
+fi
 
 # ------------------------------------------------------------
 # rosdep setup
