@@ -30,7 +30,8 @@ services:
     environment:
       - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
-      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}  
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+      - FASTDDS_BUILTIN_TRANSPORTS=${FASTDDS_BUILTIN_TRANSPORTS:-}
       - PACKAGE_NAME=face_detection
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
@@ -73,7 +74,8 @@ services:
     environment:
       - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
-      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp} 
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+      - FASTDDS_BUILTIN_TRANSPORTS=${FASTDDS_BUILTIN_TRANSPORTS:-}
       - PACKAGE_NAME=face_recognition
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
@@ -115,7 +117,8 @@ services:
     environment:
       - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
-      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}   
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+      - FASTDDS_BUILTIN_TRANSPORTS=${FASTDDS_BUILTIN_TRANSPORTS:-}
       - PACKAGE_NAME=gaze_estimation
       - NVIDIA_VISIBLE_DEVICES=all 
       - DISPLAY=$DISPLAY
@@ -156,7 +159,8 @@ services:
     environment:
       - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
-      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp} 
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+      - FASTDDS_BUILTIN_TRANSPORTS=${FASTDDS_BUILTIN_TRANSPORTS:-}
       - NVIDIA_VISIBLE_DEVICES=all 
       - PACKAGE_NAME=visual_speech_activity
       - DISPLAY=$DISPLAY

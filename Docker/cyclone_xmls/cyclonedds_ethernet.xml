@@ -5,7 +5,7 @@
       <AllowMulticast>false</AllowMulticast>
       <Interfaces>
         <!-- Your PC ethernet interface name -->
-        <NetworkInterface name="enxc84d44220d12" priority="2" presence_required="true"/>
+        <NetworkInterface name="enx00e04c6801e5" priority="2" presence_required="true"/>
         <NetworkInterface name="lo" priority="0"/>
       </Interfaces>
     </General>
