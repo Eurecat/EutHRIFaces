@@ -19,8 +19,16 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy, QoSReliabilityPolicy, QoSHistoryPolicy
 from sensor_msgs.msg import Image, CompressedImage
-from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, NormalizedPointOfInterest2D, NormalizedRegionOfInterest2D, IdsList
-from std_msgs.msg import Header
+from std_msgs.msg import Header, String
+try:
+    from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, NormalizedPointOfInterest2D, NormalizedRegionOfInterest2D, IdsList
+except ImportError:
+    print("Warning: hri_msgs not found. Please install hri_msgs package.")
+    FacialLandmarks = String
+    FacialLandmarksArray = String
+    NormalizedPointOfInterest2D = String
+    NormalizedRegionOfInterest2D = String
+    IdsList = String
 from cv_bridge import CvBridge
 from typing import Dict, List, Optional, Tuple, Any
 import cv2

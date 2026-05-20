@@ -18,18 +18,19 @@ from rclpy.time import Time
 import numpy as np
 import cv2
 import time
+from std_msgs.msg import Header, String
 
 try:
     from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, Gaze, GazeArray, IdsList
 except ImportError:
     # Fallback in case hri_msgs is not available
     print("Warning: hri_msgs not found. Please install hri_msgs package.")
-    FacialLandmarks = None
-    FacialLandmarksArray = None
-    Gaze = None
-    GazeArray = None
+    FacialLandmarks = String
+    FacialLandmarksArray = String
+    Gaze = String
+    GazeArray = String
+    IdsList = String
 from geometry_msgs.msg import Vector3
-from std_msgs.msg import Header
 from sensor_msgs.msg import Image, CompressedImage
 from cv_bridge import CvBridge
 
