@@ -27,6 +27,7 @@ from threading import Lock
 import time
 import cv2
 import os
+from std_msgs.msg import Header, String
 from cv_bridge import CvBridge
 
 try:
@@ -39,12 +40,12 @@ try:
     )
 except ImportError:
     print("Warning: hri_msgs not found. Please install hri_msgs package.")
-    FacialLandmarks = None
-    FacialLandmarksArray = None
-    FacialRecognition = None
-    FacialRecognitionArray = None
+    FacialLandmarks = String
+    FacialLandmarksArray = String
+    FacialRecognition = String
+    FacialRecognitionArray = String
+    IdsList = String
 
-from std_msgs.msg import Header
 from sensor_msgs.msg import Image, CompressedImage
 
 from .vsdlm_detector import VSDLMDetector

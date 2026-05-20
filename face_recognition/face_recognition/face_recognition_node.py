@@ -22,16 +22,16 @@ import time
 import os
 from typing import Dict, List, Optional, Tuple, Any
 
+from std_msgs.msg import Header, String
 try:
     from hri_msgs.msg import FacialLandmarks, FacialLandmarksArray, FacialRecognition, FacialRecognitionArray, IdsList
 except ImportError:
     print("Warning: hri_msgs not found. Please install hri_msgs package.")
-    FacialLandmarks = None
-    FacialLandmarksArray = None
-    FacialRecognition = None
-    FacialRecognitionArray = None
-
-from std_msgs.msg import Header
+    FacialLandmarks = String
+    FacialLandmarksArray = String
+    FacialRecognition = String
+    FacialRecognitionArray = String
+    IdsList = String
 from sensor_msgs.msg import Image, CompressedImage
 from cv_bridge import CvBridge
 
