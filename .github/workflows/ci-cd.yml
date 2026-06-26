@@ -41,11 +41,11 @@ jobs:
       # Verify base image was built successfully
       - name: Verify base image was built
         run: |
-          if docker images | grep -q "eut_ros_vulcanexus_torch_cpu.*jazzy"; then
-            echo "✅ Base image eut_ros_vulcanexus_torch_cpu:jazzy successfully built"
-            docker images eut_ros_vulcanexus_torch_cpu:jazzy
+          if docker images | grep -q "eut_ros_torch_cpu.*jazzy"; then
+            echo "✅ Base image eut_ros_torch_cpu:jazzy successfully built"
+            docker images eut_ros_torch_cpu:jazzy
           else
-            echo "❌ Base image eut_ros_vulcanexus_torch_cpu:jazzy not found"
+            echo "❌ Base image eut_ros_torch_cpu:jazzy not found"
             echo "Available images:"
             docker images
             exit 1
@@ -65,17 +65,17 @@ jobs:
       
       # Build the EutHRIFaces Docker image (depends on base image)
       - name: Build EutHRIFaces Docker image
-        run: cd ./Docker && ./build_container.sh --cpu --vulcanexus
+        run: cd ./Docker && ./build_container.sh --cpu
         env:
           DOCKER_BUILDKIT: 1
       
       - name: Verify EutHRIFaces image was built
         run: |
-          if docker images | grep -q "eut_human_face_vulcanexus_cpu.*jazzy"; then
-            echo "✅ EutHRIFaces image eut_human_face_vulcanexus_cpu:jazzy successfully built"
-            docker images eut_human_face_vulcanexus_cpu:jazzy
+          if docker images | grep -q "eut_human_face_cpu.*jazzy"; then
+            echo "✅ EutHRIFaces image eut_human_face_cpu:jazzy successfully built"
+            docker images eut_human_face_cpu:jazzy
           else
-            echo "❌ EutHRIFaces image eut_human_face_vulcanexus_cpu:jazzy not found"
+            echo "❌ EutHRIFaces image eut_human_face_cpu:jazzy not found"
             echo "Available images:"
             docker images
             exit 1
