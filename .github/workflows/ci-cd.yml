@@ -81,131 +81,162 @@ jobs:
             exit 1
           fi
         
-      # 🔧 Build workspace and run test
+      # 🔧 Build workspace and run tests
       - name: Build & test workspace
         run: |
           source Docker/.env
-          
-          # Build all packages with proper dependency order
+
+          # IMPORTANT:
+          # The image has its own ENTRYPOINT. In CI we bypass it so the commands
+          # below actually run, instead of being passed as arguments to the entrypoint.
           docker run --rm \
-            -v ${{ github.workspace }}:/workspace \
-            ${BUILT_IMAGE} \
-            bash -c "
-              # Source ROS environment (jazzy is available in both vulcanexus and standard images)
+            --entrypoint /bin/bash \
+            -e PY_PACKAGES="${{ env.PY_PACKAGES }}" \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            "${BUILT_IMAGE}" \
+            -lc '
+              set -o pipefail
+
+              echo "🔍 Sourcing ROS 2 environment..."
               if [ -f /opt/vulcanexus/jazzy/setup.bash ]; then
                 source /opt/vulcanexus/jazzy/setup.bash
+                echo "✅ Sourced Vulcanexus Jazzy"
               elif [ -f /opt/ros/jazzy/setup.bash ]; then
                 source /opt/ros/jazzy/setup.bash
+                echo "✅ Sourced ROS Jazzy"
+              else
+                echo "❌ Could not find a Jazzy setup.bash"
+                exit 1
               fi
-              
-              cd /workspace
-              
-              # Source the pre-built workspace dependencies from image (hri_msgs, etc.)
+
+              # Source the pre-built workspace dependencies from image if present.
               if [ -f /opt/workspace/install/setup.bash ]; then
                 source /opt/workspace/install/setup.bash
-                echo '✅ Sourced pre-built dependencies from image'
+                echo "✅ Sourced pre-built dependencies from image"
               fi
-              
-              echo '🔍 Available packages to build:'
-              colcon list --names-only
-              
-              # Build Python packages
-              echo '🔨 Building Python packages: ${{ env.PY_PACKAGES }}'
-              
+
+              echo "📁 Workspace root:"
+              ls -la /workspace | head -50
+
+              echo ""
+              echo "🔍 Workspace package.xml files:"
+              find /workspace -maxdepth 5 -name package.xml -print || true
+
+              echo ""
+              echo "🔍 Colcon packages:"
+              colcon list --base-paths /workspace || true
+
+              echo ""
+              echo "🔨 Building Python packages: ${PY_PACKAGES}"
               colcon build --symlink-install \
-                --packages-select ${{ env.PY_PACKAGES }} \
+                --base-paths /workspace \
+                --packages-select ${PY_PACKAGES} \
                 --parallel-workers 1 \
-                --event-handlers console_direct+ || echo 'Warning: Some Python packages failed to build'
-              
-              # Source the workspace to make built packages available
-              source install/setup.bash
-              
-              # Set up test environment
+                --event-handlers console_direct+
+
+              if [ -f /workspace/install/setup.bash ]; then
+                source /workspace/install/setup.bash
+                echo "✅ Sourced built workspace"
+              else
+                echo "⚠️ /workspace/install/setup.bash was not created"
+              fi
+
               export PYTHONDONTWRITEBYTECODE=1
               export PYTHONHASHSEED=0
-              export AI_VENV='/opt/ros_python_env'
-              
-              # Ensure pytest-cov is installed
-              pip3 install pytest-cov --break-system-packages --quiet || pip3 install pytest-cov --user --quiet
-              
-              # Run tests for Python packages (one at a time to reduce memory)
-              echo '🧪 Running tests...'
-              PY_PACKAGES_LIST='${{ env.PY_PACKAGES }}'
-              
-              # List workspace structure to debug
-              echo \"📁 Workspace structure:\"
-              ls -la /workspace/ | head -20
-              
-              for pkg in \${PY_PACKAGES_LIST}; do
-                echo \"\n========================================\"
-                echo \"Testing package: \$pkg\"
-                echo \"========================================\"
-                
-                # Create build directory for coverage output
-                mkdir -p /workspace/build/\$pkg/htmlcov
-                
-                # Check where the package actually is
-                if [ -d \"/workspace/\$pkg\" ]; then
-                  PKG_PATH=\"/workspace/\$pkg\"
-                elif [ -d \"/workspace/src/\$pkg\" ]; then
-                  PKG_PATH=\"/workspace/src/\$pkg\"
+              export AI_VENV="/opt/ros_python_env"
+
+              echo ""
+              echo "🔧 Ensuring pytest-cov is installed..."
+              python3 -m pip install pytest-cov --break-system-packages --quiet || \
+                python3 -m pip install pytest-cov --user --quiet
+
+              TEST_FAILED=0
+
+              echo ""
+              echo "🧪 Running tests..."
+              for pkg in ${PY_PACKAGES}; do
+                echo ""
+                echo "========================================"
+                echo "Testing package: ${pkg}"
+                echo "========================================"
+
+                mkdir -p "/workspace/build/${pkg}/htmlcov"
+
+                if [ -d "/workspace/${pkg}" ]; then
+                  PKG_PATH="/workspace/${pkg}"
+                elif [ -d "/workspace/src/${pkg}" ]; then
+                  PKG_PATH="/workspace/src/${pkg}"
                 else
-                  echo \"⚠️ Package \$pkg not found in /workspace or /workspace/src\"
+                  echo "⚠️ Package ${pkg} not found in /workspace or /workspace/src"
+                  TEST_FAILED=1
                   continue
                 fi
-                
-                echo \"ℹ️ Testing from: \$PKG_PATH\"
-                cd \"\$PKG_PATH\"
-                
-                # Run tests with pytest and ensure coverage is generated
+
+                if [ ! -d "${PKG_PATH}/test" ]; then
+                  echo "⚠️ No test/ directory found for ${pkg} at ${PKG_PATH}/test"
+                  TEST_FAILED=1
+                  continue
+                fi
+
+                echo "ℹ️ Testing from: ${PKG_PATH}"
+                cd "${PKG_PATH}"
+
                 python3 -m pytest test/ \
                   -v \
                   --tb=short \
-                  --junitxml=/workspace/build/\$pkg/pytest.xml \
-                  --cov=\$pkg \
-                  --cov-report=html:/workspace/build/\$pkg/htmlcov \
-                  --cov-report=lcov:/workspace/build/\$pkg/coverage.lcov \
-                  --cov-report=xml:/workspace/build/\$pkg/coverage.xml \
+                  --junitxml="/workspace/build/${pkg}/pytest.xml" \
+                  --cov="${pkg}" \
+                  --cov-report="html:/workspace/build/${pkg}/htmlcov" \
+                  --cov-report="lcov:/workspace/build/${pkg}/coverage.lcov" \
+                  --cov-report="xml:/workspace/build/${pkg}/coverage.xml" \
                   --cov-report=term \
                   -p no:cacheprovider || TEST_FAILED=1
-                
-                # Verify coverage files were created
-                echo \"\"
-                echo \"Checking coverage files for \$pkg:\"
-                ls -lh /workspace/build/\$pkg/coverage.* 2>/dev/null || echo \"⚠️ No coverage files found\"
-                
+
+                echo ""
+                echo "Checking coverage files for ${pkg}:"
+                ls -lh "/workspace/build/${pkg}"/coverage.* 2>/dev/null || echo "⚠️ No coverage files found"
+
                 cd /workspace
-                # Brief pause between packages
-                sleep 1
               done
-              
-              if [ \"\$TEST_FAILED\" = \"1\" ]; then
-                echo \"⚠️ Some tests failed, but continuing with coverage report\"
+
+              echo ""
+              echo "📋 Generated test reports:"
+              find /workspace/build -name "pytest.xml" -type f -print 2>/dev/null || true
+
+              if [ "${TEST_FAILED}" = "1" ]; then
+                echo "❌ Some tests failed or some packages/tests were missing"
+                exit 1
               fi
-            "
+            '
 
       # Generate human-readable test summary
       - name: Generate test summary
         if: always()
         run: |
           source Docker/.env
+
           docker run --rm \
-            -v ${{ github.workspace }}:/workspace \
-            ${BUILT_IMAGE} \
-            bash -c "
-              cd /workspace
+            --entrypoint /bin/bash \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            "${BUILT_IMAGE}" \
+            -lc '
               if [ -f /opt/vulcanexus/jazzy/setup.bash ]; then
                 source /opt/vulcanexus/jazzy/setup.bash
               elif [ -f /opt/ros/jazzy/setup.bash ]; then
                 source /opt/ros/jazzy/setup.bash
               fi
-              source install/setup.bash 2>/dev/null || true
-              colcon test-result --all --verbose
-            " > test_summary.txt
-          
+
+              source /workspace/install/setup.bash 2>/dev/null || true
+
+              cd /workspace
+              colcon test-result --all --verbose || true
+            ' > test_summary.txt
+
           # Display in logs
           cat test_summary.txt
-          
+
           # Create GitHub Actions summary
           echo "## 🧪 Test Results Summary" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
