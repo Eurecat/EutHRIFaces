@@ -23,7 +23,7 @@
   </tr>
 </table>
 
-**EutHRIFaces** is part of the Visual Perception Domain and focuses specifically on face-related processing.
+**EutHRIFaces** is part of the Visual Perception Domain and focuses specifically on face-related processing as an HRI reusable module.
 
 
 ### Key Characteristics
@@ -77,7 +77,7 @@ YOLO-based face detection with 5 key facial landmarks.
 ### 2. face_recognition 👤
 Face recognition and identification capabilities.
 
-- **Planned Features**:
+- **Features**:
   - Face embedding extraction
   - Identity management
   - Face matching and verification
@@ -86,7 +86,7 @@ Face recognition and identification capabilities.
 ### 3. gaze_estimation 👁️
 Gaze direction estimation from facial landmarks.
 
-- **Planned Features**:
+- **Features**:
   - Head pose estimation
   - Eye gaze direction
   - Point of attention estimation
@@ -95,7 +95,7 @@ Gaze direction estimation from facial landmarks.
 ### 4. visual_speech_activity 👄
 Visual speech activity detection from lip movements.
 
-- **Planned Features**:
+- **Features**:
   - Lip movement detection
   - Visual speech activity detection (VAD)
   - Speaking/non-speaking classification
@@ -209,10 +209,11 @@ All packages follow and extend the [ros4hri](https://github.com/ros4hri) standar
 
 ```
 EutHRIFaces/
-├── face_detection/     # YOLO face detection + mediapipe + dlip (IMPLEMENTED)
-├── face_recognition/   # Face identification (TODO)
-├── gaze_estimation/    # Gaze direction (TODO)
-└── Docker/            # Docker deployment files
+├── face_detection/            # YOLO face detection + mediapipe + dlip (IMPLEMENTED)
+├── face_recognition/          # Face identification (IMPLEMENTED)
+├── gaze_estimation/           # Gaze direction (IMPLEMENTED)
+├── visual_speech_activity/    # Visual speech activity detection (IMPLEMENTED)
+└── Docker/                    # Docker deployment files
 ```
 
 ## Dependencies
@@ -230,7 +231,7 @@ EutHRIFaces/
 4. Submit a pull request
 
 
-### Managing the Speaker Recognition Database
+### Managing the Face Recognition Database
 
 To query the database:
 ```bash
