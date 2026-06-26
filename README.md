@@ -4,7 +4,7 @@
 [![Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Eurecat/EutHRIFaces/badges/main/test-badge.json)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Eurecat/EutHRIFaces/badges/main/coverage-badge.json)](https://github.com/Eurecat/EutHRIFaces/actions/workflows/ci-cd.yml)
 
-🚀 Production-ready ROS2 (Jazzy, Humble-WIP) face perception stack with **advanced YOLO detection** 🎯 and a **custom persistent identity manager** 🆔. Uniquely integrates **MongoDB** 💾 for real-time user tracking with automatic re-identification across sessions—identities survive Docker restarts! Based on the [ros4hri](https://github.com/ros4hri) 🤖 standard, with an optional ROS4HRI-compatible publication mode. The default configuration uses a scalability-oriented architecture, leveraging state-of-the-art open-source AI models in an enterprise-grade architecture.
+🚀 Production-ready ROS2 (Jazzy, Humble) face perception stack with **advanced YOLO detection** 🎯 and a **custom persistent identity manager** 🆔. Uniquely integrates **MongoDB** 💾 for real-time user tracking with automatic re-identification across sessions—identities survive Docker restarts! Based on the [ros4hri](https://github.com/ros4hri) 🤖 standard, with an optional ROS4HRI-compatible publication mode. The default configuration uses a scalability-oriented architecture, leveraging state-of-the-art open-source AI models in an enterprise-grade architecture.
 
 ## 🏗️ Architecture Overview and RVIZ Visualization
 
