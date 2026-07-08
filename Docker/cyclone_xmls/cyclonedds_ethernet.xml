@@ -4,8 +4,8 @@
     <General>
       <AllowMulticast>false</AllowMulticast>
       <Interfaces>
-        <!-- Auto-select active non-loopback interface to avoid host-specific NIC names -->
-        <NetworkInterface autodetermine="true" priority="2" presence_required="true"/>
+        <!-- Pin Tiago Ethernet NIC by host IP to avoid wrong selection when many NICs are up -->
+        <NetworkInterface address="10.68.0.2" priority="2" presence_required="true"/>
         <NetworkInterface name="lo" priority="0"/>
       </Interfaces>
     </General>
