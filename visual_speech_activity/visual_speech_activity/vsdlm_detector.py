@@ -15,6 +15,7 @@ from pathlib import Path
 import logging
 import traceback
 import urllib.request
+import os
 import cv2
 from collections import deque, defaultdict
 
@@ -83,6 +84,7 @@ class VSDLMDetector:
     # In the 68-point array, YOLO landmarks appear at specific indices with c > 0
     YOLO_LEFT_MOUTH_IDX = 48   # Left mouth corner in YOLO 5-point (index 3)
     YOLO_RIGHT_MOUTH_IDX = 54  # Right mouth corner in YOLO 5-point (index 4)
+    MIN_MODEL_BYTES = 64 * 1024
     
     def __init__(
         self,
@@ -162,7 +164,7 @@ class VSDLMDetector:
             providers = ['CPUExecutionProvider']
         
         self.logger.debug(f"Loading VSDLM model from {self.model_path} with providers: {providers}")
-        self.session = ort.InferenceSession(str(self.model_path), providers=providers)
+        self.session = self._create_session_with_recovery(providers)
         # Get model input/output details
         self.input_name = self.session.get_inputs()[0].name
         self.output_name = self.session.get_outputs()[0].name
@@ -335,11 +337,51 @@ class VSDLMDetector:
                 if block_num % 10 == 0:  # Log every 10 blocks to reduce verbosity
                     self.logger.debug(f"Download progress: {percent:.1f}% ({downloaded}/{total_size} bytes)")
         
+        temp_path = self.model_path.with_suffix(self.model_path.suffix + ".part")
         try:
-            urllib.request.urlretrieve(url, self.model_path, reporthook=reporthook)
+            if temp_path.exists():
+                temp_path.unlink()
+
+            urllib.request.urlretrieve(url, temp_path, reporthook=reporthook)
+
+            file_size = temp_path.stat().st_size if temp_path.exists() else 0
+            if file_size < self.MIN_MODEL_BYTES:
+                raise RuntimeError(
+                    f"Downloaded file too small ({file_size} bytes). "
+                    f"Likely partial/corrupted download."
+                )
+
+            os.replace(temp_path, self.model_path)
             self.logger.debug(f"Successfully downloaded VSDLM model to {self.model_path}")
         except Exception as e:
+            if temp_path.exists():
+                temp_path.unlink()
             raise RuntimeError(f"Failed to download VSDLM model: {e}")
+
+    def _create_session_with_recovery(self, providers: List[str]):
+        """Create ONNX session with one-shot recovery for corrupted local model files."""
+        try:
+            return ort.InferenceSession(str(self.model_path), providers=providers)
+        except Exception as e:
+            error_text = str(e)
+            likely_corrupted = "INVALID_PROTOBUF" in error_text or "Protobuf parsing failed" in error_text
+            if not likely_corrupted:
+                raise
+
+            self.logger.warning(
+                f"Detected corrupted VSDLM model at {self.model_path}. "
+                "Removing and attempting re-download once."
+            )
+
+            try:
+                if self.model_path.exists():
+                    self.model_path.unlink()
+                self._download_model()
+                return ort.InferenceSession(str(self.model_path), providers=providers)
+            except Exception as retry_error:
+                raise RuntimeError(
+                    "Failed to recover VSDLM model after protobuf parsing error"
+                ) from retry_error
     
     def _detect_landmark_type(self, landmarks: List[Tuple[float, float, float]]) -> str:
         """

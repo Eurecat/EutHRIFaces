@@ -32,6 +32,7 @@ class YoloFaceDetector:
     - Face bounding boxes
     - 5 facial landmarks (left_eye, right_eye, nose, left_mouth, right_mouth)
     """
+    MIN_MODEL_BYTES = 256 * 1024
     
     def __init__(self, logger, model_path: str, conf_threshold: float = 0.2, iou_threshold: float = 0.5, device: str = "cpu", debug: bool = False, use_boxmot: bool = False, boxmot_tracker_type: str = "bytetrack", boxmot_reid_model: str = ""):
         """
@@ -156,7 +157,10 @@ class YoloFaceDetector:
         """
         try:
             # Check if model exists, if not try to download it, and is not 0 bytes
-            if not os.path.exists(self.model_path) or os.path.getsize(self.model_path) == 0: 
+            if (
+                not os.path.exists(self.model_path)
+                or os.path.getsize(self.model_path) < self.MIN_MODEL_BYTES
+            ):
                 self.logger.info(f"[INFO] YOLO face model not found at: {self.model_path}")
                 self.logger.info(f"[INFO] Attempting to auto-download...")
                 
@@ -165,13 +169,27 @@ class YoloFaceDetector:
                     return False
             else:
                 self.logger.info(f"[INFO] Found existing YOLO face model at: {self.model_path}")
-            
+
             self.logger.info(f"[INFO] Initializing YOLO face detector from {self.model_path}")
             light_green = "\033[38;5;82m"
             reset = "\033[0m"
-            print(f"{light_green}[INFO] Using device on yolo face detector: {self.device}{reset}")            
-            # Initialize OpenCV DNN (backup method)
-            self.net = cv2.dnn.readNet(self.model_path)
+            print(f"{light_green}[INFO] Using device on yolo face detector: {self.device}{reset}")
+
+            # Initialize OpenCV DNN (backup method). If local file is corrupted,
+            # remove and re-download once.
+            try:
+                self.net = cv2.dnn.readNet(self.model_path)
+            except Exception as parse_error:
+                self.logger.warn(
+                    f"[WARNING] Existing YOLO ONNX seems corrupted ({parse_error}). "
+                    "Re-downloading model and retrying once."
+                )
+                if os.path.exists(self.model_path):
+                    os.remove(self.model_path)
+                if not self._download_model(self.model_path, self.default_model_url):
+                    self.logger.error("[ERROR] Failed to re-download YOLO face model")
+                    return False
+                self.net = cv2.dnn.readNet(self.model_path)
             
             # Initialize ONNX InferenceSession with GPU/CPU support.
             # Only include providers that are actually installed to avoid spurious warnings.
