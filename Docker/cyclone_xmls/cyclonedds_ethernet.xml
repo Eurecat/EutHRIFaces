@@ -4,8 +4,8 @@
     <General>
       <AllowMulticast>false</AllowMulticast>
       <Interfaces>
-        <!-- Your PC ethernet interface name -->
-        <NetworkInterface name="enx00e04c6801e5" priority="2" presence_required="true"/>
+        <!-- Auto-select active non-loopback interface to avoid host-specific NIC names -->
+        <NetworkInterface autodetermine="true" priority="2" presence_required="true"/>
         <NetworkInterface name="lo" priority="0"/>
       </Interfaces>
     </General>
