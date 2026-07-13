@@ -6,9 +6,6 @@ services:
     env_file:
       - ./.env
     network_mode: host 
-    dns:
-      - ${PRIMARY_DNS:-1.1.1.1}
-      - ${SECONDARY_DNS:-8.8.8.8}
     ipc: host
     shm_size: 1gb
     runtime: ${DOCKER_RUNTIME:-runc}
@@ -53,9 +50,6 @@ services:
     env_file:
       - ./.env
     network_mode: host 
-    dns:
-      - ${PRIMARY_DNS:-1.1.1.1}
-      - ${SECONDARY_DNS:-8.8.8.8}
     ipc: host
     shm_size: 1gb
     runtime: ${DOCKER_RUNTIME:-runc}
@@ -99,9 +93,6 @@ services:
     env_file:
       - ./.env
     network_mode: host 
-    dns:
-      - ${PRIMARY_DNS:-1.1.1.1}
-      - ${SECONDARY_DNS:-8.8.8.8}
     ipc: host
     shm_size: 1gb
     runtime: ${DOCKER_RUNTIME:-runc}
@@ -145,9 +136,6 @@ services:
     env_file:
       - ./.env
     network_mode: host 
-    dns:
-      - ${PRIMARY_DNS:-1.1.1.1}
-      - ${SECONDARY_DNS:-8.8.8.8}
     ipc: host
     shm_size: 1gb
     runtime: ${DOCKER_RUNTIME:-runc}
