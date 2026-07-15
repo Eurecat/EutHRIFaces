@@ -1,0 +1,21 @@
+<!-- Cyclone DDS host-network config for TIAGo Ethernet -->
+<CycloneDDS>
+  <Domain>
+    <General>
+      <AllowMulticast>false</AllowMulticast>
+      <Interfaces>
+        <NetworkInterface name="enx00e04c680396" priority="10" presence_required="true"/>
+        <NetworkInterface name="lo" priority="0" presence_required="true"/>
+      </Interfaces>
+    </General>
+
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>20</MaxAutoParticipantIndex>
+      <Peers>
+        <Peer Address="localhost"/>
+        <Peer Address="10.68.0.1"/>
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

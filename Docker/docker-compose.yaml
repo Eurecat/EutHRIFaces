@@ -23,7 +23,7 @@ services:
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
       - ./logs:/workspace/log
       # Cyclone DDS configuration for TiagoPro WiFi
-      - ./cyclone_xmls/${CYCLONE_CONFIG_FILE:-cyclonedds_ethernet.xml}:/etc/cyclonedds.xml:ro
+      - ./cyclone_xmls/${CYCLONE_CONFIG_FILE:-eth_tiago_cyclone.xml}:/etc/cyclonedds.xml:ro
 
     tty: true
     stdin_open: true
@@ -68,7 +68,7 @@ services:
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
       # Cyclone DDS configuration for TiagoPro WiFi
-      - ./cyclone_xmls/${CYCLONE_CONFIG_FILE:-cyclonedds_ethernet.xml}:/etc/cyclonedds.xml:ro
+      - ./cyclone_xmls/${CYCLONE_CONFIG_FILE:-eth_tiago_cyclone.xml}:/etc/cyclonedds.xml:ro
       - ./logs:/workspace/log
       
     tty: true
@@ -113,7 +113,7 @@ services:
       - ../gaze_estimation:/workspace/src/gaze_estimation
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
       # Cyclone DDS configuration for TiagoPro WiFi
-      - ./cyclone_xmls/${CYCLONE_CONFIG_FILE:-cyclonedds_ethernet.xml}:/etc/cyclonedds.xml:ro
+      - ./cyclone_xmls/${CYCLONE_CONFIG_FILE:-eth_tiago_cyclone.xml}:/etc/cyclonedds.xml:ro
       - ./logs:/workspace/log
 
     tty: true
@@ -159,7 +159,7 @@ services:
       - ../visual_speech_activity:/workspace/src/visual_speech_activity
       - ./logs:/workspace/log
       # Cyclone DDS configuration for TiagoPro WiFi
-      - ./cyclone_xmls/${CYCLONE_CONFIG_FILE:-cyclonedds_ethernet.xml}:/etc/cyclonedds.xml:ro
+      - ./cyclone_xmls/${CYCLONE_CONFIG_FILE:-eth_tiago_cyclone.xml}:/etc/cyclonedds.xml:ro
     tty: true
     stdin_open: true
     environment:
