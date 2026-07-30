@@ -11,7 +11,7 @@
 # - Jetson Thor / ARM64:  ./build_container.sh --arm
 # - Clean rebuild: ./build_container.sh --clean-rebuild [--standard-ros] [--cpu] [--arm]
 #
-# --arm uses Dockerfile.arm and base image eut_ros_torch:jazzy (ARM).
+# --arm uses Dockerfile.arm and base image eut_ros_torch_arm:jazzy (ARM).
 # Build context is the EutHRIFaces repo root so COPY of ROS packages works.
 # Mutually exclusive with --vulcanexus / --humble / --cpu (Jazzy + GPU only).
 #
@@ -19,6 +19,44 @@
 export DOCKER_BUILDKIT=1
 
 set -e
+
+show_help() {
+    cat <<'EOF'
+Usage: ./build_container.sh [OPTIONS]
+
+Options:
+  --clean-rebuild    Force no-cache Docker build and clean deps cache
+  --vulcanexus       Use Vulcanexus ROS 2 base images
+  --humble           Build Humble variant (x86 only unless script-specific)
+  --cpu              Build CPU-only variant (no NVIDIA runtime)
+  --arm              Build ARM64 / Jetson variant (Jazzy + GPU)
+  --no-vcs           Skip vcs import/pull for Docker/deps
+  --push-after-build Force Docker Hub push after build (overrides .env)
+  --no-push-after-build Disable Docker Hub push for this run (overrides .env)
+  --help, -h         Show this help and exit
+
+Docker Hub integration (from local Docker/.env):
+  DOCKERHUB_ORG or DOCKERHUB_NAMESPACE
+  DOCKERHUB_USERNAME
+  DOCKERHUB_TOKEN
+  DOCKERHUB_REPO_PREFIX
+  DOCKERHUB_PUSH_AFTER_BUILD=true  # enable push after successful build
+
+Examples:
+  ./build_container.sh
+  ./build_container.sh --arm
+  ./build_container.sh --cpu --clean-rebuild
+EOF
+    exit 0
+}
+
+# Handle help before any VCS or filesystem side effects
+for arg in "$@"; do
+    if [ "$arg" = "--help" ] || [ "$arg" = "-h" ]; then
+        show_help
+    fi
+done
+
 
 # --- BEGIN: Manage .env file ---
 ENV_FILE="./.env" # Assuming .env is in the same directory as this script
@@ -46,6 +84,7 @@ NO_VCS=false
 USE_VULCANEXUS=false
 USE_HUMBLE=false
 USE_ARM=false
+PUSH_AFTER_BUILD_OVERRIDE=""
 PLATFORM_ARCH="amd"
 for arg in "$@"; do
     if [ "$arg" == "--clean-rebuild" ]; then
@@ -66,6 +105,12 @@ for arg in "$@"; do
     fi
     if [ "$arg" == "--arm" ]; then
         USE_ARM=true
+    fi
+    if [ "$arg" == "--push-after-build" ]; then
+        PUSH_AFTER_BUILD_OVERRIDE="true"
+    fi
+    if [ "$arg" == "--no-push-after-build" ]; then
+        PUSH_AFTER_BUILD_OVERRIDE="false"
     fi
 done
 
@@ -89,7 +134,7 @@ fi
 
 # Resolve base image from selected flags
 if $USE_ARM; then
-    BASE_IMAGE="eut_ros_torch:${TARGET_DISTRO}"
+    BASE_IMAGE="eut_ros_torch_arm:${TARGET_DISTRO}"
 elif $USE_VULCANEXUS; then
     BASE_IMAGE="eut_ros_vulcanexus_torch:${TARGET_DISTRO}"
 else
@@ -242,3 +287,13 @@ fi
 
 echo "Application Docker image built successfully!"
 echo "Build process completed!"
+
+# Optional per-repo Docker Hub push driven by Docker/.env
+PUSH_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dockerhub_push.sh"
+if [ -x "$PUSH_HELPER" ]; then
+    if [ -n "$PUSH_AFTER_BUILD_OVERRIDE" ]; then
+        DOCKERHUB_PUSH_AFTER_BUILD="$PUSH_AFTER_BUILD_OVERRIDE" "$PUSH_HELPER" --env-file "$ENV_FILE" --image "$IMAGE_NAME"
+    else
+        "$PUSH_HELPER" --env-file "$ENV_FILE" --image "$IMAGE_NAME"
+    fi
+fi

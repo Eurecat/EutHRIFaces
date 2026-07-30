@@ -1,11 +1,13 @@
-<!-- Cyclone DDS configuration for Tiago Pro Ethernet -->
+<!-- Cyclone DDS configuration for Tiago Pro WiFi -->
 <CycloneDDS>
   <Domain>
     <General>
       <AllowMulticast>false</AllowMulticast>
       <Interfaces>
-        <!-- Pin Tiago Ethernet NIC by host IP to avoid wrong selection when many NICs are up -->
-        <NetworkInterface address="10.68.0.2" priority="2" presence_required="true"/>
+        <!-- Prefer host-side ipvlan shim when available; fallback to physical NIC -->
+        <NetworkInterface name="ipvlan-host" priority="3" presence_required="false"/>
+        <NetworkInterface name="enx00e04c680396" priority="2" presence_required="true"/>
+        <!-- <NetworkInterface address="10.68.0.2" priority="2" presence_required="true"/> -->
         <NetworkInterface name="lo" priority="0"/>
       </Interfaces>
     </General>
@@ -15,7 +17,11 @@
       <MaxAutoParticipantIndex>500</MaxAutoParticipantIndex>
       <Peers>
         <Peer Address="localhost"/>
-        <Peer Address="10.68.0.1"/> <!-- robot IP over Tiago Pro Ethernet -->
+        <Peer Address="10.68.0.1"/> <!-- robot IP over Tiago Pro WiFi -->
+        <Peer Address="10.68.0.3"/> <!-- person_tracking -->
+        <Peer Address="10.68.0.4"/> <!-- context_postprocessors -->
+        <Peer Address="10.68.0.5"/> <!-- mission_controller_reactive -->
+        <Peer Address="10.68.0.6"/> <!-- bt_forest -->
       </Peers>
     </Discovery>
   </Domain>
