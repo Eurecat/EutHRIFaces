@@ -11,7 +11,7 @@
 # - Jetson Thor / ARM64:  ./build_container.sh --arm
 # - Clean rebuild: ./build_container.sh --clean-rebuild [--standard-ros] [--cpu] [--arm]
 #
-# --arm uses Dockerfile.arm and base image eut_ros_torch:jazzy (ARM).
+# --arm uses Dockerfile.arm and base image eut_ros_torch_arm:jazzy (ARM).
 # Build context is the EutHRIFaces repo root so COPY of ROS packages works.
 # Mutually exclusive with --vulcanexus / --humble / --cpu (Jazzy + GPU only).
 #
@@ -134,7 +134,7 @@ fi
 
 # Resolve base image from selected flags
 if $USE_ARM; then
-    BASE_IMAGE="eut_ros_torch:${TARGET_DISTRO}"
+    BASE_IMAGE="eut_ros_torch_arm:${TARGET_DISTRO}"
 elif $USE_VULCANEXUS; then
     BASE_IMAGE="eut_ros_vulcanexus_torch:${TARGET_DISTRO}"
 else
