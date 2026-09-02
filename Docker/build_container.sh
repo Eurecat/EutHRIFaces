@@ -210,6 +210,7 @@ if $USE_ARM; then
     BUILD_CONTEXT=".."
     BUILD_PLATFORM="linux/arm64"
     BUILD_ARGS=(
+        --network=host
         --platform "${BUILD_PLATFORM}"
         --build-arg BASE_IMAGE="${BASE_IMAGE}"
         --build-arg PLATFORM_ARCH="arm"
@@ -228,9 +229,9 @@ else
     DOCKER_PLATFORM="linux/amd64"
     if $REBUILD; then
         echo "Rebuilding the application Docker image..."
-        docker build --platform ${DOCKER_PLATFORM} --no-cache . --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg CPU_ONLY="${CPU_ONLY}" --build-arg PLATFORM_ARCH="${PLATFORM_ARCH}" -t ${IMAGE_NAME} -f Dockerfile
+        docker build --network=host --platform ${DOCKER_PLATFORM} --no-cache . --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg CPU_ONLY="${CPU_ONLY}" --build-arg PLATFORM_ARCH="${PLATFORM_ARCH}" -t ${IMAGE_NAME} -f Dockerfile
     else
-        docker build --platform ${DOCKER_PLATFORM} . --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg CPU_ONLY="${CPU_ONLY}" --build-arg PLATFORM_ARCH="${PLATFORM_ARCH}" -t ${IMAGE_NAME} -f Dockerfile
+        docker build --network=host --platform ${DOCKER_PLATFORM} . --build-arg BASE_IMAGE="${BASE_IMAGE}" --build-arg CPU_ONLY="${CPU_ONLY}" --build-arg PLATFORM_ARCH="${PLATFORM_ARCH}" -t ${IMAGE_NAME} -f Dockerfile
     fi
 fi
 
