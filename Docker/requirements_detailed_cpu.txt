@@ -146,8 +146,6 @@ stringzilla==4.6.0
 sympy==1.14.0
 threadpoolctl==3.6.0
 tifffile==2026.1.28
-torch==2.10.0
-torchvision==0.25.0
 tqdm==4.67.1
 traitlets==5.14.3
 typer-slim==0.21.1
