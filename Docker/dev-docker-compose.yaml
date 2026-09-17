@@ -33,6 +33,8 @@ services:
       - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
       - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}  # numpy BLAS threads busy-wait on small matrices (~200% CPU per node)
+      - OPENCV_FOR_THREADS_NUM=${OPENCV_FOR_THREADS_NUM:-2}  # ~10 OpenCV processes x 14 threads each oversubscribe the CPU
       - FASTDDS_BUILTIN_TRANSPORTS=${FASTDDS_BUILTIN_TRANSPORTS:-}
       # - USER_ID=${USER_ID}
       # - GROUP_ID=${GROUP_ID}

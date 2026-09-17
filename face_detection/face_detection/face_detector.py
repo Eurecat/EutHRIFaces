@@ -36,6 +36,7 @@ import numpy as np
 from ament_index_python.packages import get_package_share_directory
 
 from .yolo_face_detector import YoloFaceDetector
+from .jpeg_decoder import JpegDecoder
 try:
     from .dlib_landmark_detector import DlibLandmarkDetector
     _DLIB_AVAILABLE = True
@@ -228,9 +229,10 @@ class FaceDetectorNode(Node):
         # Convert image to OpenCV format
         try:
             if self.compressed_topic and self.compressed_topic.strip():
-                # Handle compressed image
-                np_arr = np.frombuffer(color_msg.data, np.uint8)
-                cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                # Handle compressed image (GPU nvJPEG when available)
+                if getattr(self, 'jpeg_decoder', None) is None:
+                    self.jpeg_decoder = JpegDecoder(self.device, self.get_logger())
+                cv_image = self.jpeg_decoder.decode_bgr(color_msg.data)
                 
                 if cv_image is None:
                     self.get_logger().error('Failed to decode compressed image')
@@ -431,8 +433,9 @@ class FaceDetectorNode(Node):
             if self.image_count % 60 == 1:
                 self.get_logger().debug("No faces detected, no messages published")
         
-        # Publish visualization if enabled
-        if self.enable_image_output and self.image_publisher is not None:
+        # Publish visualization if enabled and someone subscribes (drawing + JPEG encode is ~20% of the node)
+        if (self.enable_image_output and self.image_publisher is not None
+                and self.image_publisher.get_subscription_count() > 0):
             self._publish_image_with_faces(cv_image, detection_results, color_msg.header)
 
         # Calculate and log timing information
@@ -470,6 +473,7 @@ class FaceDetectorNode(Node):
         self.declare_parameter('confidence_threshold', 0.5)
         self.declare_parameter('iou_threshold', 0.4)
         self.declare_parameter('device', 'cpu')
+        self.declare_parameter('use_tensorrt', True)  # background TensorRT FP16 engine on CUDA
         
         # General parameters  
         self.declare_parameter('enable_debug_output', False)  # Disable debug by default
@@ -502,6 +506,7 @@ class FaceDetectorNode(Node):
         self.declare_parameter('mediapipe_min_detection_confidence', 0.5)
         self.declare_parameter('mediapipe_min_tracking_confidence', 0.5)
         self.declare_parameter('mediapipe_use_gpu', False)
+        self.declare_parameter('mediapipe_num_workers', 4)  # landmarker instances run in parallel (one face each)
         
     def _get_parameters(self):
         """Get parameter values from ROS2 parameter server."""
@@ -543,6 +548,7 @@ class FaceDetectorNode(Node):
         self.confidence_threshold = self.get_parameter('confidence_threshold').get_parameter_value().double_value
         self.iou_threshold = self.get_parameter('iou_threshold').get_parameter_value().double_value
         self.device = self.get_parameter('device').get_parameter_value().string_value
+        self.use_tensorrt = self.get_parameter('use_tensorrt').get_parameter_value().bool_value
         
         self.face_id_prefix = self.get_parameter('face_id_prefix').get_parameter_value().string_value
         
@@ -642,7 +648,8 @@ class FaceDetectorNode(Node):
                 debug=self.enable_debug_output,
                 use_boxmot=self.use_boxmot,
                 boxmot_tracker_type=self.boxmot_tracker_type,
-                boxmot_reid_model=self.boxmot_reid_model
+                boxmot_reid_model=self.boxmot_reid_model,
+                use_tensorrt=self.use_tensorrt,
             )
             
             if self.detector.initialize():
@@ -680,7 +687,8 @@ class FaceDetectorNode(Node):
                     logger=self.get_logger(),
                     min_detection_confidence=self.mediapipe_min_detection_confidence,
                     min_tracking_confidence=self.mediapipe_min_tracking_confidence,
-                    use_gpu=self.mediapipe_use_gpu
+                    use_gpu=self.mediapipe_use_gpu,
+                    num_workers=self.get_parameter('mediapipe_num_workers').get_parameter_value().integer_value,
                 )
                 if self.mediapipe_detector.is_available():
                     self.get_logger().info("MediaPipe landmark detector initialized successfully")

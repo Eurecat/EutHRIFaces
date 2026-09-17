@@ -49,6 +49,7 @@ except ImportError:
 from sensor_msgs.msg import Image, CompressedImage
 
 from .vsdlm_detector import VSDLMDetector
+from .jpeg_decoder import JpegDecoder
 
 
 def _stamp_to_float(stamp) -> float:
@@ -103,6 +104,8 @@ class VisualSpeechActivityNode(Node):
         # Image buffer: store recent images with timestamps for synchronization
         # Format: deque of (timestamp_float, cv_image_ndarray)
         # This ensures we use the SAME image that landmarks were detected from
+        # (timestamp, ROS image msg or decoded BGR array). Frames are decoded lazily, only when
+        # landmarks ask for them: decoding every 1080p camera frame cost ~1 CPU core.
         self.image_buffer = deque(maxlen=30)  # Keep last 30 images (~1 second at 30 fps)
         self.image_buffer_lock = Lock()
         
@@ -386,13 +389,11 @@ class VisualSpeechActivityNode(Node):
     def _store_latest_rgb(self, color_msg: Image):
         """Store latest color image with timestamp in buffer."""
         try:
-            # Convert to OpenCV format
-            cv_image = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
             timestamp = _stamp_to_float(color_msg.header.stamp)
             
-            # Add to timestamped buffer
+            # Add to timestamped buffer (decoded on demand in _decoded_buffer_image)
             with self.image_buffer_lock:
-                self.image_buffer.append((timestamp, cv_image))
+                self.image_buffer.append((timestamp, color_msg))
             
             # Keep legacy variables for compatibility
             self.latest_color_image_msg = color_msg
@@ -408,19 +409,11 @@ class VisualSpeechActivityNode(Node):
     def _store_latest_compressed_rgb(self, color_msg: CompressedImage):
         """Store latest compressed color image with timestamp in buffer."""
         try:
-            # Decode compressed image
-            np_arr = np.frombuffer(color_msg.data, np.uint8)
-            cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            
-            if cv_image is None:
-                self.get_logger().error('Failed to decode compressed image')
-                return
-            
             timestamp = _stamp_to_float(color_msg.header.stamp)
             
-            # Add to timestamped buffer
+            # Add to timestamped buffer (decoded on demand in _decoded_buffer_image)
             with self.image_buffer_lock:
-                self.image_buffer.append((timestamp, cv_image))
+                self.image_buffer.append((timestamp, color_msg))
             
             # Keep legacy variables for compatibility
             self.latest_color_image_msg = color_msg
@@ -433,13 +426,34 @@ class VisualSpeechActivityNode(Node):
         except Exception as e:
             self.get_logger().error(f"Error storing compressed image: {e}")
     
+    def _decoded_buffer_image(self, index: int) -> Optional[np.ndarray]:
+        """Decode buffer entry `index` once and keep the result. Call with image_buffer_lock held."""
+        timestamp, entry = self.image_buffer[index]
+        if isinstance(entry, np.ndarray):
+            return entry
+        try:
+            if isinstance(entry, CompressedImage):
+                if getattr(self, 'jpeg_decoder', None) is None:
+                    self.jpeg_decoder = JpegDecoder('cuda', self.get_logger())
+                cv_image = self.jpeg_decoder.decode_bgr(entry.data)
+            else:
+                cv_image = self.bridge.imgmsg_to_cv2(entry, desired_encoding='bgr8')
+        except Exception as e:
+            self.get_logger().error(f"Error decoding buffered image: {e}")
+            return None
+        if cv_image is None:
+            self.get_logger().error('Failed to decode compressed image')
+            return None
+        self.image_buffer[index] = (timestamp, cv_image)
+        return cv_image
+
     def _get_latest_image(self) -> Optional[np.ndarray]:
         """Get latest image (legacy method for backward compatibility)."""
         with self.image_buffer_lock:
             if len(self.image_buffer) == 0:
                 return None
             # Return most recent image
-            return self.image_buffer[-1][1]
+            return self._decoded_buffer_image(len(self.image_buffer) - 1)
     
     def _get_image_by_timestamp(self, target_timestamp: float, slop: float = 0.1) -> Optional[np.ndarray]:
         """
@@ -462,14 +476,14 @@ class VisualSpeechActivityNode(Node):
                 return None
             
             # Find image with closest timestamp within slop
-            best_image = None
+            best_index = None
             best_dt = float('inf')
             
-            for img_timestamp, cv_image in self.image_buffer:
+            for index, (img_timestamp, _) in enumerate(self.image_buffer):
                 dt = abs(img_timestamp - target_timestamp)
                 if dt < best_dt:
                     best_dt = dt
-                    best_image = cv_image
+                    best_index = index
             
             # Check if best match is within slop tolerance
             if best_dt > slop:
@@ -485,7 +499,7 @@ class VisualSpeechActivityNode(Node):
                     f"[NODE-IMAGE] Matched image with dt={best_dt*1000:.1f}ms for timestamp {target_timestamp:.3f}"
                 )
             
-            return best_image
+            return self._decoded_buffer_image(best_index)
     
     # -------------------------------------------------------------------------
     #                    ROS4HRI with ID Mode Callbacks
@@ -1144,6 +1158,10 @@ class VisualSpeechActivityNode(Node):
             header: Original image header
             mouth_crop_bbox: Optional mouth crop bbox (x1, y1, x2, y2) for visualization
         """
+        if self.image_publisher.get_subscription_count() == 0:
+            self.pending_visualizations.clear()
+            return  # nobody watches: skip copying and encoding 1080p frames
+
         current_timestamp = header.stamp.sec + header.stamp.nanosec / 1e9
         
         # If this is a new timestamp, publish previous batch and start new one
@@ -1153,7 +1171,7 @@ class VisualSpeechActivityNode(Node):
         
         # Add current face to visualization collection
         self.pending_visualizations.append({
-            'cv_image': cv_image.copy(),
+            'cv_image': cv_image,  # buffered frame, never modified in place (drawing uses a copy)
             'landmarks': landmarks,
             'is_speaking': is_speaking,
             'speaking_confidence': speaking_confidence,
@@ -1171,15 +1189,18 @@ class VisualSpeechActivityNode(Node):
     def _schedule_visualization_publish(self):
         """Schedule visualization publishing after a short delay."""
         # Use a timer to publish after 50ms if no new faces arrive
-        if hasattr(self, '_viz_timer'):
-            self._viz_timer.cancel()
+        # Destroy (not just cancel) the previous one-shot timer: cancelled timers stay
+        # registered in the executor and pile up, one per face per frame.
+        if getattr(self, '_viz_timer', None) is not None:
+            self.destroy_timer(self._viz_timer)
         
         self._viz_timer = self.create_timer(0.05, self._publish_collected_visualizations_callback)
     
     def _publish_collected_visualizations_callback(self):
         """Timer callback to publish collected visualizations."""
-        if hasattr(self, '_viz_timer'):
-            self._viz_timer.cancel()
+        if getattr(self, '_viz_timer', None) is not None:
+            self.destroy_timer(self._viz_timer)
+            self._viz_timer = None
         self._publish_collected_visualizations()
     
     def _publish_collected_visualizations(self):

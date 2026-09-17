@@ -32,6 +32,8 @@ services:
       - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
       - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}  
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}  # numpy BLAS threads busy-wait on small matrices (~200% CPU per node)
+      - OPENCV_FOR_THREADS_NUM=${OPENCV_FOR_THREADS_NUM:-2}  # ~10 OpenCV processes x 14 threads each oversubscribe the CPU
       - FASTDDS_BUILTIN_TRANSPORTS=${FASTDDS_BUILTIN_TRANSPORTS:-}
       - PACKAGE_NAME=face_detection
       - BUILD_LOGS_TO_KEEP=${BUILD_LOGS_TO_KEEP:-2}
@@ -81,6 +83,8 @@ services:
       - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp} 
       - FASTDDS_BUILTIN_TRANSPORTS=${FASTDDS_BUILTIN_TRANSPORTS:-}
       - PACKAGE_NAME=face_recognition
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}
+      - OPENCV_FOR_THREADS_NUM=${OPENCV_FOR_THREADS_NUM:-2}  # ~10 OpenCV processes x 14 threads each oversubscribe the CPU
       - BUILD_LOGS_TO_KEEP=${BUILD_LOGS_TO_KEEP:-2}
       - RUNTIME_LOGS_TO_KEEP=${RUNTIME_LOGS_TO_KEEP:-2}
       - NVIDIA_VISIBLE_DEVICES=all 
@@ -125,6 +129,8 @@ services:
       - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
       - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}   
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}  # numpy BLAS threads busy-wait on small matrices (~200% CPU per node)
+      - OPENCV_FOR_THREADS_NUM=${OPENCV_FOR_THREADS_NUM:-2}  # ~10 OpenCV processes x 14 threads each oversubscribe the CPU
       - FASTDDS_BUILTIN_TRANSPORTS=${FASTDDS_BUILTIN_TRANSPORTS:-}
       - PACKAGE_NAME=gaze_estimation
       - BUILD_LOGS_TO_KEEP=${BUILD_LOGS_TO_KEEP:-2}
@@ -170,6 +176,8 @@ services:
       - CYCLONEDDS_URI=file:///etc/cyclonedds.xml
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-2}  
       - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp} 
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}  # numpy BLAS threads busy-wait on small matrices (~200% CPU per node)
+      - OPENCV_FOR_THREADS_NUM=${OPENCV_FOR_THREADS_NUM:-2}  # ~10 OpenCV processes x 14 threads each oversubscribe the CPU
       - FASTDDS_BUILTIN_TRANSPORTS=${FASTDDS_BUILTIN_TRANSPORTS:-}
       - NVIDIA_VISIBLE_DEVICES=all 
       - PACKAGE_NAME=visual_speech_activity
