@@ -847,6 +847,10 @@ class FaceRecognitionNode(Node):
         elif self.enable_debug_output:
             self.get_logger().debug("No valid face crops in this frame")
 
+        # Face track ids are never reused, so drop cache entries of tracks that are gone
+        for face_id in [f for f in self.recognition_cache if f not in results]:
+            del self.recognition_cache[face_id]
+
         ordered = [results[m.face_id] for m in msg.ids]
         self._publish_recognitions(ordered)
         if self.enable_image_output and self.image_output_publisher:
