@@ -76,6 +76,8 @@ class FaceDetectorNode(Node):
         self.detector = None
         self.dlib_detector = None
         self.mediapipe_detector = None
+        # track_id -> [consecutive MediaPipe failures, frames since last attempt]
+        self._mediapipe_failures: Dict[Any, List[int]] = {}
         self._initialize_detector()
 
         # Initialize image storage variables (copied from perception node)
@@ -286,10 +288,8 @@ class FaceDetectorNode(Node):
         if self.mediapipe_detector is not None and self.mediapipe_detector.is_available():
             num_faces = len(detection_results.get('faces', []))
             if num_faces > 0:
-                mediapipe_landmarks_batch = self.mediapipe_detector.detect_landmarks_batch(
-                    cv_image,
-                    detection_results.get('faces', [])
-                )
+                mediapipe_landmarks_batch = self._mediapipe_landmarks_with_backoff(
+                    cv_image, detection_results.get('faces', []), detection_results.get('track_ids', []))
                 # Replace with MediaPipe landmarks where available (overrides dlib if both enabled)
                 detection_results['mediapipe_landmarks'] = mediapipe_landmarks_batch
                 if self.enable_debug_output:
@@ -709,6 +709,34 @@ class FaceDetectorNode(Node):
             self.get_logger().error(f"Failed to initialize face detector: {e}")
             self.detector = None
     
+    # Faces MediaPipe keeps missing (too small, occluded, profile) cost ~14 ms each per frame
+    # for nothing. After this many consecutive misses a track is retried only every
+    # _MEDIAPIPE_RETRY_EVERY frames and keeps the YOLO 5-point landmarks meanwhile.
+    _MEDIAPIPE_MAX_MISSES = 3
+    _MEDIAPIPE_RETRY_EVERY = 5
+
+    def _mediapipe_landmarks_with_backoff(self, image, faces, track_ids):
+        results = [None] * len(faces)
+        if len(track_ids) != len(faces):
+            track_ids = list(range(len(faces)))
+        todo = []
+        for index, track_id in enumerate(track_ids):
+            misses, since_try = self._mediapipe_failures.get(track_id, [0, 0])
+            if misses < self._MEDIAPIPE_MAX_MISSES or since_try + 1 >= self._MEDIAPIPE_RETRY_EVERY:
+                todo.append(index)
+            else:
+                self._mediapipe_failures[track_id] = [misses, since_try + 1]
+        if todo:
+            landmarks = self.mediapipe_detector.detect_landmarks_batch(image, [faces[i] for i in todo])
+            for index, lm in zip(todo, landmarks):
+                results[index] = lm
+                misses = 0 if lm is not None else self._mediapipe_failures.get(track_ids[index], [0, 0])[0] + 1
+                self._mediapipe_failures[track_ids[index]] = [misses, 0]
+        present = set(track_ids)
+        for track_id in [t for t in self._mediapipe_failures if t not in present]:
+            del self._mediapipe_failures[track_id]
+        return results
+
     def _convert_to_facial_landmarks_msgs(self, detection_results: Dict[str, Any], 
                                         original_header: Header, 
                                         image_shape: Tuple[int, int, int]) -> List[FacialLandmarks]:
