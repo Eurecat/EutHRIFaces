@@ -523,6 +523,7 @@ class FaceDetectorNode(Node):
         self.declare_parameter('facemesh_roi_scale', 1.4)
         self.declare_parameter('facemesh_roi_shift', 0.05)
         self.declare_parameter('facemesh_min_face_score', 0.0)
+        self.declare_parameter('facemesh_model_url', '')  # optional download when the model file is missing
         
     def _get_parameters(self):
         """Get parameter values from ROS2 parameter server."""
@@ -721,6 +722,7 @@ class FaceDetectorNode(Node):
                     min_face_score=self.get_parameter('facemesh_min_face_score').get_parameter_value().double_value,
                     use_tensorrt=self.use_tensorrt,
                     trt_cache_dir=os.path.join(os.path.dirname(os.path.abspath(self.model_path)), 'trt_cache'),
+                    model_url=self.get_parameter('facemesh_model_url').get_parameter_value().string_value,
                 )
                 if not self.facemesh_detector.is_available():
                     self.get_logger().warning("Face mesh ONNX landmarks unavailable, falling back to MediaPipe")
