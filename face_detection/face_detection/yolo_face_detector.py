@@ -14,6 +14,8 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 
+from face_detection.face_tracker import IouFaceTracker
+
 # BOXMOT imports
 try:
     import boxmot
@@ -21,7 +23,7 @@ try:
     BOXMOT_AVAILABLE = True
 except ImportError:
     BOXMOT_AVAILABLE = False
-    print("[WARNING] BOXMOT not available for face tracking. Using simple enumeration instead.")
+    print("[WARNING] BOXMOT not available for face tracking. Using built-in IoU face tracker instead.")
 
 
 class YoloFaceDetector:
@@ -61,6 +63,9 @@ class YoloFaceDetector:
         self.boxmot_tracker_type = boxmot_tracker_type
         self.boxmot_reid_model = boxmot_reid_model
         self.boxmot_tracker = None
+        # Used when BOXMOT is disabled or missing: keeps face ids stable across frames
+        self.face_tracker = IouFaceTracker()
+        self._untracked_next_id = 1_000_000  # ids for detections BOXMOT did not return
         
         # Model parameters
         self.input_height = 640
@@ -88,9 +93,9 @@ class YoloFaceDetector:
             if BOXMOT_AVAILABLE:
                 self.logger.info(f"[INFO] BOXMOT face tracking enabled with {self.boxmot_tracker_type}")
             else:
-                self.logger.warn("[WARNING] BOXMOT requested but not available, falling back to simple enumeration")
+                self.logger.warn("[WARNING] BOXMOT requested but not available, falling back to built-in IoU face tracker")
         else:
-            self.logger.warn("[INFO] Using simple face enumeration (no tracking)")
+            self.logger.info("[INFO] Using built-in IoU face tracker")
     
     def _download_model(self, model_path: str, url: str) -> bool:
         """
@@ -261,21 +266,15 @@ class YoloFaceDetector:
             if len(face_boxes) == 0:
                 if self.debug:
                     self.logger.debug(f"[DEBUG YOLO] No faces detected")
+                if not self.use_boxmot:
+                    self.face_tracker.update([])  # age out tracks
                 return {"faces": [], "confidences": [], "landmarks": [], "track_ids": []}
-            
-            # Apply tracking if BOXMOT is enabled
-            track_ids = []
-            if self.use_boxmot and self.boxmot_tracker is not None:
-                track_ids = self._apply_boxmot_tracking(face_boxes, face_scores, face_classids, image)
-            else:
-                # Use simple enumeration as fallback
-                track_ids = list(range(len(face_boxes)))
-                # track_ids = [-1] * len(face_boxes)
             
             # Convert to expected format
             faces = []
             confidences = []
             landmarks = []
+            kept_indices = []  # indices into face_boxes of the faces kept below
             
             for i in range(len(face_boxes)):
                 try:
@@ -307,6 +306,7 @@ class YoloFaceDetector:
                     
                     faces.append([x, y, w, h])
                     confidences.append(float(face_scores[i]))
+                    kept_indices.append(i)
                     
                     # Extract landmarks (5 points: left_eye, right_eye, nose, left_mouth, right_mouth)
                     face_landmarks_5pt = []
@@ -333,6 +333,14 @@ class YoloFaceDetector:
                     self.logger.warn(f"[WARNING] Error processing face {i}: {e}")
                     continue
             
+            # Track after filtering so ids stay aligned with the faces actually returned
+            if self.use_boxmot and self.boxmot_tracker is not None:
+                track_ids = self._apply_boxmot_tracking(
+                    np.asarray(face_boxes)[kept_indices], np.asarray(face_scores)[kept_indices],
+                    np.asarray(face_classids)[kept_indices], image)
+            else:
+                track_ids = self.face_tracker.update([[x, y, x + w, y + h] for x, y, w, h in faces])
+
             if self.debug:
                 self.logger.debug(f"[DEBUG YOLO] Final results: {len(faces)} faces after processing")
                 for i, (face, conf) in enumerate(zip(faces, confidences)):
@@ -649,35 +657,34 @@ class YoloFaceDetector:
             if self.debug:
                 self.logger.debug(f"[DEBUG BOXMOT] Tracker returned {len(tracks) if tracks is not None else 0} tracks")
                 
-            # Extract track IDs
-            track_ids = []
-            if tracks is not None and len(tracks) > 0:
+            # Extract track IDs, placed at the index of the detection they belong to.
+            # BOXMOT returns tracks in its own order and may omit unconfirmed detections.
+            track_ids: List[Optional[int]] = [None] * len(face_boxes)
+            if tracks is not None:
                 for track in tracks:
                     # BOXMOT track format: [x1, y1, x2, y2, track_id, conf, class_id, det_ind]
-                    if len(track) >= 8:
-                        track_id = int(track[4])
-                        det_ind = int(track[7])
-                        track_ids.append(track_id)
-                        
-                        if self.debug:
-                            self.logger.debug(f"[DEBUG BOXMOT] Track ID: {track_id}, Detection Index: {det_ind}")
-                    else:
+                    if len(track) < 8:
                         self.logger.warn(f"[WARNING] Invalid track format: {track}")
-                        track_ids.append(len(track_ids))  # Fallback to enumeration
-            else:
-                # Fallback to simple enumeration if tracking fails
-                track_ids = list(range(len(face_boxes)))
-                if self.debug:
-                    self.logger.debug("[DEBUG BOXMOT] No tracks returned, using simple enumeration")
-                    
+                        continue
+                    track_id = int(track[4])
+                    det_ind = int(track[7])
+                    if 0 <= det_ind < len(track_ids):
+                        track_ids[det_ind] = track_id
+                    if self.debug:
+                        self.logger.debug(f"[DEBUG BOXMOT] Track ID: {track_id}, Detection Index: {det_ind}")
+            # Detections without a track get a fresh id outside BOXMOT's range
+            for i, tid in enumerate(track_ids):
+                if tid is None:
+                    track_ids[i] = self._untracked_next_id
+                    self._untracked_next_id += 1
             return track_ids
             
         except Exception as e:
             self.logger.error(f"[ERROR] BOXMOT tracking failed: {e}")
             import traceback
             traceback.print_exc()
-            # Fallback to simple enumeration
-            return list(range(len(face_boxes)))
+            # Fallback to the built-in tracker
+            return self.face_tracker.update([[x, y, x + w, y + h] for x, y, w, h in face_boxes])
     
     def _create_boxmot_detections(self, face_boxes: np.ndarray, face_scores: np.ndarray, face_classids: np.ndarray) -> np.ndarray:
         """
