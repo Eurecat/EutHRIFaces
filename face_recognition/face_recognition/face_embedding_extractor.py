@@ -371,22 +371,32 @@ class FaceEmbeddingExtractor:
             return []
         
         try:
-            # Preprocess all images
-            preprocessed_batch = []
-            valid_indices = []
+            valid_indices = [i for i, img in enumerate(face_images) if img is not None and img.size > 0]
+            shapes = {face_images[i].shape for i in valid_indices}
+            if len(shapes) == 1 and len(next(iter(shapes))) == 3:
+                # Same-size crops (aligned mode): one host->device copy for the whole batch and
+                # BGR->RGB / scaling on the GPU, instead of one conversion and copy per face.
+                stacked = np.ascontiguousarray(np.stack([face_images[i] for i in valid_indices]))
+                batch_tensor = torch.from_numpy(stacked).to(self.device)
+                batch_tensor = batch_tensor.flip(-1).permute(0, 3, 1, 2).float() / 255.0
+                batch_tensor = self.transform(batch_tensor)
+            else:
+                # Preprocess all images
+                preprocessed_batch = []
+                valid_indices = []
 
-            for i, face_image in enumerate(face_images):
-                # Preprocess face image
-                preprocessed = self.preprocess_face_image(face_image)
-                if preprocessed is not None:
-                    preprocessed_batch.append(preprocessed)
-                    valid_indices.append(i)
-            
-            if not preprocessed_batch:
-                return [None] * len(face_images)
-            
-            # Stack into batch tensor and ensure it's on the correct device
-            batch_tensor = torch.cat(preprocessed_batch, dim=0).to(self.device)
+                for i, face_image in enumerate(face_images):
+                    # Preprocess face image
+                    preprocessed = self.preprocess_face_image(face_image)
+                    if preprocessed is not None:
+                        preprocessed_batch.append(preprocessed)
+                        valid_indices.append(i)
+                
+                if not preprocessed_batch:
+                    return [None] * len(face_images)
+                
+                # Stack into batch tensor and ensure it's on the correct device
+                batch_tensor = torch.cat(preprocessed_batch, dim=0).to(self.device)
             
             # Verify device placement for debugging
             if "cuda" in self.device and not batch_tensor.is_cuda:

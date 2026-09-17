@@ -39,6 +39,7 @@ from sensor_msgs.msg import Image, CompressedImage
 from cv_bridge import CvBridge
 
 from .face_embedding_extractor import create_face_embedding_extractor
+from .jpeg_decoder import JpegDecoder
 from .face_alignment import align_face, five_points_from_msg
 from .face_quality import FaceQualityConfig, face_quality_from_msg
 from .identity_manager import (
@@ -237,8 +238,9 @@ class FaceRecognitionNode(Node):
         try:
             compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
             if compressed_topic and compressed_topic.strip():
-                np_arr = np.frombuffer(color_msg.data, np.uint8)
-                cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                if getattr(self, 'jpeg_decoder', None) is None:
+                    self.jpeg_decoder = JpegDecoder(str(self.get_parameter('device').value), self.get_logger())
+                cv_image = self.jpeg_decoder.decode_bgr(color_msg.data)
                 if cv_image is None:
                     self.get_logger().error('Failed to decode compressed image')
                     return
@@ -1197,6 +1199,8 @@ class FaceRecognitionNode(Node):
         """Publish annotated image with recognition results for multiple faces as CompressedImage."""
         if not self.enable_image_output or not self.image_output_publisher or self.last_image is None:
             return
+        if self.image_output_publisher.get_subscription_count() == 0:
+            return  # nobody watches: skip drawing and JPEG encoding
         try:
             # Create a copy of the image for annotation
             annotated_image = self.last_image.copy()
@@ -1222,6 +1226,8 @@ class FaceRecognitionNode(Node):
     def _publish_clean_image(self):
         """Publish the original image without any annotations when no faces are detected as CompressedImage."""
         if not self.enable_image_output or not self.image_output_publisher or self.last_image is None:
+            return
+        if self.image_output_publisher.get_subscription_count() == 0:
             return
         try:
             # Encode as JPEG

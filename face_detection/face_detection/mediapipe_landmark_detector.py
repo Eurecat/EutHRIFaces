@@ -23,8 +23,10 @@ Full landmark map: https://storage.googleapis.com/mediapipe-assets/documentation
 """
 
 import os
+import queue
 import time
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Optional
 import logging
 import urllib.request
@@ -161,7 +163,9 @@ class MediaPipeLandmarkDetector:
         logger: Optional[logging.Logger] = None,
         min_detection_confidence: float = 0.5,
         min_tracking_confidence: float = 0.5,
-        use_gpu: bool = True
+        use_gpu: bool = True,
+        num_workers: int = 4,
+        crop_margin: float = 0.5
     ):
         """
         Initialize the MediaPipe landmark detector.
@@ -172,8 +176,19 @@ class MediaPipeLandmarkDetector:
             min_detection_confidence: Minimum confidence for face detection (0.0-1.0)
             min_tracking_confidence: Minimum confidence for face tracking (0.0-1.0)
             use_gpu: Whether to use GPU acceleration (default: True)
+            num_workers: Landmarker instances run in parallel, one face each (~14 ms per face on
+                CPU). Each MediaPipe task has its own dispatch thread, so faces of one frame are
+                processed concurrently instead of one after another.
+            crop_margin: Context added around the detector bbox on each side, as a fraction of its
+                size. MediaPipe runs its own face detector on the crop and misses faces that fill
+                the whole crop: on a 5-person frame 0.5 found landmarks for 3 faces instead of 1.
         """
+        self.crop_margin = max(0.0, float(crop_margin))
         self.landmarker = None
+        self.num_workers = max(1, int(num_workers))
+        self._landmarkers: List = []
+        self._free_landmarkers: queue.Queue = queue.Queue()
+        self._executor: Optional[ThreadPoolExecutor] = None
         self.is_initialized = False
         self.model_path = model_path
         self.logger = logger or logging.getLogger(__name__)
@@ -246,18 +261,28 @@ class MediaPipeLandmarkDetector:
                 )
                 self.logger.info(f"{light_green}[MEDIAPIPE-CPU] Using CPU{reset}")
             
+            # IMAGE mode: every call is an independent face crop. VIDEO mode tracked landmarks
+            # across calls, but consecutive calls are crops of *different* faces, so tracking
+            # never helped and could seed one face's ROI from another's.
             options = vision.FaceLandmarkerOptions(
                 base_options=base_options,
-                running_mode=vision.RunningMode.VIDEO,
-                num_faces=1,  # Support multiple faces
+                running_mode=vision.RunningMode.IMAGE,
+                num_faces=1,  # one face per crop
                 min_face_detection_confidence=self.min_detection_confidence,
                 min_tracking_confidence=self.min_tracking_confidence,
                 output_face_blendshapes=False,  # We don't need blendshapes
                 output_facial_transformation_matrixes=False  # We don't need transformation matrices
             )
             
-            # Create the landmarker
-            self.landmarker = vision.FaceLandmarker.create_from_options(options)
+            # Create the landmarkers (one per worker)
+            for _ in range(self.num_workers):
+                landmarker = vision.FaceLandmarker.create_from_options(options)
+                self._landmarkers.append(landmarker)
+                self._free_landmarkers.put(landmarker)
+            self.landmarker = self._landmarkers[0]
+            if self.num_workers > 1:
+                self._executor = ThreadPoolExecutor(max_workers=self.num_workers,
+                                                    thread_name_prefix='mp_landmarks')
             self.is_initialized = True
             self.logger.info("MediaPipe landmark detector initialized successfully")
             return True
@@ -344,16 +369,17 @@ class MediaPipeLandmarkDetector:
             return None
         
         try:
-            # Crop image to face bbox to focus MediaPipe detection
+            # Crop image to face bbox plus some context to focus MediaPipe detection
             x, y, w, h = face_bbox
             x, y, w, h = int(x), int(y), int(w), int(h)
+            mx, my = int(w * self.crop_margin), int(h * self.crop_margin)
             
             # Ensure bbox is within image bounds
             img_h, img_w = image.shape[:2]
-            x1 = max(0, x)
-            y1 = max(0, y)
-            x2 = min(img_w, x + w)
-            y2 = min(img_h, y + h)
+            x1 = max(0, x - mx)
+            y1 = max(0, y - my)
+            x2 = min(img_w, x + w + mx)
+            y2 = min(img_h, y + h + my)
             
             if x2 <= x1 or y2 <= y1:
                 self.logger.warning(f"Invalid face bbox: {face_bbox}")
@@ -367,11 +393,8 @@ class MediaPipeLandmarkDetector:
             # Create MediaPipe Image
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
             
-            # Detect landmarks
-            a = time.time()
-            ts_ms = int(time.time() * 1000)
-            detection_result = self.landmarker.detect_for_video(mp_image, ts_ms)
-            # self.logger.info(f"MediaPipe detection took {(time.time() - a)*1000:.1f} ms") # 10-15ms aprox
+            # Detect landmarks (~14 ms per face on CPU)
+            detection_result = self._detect(mp_image)
             if not detection_result.face_landmarks or len(detection_result.face_landmarks) == 0:
                 return None
             
@@ -402,6 +425,12 @@ class MediaPipeLandmarkDetector:
                     # If no mapping exists, use (0, 0) placeholder
                     ros4hri_landmarks.append((0.0, 0.0))
             
+            # The widened crop can contain a neighbour's face: keep the result only if the nose
+            # tip (ros4hri 30) lies inside the detector bbox of the face we were asked about.
+            nose_x, nose_y = ros4hri_landmarks[30]
+            if not (x <= nose_x <= x + w and y <= nose_y <= y + h):
+                return None
+
             # Return only the first 68 landmarks (standard ros4hri, pupils handled separately)
             return ros4hri_landmarks[:68]
             
@@ -427,12 +456,17 @@ class MediaPipeLandmarkDetector:
         if not self.is_initialized:
             return [None] * len(face_bboxes)
         
-        results = []
-        for bbox in face_bboxes:
-            landmarks = self.detect_landmarks(image, bbox)
-            results.append(landmarks)
-        
-        return results
+        if self._executor is not None and len(face_bboxes) > 1:
+            return list(self._executor.map(lambda bbox: self.detect_landmarks(image, bbox), face_bboxes))
+        return [self.detect_landmarks(image, bbox) for bbox in face_bboxes]
+
+    def _detect(self, mp_image):
+        """Run one free landmarker instance (blocks until one is available)."""
+        landmarker = self._free_landmarkers.get()
+        try:
+            return landmarker.detect(mp_image)
+        finally:
+            self._free_landmarkers.put(landmarker)
     
     def get_pupils(
         self,
@@ -470,7 +504,7 @@ class MediaPipeLandmarkDetector:
             rgb_image = face_crop[:, :, ::-1].copy()
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
             
-            detection_result = self.landmarker.detect(mp_image)
+            detection_result = self._detect(mp_image)
             
             if not detection_result.face_landmarks or len(detection_result.face_landmarks) == 0:
                 return None
@@ -551,8 +585,10 @@ class MediaPipeLandmarkDetector:
     
     def __del__(self):
         """Cleanup MediaPipe resources."""
-        if self.landmarker is not None:
+        if self._executor is not None:
+            self._executor.shutdown(wait=False)
+        for landmarker in self._landmarkers:
             try:
-                self.landmarker.close()
-            except:
+                landmarker.close()
+            except Exception:
                 pass

@@ -6,6 +6,7 @@ This detector uses a YOLOv8-based face detection model with landmarks support.
 """
 import os
 import math
+import threading
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
@@ -36,7 +37,7 @@ class YoloFaceDetector:
     """
     MIN_MODEL_BYTES = 256 * 1024
     
-    def __init__(self, logger, model_path: str, conf_threshold: float = 0.2, iou_threshold: float = 0.5, device: str = "cpu", debug: bool = False, use_boxmot: bool = False, boxmot_tracker_type: str = "bytetrack", boxmot_reid_model: str = ""):
+    def __init__(self, logger, model_path: str, conf_threshold: float = 0.2, iou_threshold: float = 0.5, device: str = "cpu", debug: bool = False, use_boxmot: bool = False, boxmot_tracker_type: str = "bytetrack", boxmot_reid_model: str = "", use_tensorrt: bool = True):
         """
         Initialize YOLO face detector.
         
@@ -50,12 +51,15 @@ class YoloFaceDetector:
             use_boxmot: Enable BOXMOT tracking
             boxmot_tracker_type: Type of BOXMOT tracker to use
             boxmot_reid_model: Path to ReID model for BOXMOT
+            use_tensorrt: On CUDA, build a TensorRT FP16 engine in the background and switch to it
+                when ready (~5x faster than CUDAExecutionProvider). Engines are cached next to the model.
         """
         self.logger = logger
         self.model_path = model_path
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
         self.device = device
+        self.use_tensorrt = use_tensorrt
         self.debug = debug
         
         # BOXMOT tracking parameters
@@ -216,6 +220,8 @@ class YoloFaceDetector:
             self.logger.info(f"[INFO] Providers: {providers}")
             
             self.session = ort.InferenceSession(self.model_path, providers=providers)
+            if self.use_tensorrt and 'CUDAExecutionProvider' in providers:
+                self._start_tensorrt_session()
             
             # Generate anchors
             self.anchors = self._make_anchors(self.feats_hw)
@@ -233,6 +239,47 @@ class YoloFaceDetector:
             self.logger.error(f"[ERROR] Failed to initialize YOLO face detector: {e}")
             return False
     
+    def _start_tensorrt_session(self) -> None:
+        """Build (or load from cache) a TensorRT FP16 session in the background, then swap it in.
+
+        The first build takes minutes on a Jetson (measured ~8 min on Thor), which is why the
+        CUDA session serves frames meanwhile. Cached engines load in ~2 s. Engines are specific
+        to GPU and TensorRT version, so each machine builds its own.
+        """
+        if 'TensorrtExecutionProvider' not in ort.get_available_providers():
+            self.logger.info("[INFO] TensorrtExecutionProvider not available; staying on CUDAExecutionProvider")
+            return
+        cache_dir = os.path.join(os.path.dirname(os.path.abspath(self.model_path)), 'trt_cache')
+
+        def build():
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+                cached = any(f.endswith('.engine') for f in os.listdir(cache_dir))
+                self.logger.info(
+                    f"[INFO] {'Loading cached' if cached else 'Building (first time, several minutes)'} "
+                    f"TensorRT FP16 engine for face detection in background ({cache_dir})")
+                trt_options = {
+                    'trt_fp16_enable': True,
+                    'trt_engine_cache_enable': True,
+                    'trt_engine_cache_path': cache_dir,
+                    'trt_timing_cache_enable': True,
+                    'trt_timing_cache_path': cache_dir,
+                }
+                session = ort.InferenceSession(
+                    self.model_path,
+                    providers=[('TensorrtExecutionProvider', trt_options), 'CUDAExecutionProvider'])
+                if 'TensorrtExecutionProvider' not in session.get_providers():
+                    self.logger.warn("[WARNING] TensorRT session fell back to CUDA; keeping CUDA session")
+                    return
+                dummy = np.zeros((1, 3, self.input_height, self.input_width), dtype=np.float32)
+                session.run(None, {session.get_inputs()[0].name: dummy})  # triggers the engine build
+                self.session = session
+                self.logger.info("\033[92m[INFO] Face detection switched to TensorRT FP16\033[0m")
+            except Exception as e:
+                self.logger.warn(f"[WARNING] TensorRT session failed ({e}); keeping CUDAExecutionProvider")
+
+        threading.Thread(target=build, name='face_trt_build', daemon=True).start()
+
     def detect(self, image: np.ndarray) -> Dict[str, Any]:
         """
         Detect faces in the image.
@@ -483,25 +530,29 @@ class YoloFaceDetector:
             stride = self.strides[i]
             pred = pred.transpose((0, 2, 3, 1))
             
-            box = pred[..., :self.reg_max * 4]
+            box = pred[..., :self.reg_max * 4].reshape((-1, self.reg_max * 4))
             cls = 1 / (1 + np.exp(-pred[..., self.reg_max * 4:-15])).reshape((-1, 1))
             kpts = pred[..., -15:].reshape((-1, 15))  # x1,y1,score1, ..., x5,y5,score5
+
+            # Decode only anchors that pass the confidence threshold (the same filter is
+            # applied again below): softmax over all 8400 anchors was ~8% of the node's CPU.
+            keep = cls[:, 0] > self.conf_threshold
+            box, cls, kpts = box[keep], cls[keep], kpts[keep]
+            anchor_pts = self.anchors[stride][keep]
             
             # Process bounding boxes
             tmp = box.reshape(-1, 4, self.reg_max)
             bbox_pred = self._softmax(tmp, axis=-1)
             bbox_pred = np.dot(bbox_pred, self.project).reshape((-1, 4))
             
-            bbox = self._distance2bbox(self.anchors[stride], bbox_pred, 
+            bbox = self._distance2bbox(anchor_pts, bbox_pred, 
                                      max_shape=(self.input_height, self.input_width)) * stride
             
             # Process keypoints
-            if stride in self.anchors and len(kpts) > 0:
-                anchor_pts = self.anchors[stride]
-                if len(anchor_pts) >= len(kpts):
-                    kpts[:, 0::3] = (kpts[:, 0::3] * 2.0 + (anchor_pts[:len(kpts), 0].reshape((-1, 1)) - 0.5)) * stride
-                    kpts[:, 1::3] = (kpts[:, 1::3] * 2.0 + (anchor_pts[:len(kpts), 1].reshape((-1, 1)) - 0.5)) * stride
-                    kpts[:, 2::3] = 1 / (1 + np.exp(-kpts[:, 2::3]))
+            if len(kpts) > 0:
+                kpts[:, 0::3] = (kpts[:, 0::3] * 2.0 + (anchor_pts[:, 0].reshape((-1, 1)) - 0.5)) * stride
+                kpts[:, 1::3] = (kpts[:, 1::3] * 2.0 + (anchor_pts[:, 1].reshape((-1, 1)) - 0.5)) * stride
+                kpts[:, 2::3] = 1 / (1 + np.exp(-kpts[:, 2::3]))
             
             # Adjust for padding and scaling
             bbox -= np.array([[padw, padh, padw, padh]])

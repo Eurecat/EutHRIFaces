@@ -12,6 +12,7 @@ face_detector:
     # Processing Configuration
     processing_rate_hz: 30.0
     device: "cuda:0"
+    use_tensorrt: true   # CUDA only: TensorRT FP16 engine built in background (first time ~8 min on Thor, cached in weights/trt_cache), ~5x faster YOLO
     
     # Model Configuration
     model_path: "yolov8n-face.onnx"
@@ -54,6 +55,7 @@ face_detector:
     # GPU support: Set to false (standard mediapipe package doesn't include GPU support)
     enable_mediapipe_landmarks: true
     mediapipe_use_gpu: false
+    mediapipe_num_workers: 4          # faces of one frame get landmarks in parallel (~14 ms per face on CPU)
     mediapipe_model_path: "face_landmarker.task"
     mediapipe_min_detection_confidence: 0.5
     mediapipe_min_tracking_confidence: 0.5

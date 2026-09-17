@@ -267,8 +267,9 @@ class GazeEstimationNode(Node):
         if self.landmarks_processed is True:
             return
 
-        # If image visualization is enabled, check for image data
-        if self.enable_image_output:
+        # The image is only used for the annotated output: decode it (and wait for a new
+        # frame) only while someone subscribes, otherwise gaze runs on landmarks alone.
+        if self.enable_image_output and self.image_pub.get_subscription_count() > 0:
             color_msg = self.latest_color_image_msg
             color_image_processed = self.color_image_processed
             
