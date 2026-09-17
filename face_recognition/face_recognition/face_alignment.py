@@ -18,6 +18,8 @@ TEMPLATE_112 = np.array([[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.73
 EYE_INDICES = (42, 39)
 NOSE_INDEX = 30
 MOUTH_INDICES = (54, 48)
+# Full eye contours (dlib 68 order), present when MediaPipe/dlib landmarks are used
+EYE_CONTOURS = (range(42, 48), range(36, 42))
 
 
 def five_points_from_msg(msg) -> Optional[np.ndarray]:
@@ -28,7 +30,17 @@ def five_points_from_msg(msg) -> Optional[np.ndarray]:
         return None
     w, h = float(msg.width), float(msg.height)
     point = lambda i: (lms[i].x * w, lms[i].y * h)
-    eyes = sorted(point(i) for i in EYE_INDICES)
+
+    def eye(single_index, contour):
+        # YOLO writes the eye *centre* into 42/39; MediaPipe/dlib put the inner eye corner
+        # there. Use the contour centre when the whole contour is present so both sources
+        # align faces the same way (mixing them shifted embeddings, cos ~0.94).
+        if len(lms) > max(contour) and all(lms[i].c > 0 for i in contour):
+            xs, ys = zip(*(point(i) for i in contour))
+            return (sum(xs) / len(xs), sum(ys) / len(ys))
+        return point(single_index)
+
+    eyes = sorted(eye(i, contour) for i, contour in zip(EYE_INDICES, EYE_CONTOURS))
     mouth = sorted(point(i) for i in MOUTH_INDICES)
     return np.array([eyes[0], eyes[1], point(NOSE_INDEX), mouth[0], mouth[1]], dtype=np.float32)
 
