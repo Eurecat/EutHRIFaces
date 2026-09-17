@@ -586,7 +586,8 @@ class VisualSpeechActivityNode(Node):
     
     def _recognition_per_id_callback(self, msg: FacialRecognition, face_id: str):
         """Callback for per-ID facial recognition."""
-        recognized_face_id = msg.recognized_face_id
+        # Unidentified faces have an empty recognized_face_id: key them by their track id
+        recognized_face_id = msg.recognized_face_id or msg.face_id
         self.latest_recognition[recognized_face_id] = msg
         self.face_id_to_recognized_id[msg.face_id] = recognized_face_id
         
@@ -632,8 +633,10 @@ class VisualSpeechActivityNode(Node):
         
         for recognition in msg.facial_recognition:
             # Update mapping
-            self.latest_recognition[recognition.recognized_face_id] = recognition
-            self.face_id_to_recognized_id[recognition.face_id] = recognition.recognized_face_id
+            # Unidentified faces have an empty recognized_face_id: key them by their track id
+            identity_key = recognition.recognized_face_id or recognition.face_id
+            self.latest_recognition[identity_key] = recognition
+            self.face_id_to_recognized_id[recognition.face_id] = identity_key
             
             # Process speaking detection
             speaking_recognition = self._process_recognition(recognition)
@@ -720,7 +723,7 @@ class VisualSpeechActivityNode(Node):
                 cv_image,
                 landmarks_list,
                 face_bbox,
-                face_id=recognition.recognized_face_id
+                face_id=recognition.recognized_face_id or recognition.face_id
             )
             
             if self.enable_debug_output:
@@ -735,7 +738,7 @@ class VisualSpeechActivityNode(Node):
         if self.enable_image_output and self.image_publisher is not None and cv_image is not None:
             self._collect_face_visualization(
                 cv_image, landmarks_list, is_speaking, speaking_confidence,
-                recognition.recognized_face_id, landmarks_msg.header, mouth_crop_bbox
+                recognition.recognized_face_id or recognition.face_id, landmarks_msg.header, mouth_crop_bbox
             )
         
         if self.enable_debug_output:
@@ -1009,6 +1012,9 @@ class VisualSpeechActivityNode(Node):
         extended_recognition.face_id = recognition.face_id
         extended_recognition.recognized_face_id = recognition.recognized_face_id
         extended_recognition.confidence = recognition.confidence
+        for identity_field in ('identity_status', 'face_quality'):
+            if hasattr(extended_recognition, identity_field):
+                setattr(extended_recognition, identity_field, getattr(recognition, identity_field))
         
         # Add speaking fields if they exist (requires rebuilt hri_msgs)
         if hasattr(extended_recognition, 'is_speaking'):

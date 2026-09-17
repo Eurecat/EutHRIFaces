@@ -1,1275 +1,598 @@
+"""Persistent face identity management.
+
+Embeddings arrive keyed by a transient face track id (``face_3``); this module decides
+which persistent identity (``U1``, ``U2``...) each one belongs to. It owns the identity
+population, the matching rules, merging, cleanup and incremental MongoDB persistence.
+
+The rules are ported from the speech diarization identity layer
+(``eut_speech_audio_processing/.../voice_identity_manager.py``) and calibrated on
+``video_3.mp4`` with ``tools/evaluate_identity_manager.py``:
+
+* a new identity is seeded from several consistent, good-quality samples of one track,
+  never from a single embedding (single same-person pairs score as low as 0.25);
+* matching needs an absolute score **and** a best-vs-second margin, with a relaxed bar
+  for young (tentative) identities whose mean is still noisy;
+* assignment inside a frame is exclusive, so two faces never share an identity;
+* a track keeps its identity unless another one is clearly better, but never below
+  the young threshold;
+* only good-quality faces (near-frontal, confidently detected) teach an identity;
+  poor faces may be matched to a known identity but otherwise stay unlabeled;
+* fragments are merged, and young strays are absorbed once the true identity matured;
+* confirmed identities are written to MongoDB incrementally and throttled, not only at
+  shutdown, and a database outage never stops recognition.
 """
-Identity Management System for Face Recognition Package
 
-This system manages persistent identity tracking across changing track IDs by:
-1. Assigning unique persistent IDs to detected humans
-2. Using face embedding clustering for re-identification
-3. Maintaining identity history and statistics
-4. Handling identity merging when multiple track IDs belong to same person
+from __future__ import annotations
 
-Adapted from EUT YOLO core identity management system.
-"""
-
+import logging
+import re
 import time
-import json
-import os
-import numpy as np
-from typing import Dict, List, Optional, Tuple, Set
-from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Set
 
-# MongoDB imports
-try:
-    import pymongo
-    from pymongo import MongoClient
-    _PYMONGO_AVAILABLE = True
-except ImportError:
-    _PYMONGO_AVAILABLE = False
+import numpy as np
 
-try:
-    from sklearn.cluster import DBSCAN
-    from scipy.spatial.distance import cosine
-    from sklearn.manifold import TSNE
-    from sklearn.decomposition import PCA
-    _SKLEARN_AVAILABLE = True
-except ImportError:
-    _SKLEARN_AVAILABLE = False
+STATUS_UNKNOWN = 0
+STATUS_TENTATIVE = 1
+STATUS_CONFIRMED = 2
 
 
 @dataclass
-class IdentityCluster:
-    """
-    Represents a unique identity with all associated data.
-    """
-    unique_id: str  # U1, U2, or custom name like "John"
+class FaceIdentityCluster:
+    """One persistent identity: its embedding population plus statistics."""
+
+    unique_id: str
     creation_timestamp: float
     last_seen_timestamp: float
-    
-    # Embedding data
+
     all_embeddings: List[np.ndarray] = field(default_factory=list)
-    embedding_confidences: List[float] = field(default_factory=list)
     mean_embedding: Optional[np.ndarray] = None
-    
-    # Track ID associations
-    associated_track_ids: Set[int] = field(default_factory=set)
-    current_track_id: int = field(default_factory=int)  # Currently active
-    
-    # Statistics
+
+    current_track_id: Optional[str] = None
     total_detections: int = 0
-    quality_score: float = 0.0  # Based on embedding consistency and detection count
-    
-    # User-defined properties
+    good_samples: int = 0
+    first_learned_timestamp: Optional[float] = None
+    last_learned_timestamp: Optional[float] = None
+    confirmed: bool = False
+    quality_score: float = 0.0
+
     custom_name: Optional[str] = None
-    metadata: Dict = field(default_factory=dict)
+    unsaved_updates: int = 0
+    persisted: bool = False
+    last_saved_timestamp: float = 0.0
 
 
-class IdentityManager:
+class FaceAssignment(NamedTuple):
+    unique_id: Optional[str]
+    confidence: float
+    status: int
+
+
+def normalize_embedding(embedding: np.ndarray) -> np.ndarray:
+    vector = np.asarray(embedding, dtype=np.float32).reshape(-1)
+    norm = float(np.linalg.norm(vector))
+    if not np.isfinite(norm) or norm <= 1e-8:
+        raise ValueError("Face embedding must be a finite, non-zero vector")
+    return vector / norm
+
+
+class MongoFaceIdentityStore:
+    """MongoDB persistence for :class:`FaceIdentityCluster`.
+
+    Documents are namespaced by ``model_key`` so embeddings of different models are
+    never compared. Documents without ``model_key`` (pre-refactor format) are ignored.
     """
-    Manages persistent identity tracking across changing track IDs.
-    Adapted from EUT YOLO identity management system.
-    """
-    
-    def __init__(self, 
-                 logger,
-                 mongo_uri: Optional[str] = None,
-                 mongo_db_name: Optional[str] = None,
-                 mongo_collection_name: Optional[str] = None,
-                 max_embeddings_per_identity: int = 50,
-                 similarity_threshold: float = 0.6,
-                 track_identity_stickiness_margin: float = 0.4,
-                 clustering_threshold: float = 0.7,
-                 embedding_inclusion_threshold: float = 0.6,
-                 identity_timeout: float = 60.0,
-                 min_detections_for_stable_identity: int = 5,
-                 enable_debug_output: bool = False,
-                 use_ewma_for_mean: bool = False,
-                 ewma_alpha: float = 0.6,
-                 use_mongodb: bool = True,
-                 save_last_n_embeddings: int = 20,
-                 min_embeddings_for_identity: int = 5):
-        """
-        Initialize the identity manager.
-        
-        Args:
-            logger: Logger instance for logging messages in ros2
-            use_mongodb: Whether to use MongoDB for identity persistence
-            mongo_uri: MongoDB URI for persistent identity storage
-            mongo_db_name: MongoDB database name
-            mongo_collection_name: MongoDB collection name
-            max_embeddings_per_identity: Maximum embeddings to store per identity
-            similarity_threshold: Threshold for considering embeddings similar (minimum for identity assignment)
-            track_identity_stickiness_margin: Maximum allowed similarity difference to prefer the previously assigned identity for a track
-            clustering_threshold: Threshold for clustering embeddings into identities
-            embedding_inclusion_threshold: Threshold for including embeddings in identity cluster (must be >= similarity_threshold)
-            identity_timeout: Time (seconds) after which inactive identity is considered lost
-            NOT IMPLEMENTED - min_detections_for_stable_identity: Minimum detections needed for stable identity
-            enable_debug_output: Enable detailed debug prints for embedding similarities and clustering
-            use_ewma_for_mean: Whether to use Exponentially Weighted Moving Average for updating mean embeddings
-            ewma_alpha: Learning rate for EWMA (0 < alpha < 1). Higher values adapt faster to new embeddings.
-            min_embeddings_for_identity: Minimum number of embeddings required to consider an identity valid (used for cleanup of inactive identities)
-        """
-        self.logger = logger
-        self.max_embeddings_per_identity = max_embeddings_per_identity
+
+    def __init__(self, mongo_uri: str, model_key: str, database_name: str = "face_recognition_db",
+                 collection_name: str = "identity_database", save_last_n_embeddings: int = 20) -> None:
+        from pymongo import MongoClient
+
+        self._model_key = model_key
+        self._save_last_n = max(1, save_last_n_embeddings)
+        self._client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+        self._client.admin.command("ping")
+        self._collection = self._client[database_name][collection_name]
+        self._collection.create_index([("model_key", 1), ("unique_id", 1)], unique=True)
+
+    def count_legacy_documents(self) -> int:
+        return self._collection.count_documents({"model_key": {"$exists": False}})
+
+    def load(self) -> List[FaceIdentityCluster]:
+        identities = []
+        for document in self._collection.find({"model_key": self._model_key}):
+            embeddings = [normalize_embedding(np.asarray(e, dtype=np.float32))
+                          for e in document.get("embeddings", [])]
+            mean = document.get("mean_embedding")
+            if mean is None and not embeddings:
+                continue
+            mean_vector = (normalize_embedding(np.asarray(mean, dtype=np.float32)) if mean is not None
+                           else normalize_embedding(np.mean(np.stack(embeddings), axis=0)))
+            identities.append(FaceIdentityCluster(
+                unique_id=document["unique_id"],
+                creation_timestamp=float(document.get("creation_timestamp", 0.0)),
+                last_seen_timestamp=float(document.get("last_seen_timestamp", 0.0)),
+                all_embeddings=embeddings or [mean_vector.copy()],
+                mean_embedding=mean_vector,
+                total_detections=int(document.get("total_detections", 0)),
+                good_samples=int(document.get("good_samples", len(embeddings))),
+                confirmed=bool(document.get("confirmed", True)),
+                quality_score=float(document.get("quality_score", 0.0)),
+                custom_name=document.get("custom_name"),
+            ))
+        return identities
+
+    def save(self, identity: FaceIdentityCluster) -> None:
+        if identity.mean_embedding is None:
+            return
+        self._collection.update_one(
+            {"model_key": self._model_key, "unique_id": identity.unique_id},
+            {"$set": {
+                "model_key": self._model_key,
+                "unique_id": identity.unique_id,
+                "creation_timestamp": float(identity.creation_timestamp),
+                "last_seen_timestamp": float(identity.last_seen_timestamp),
+                "total_detections": int(identity.total_detections),
+                "good_samples": int(identity.good_samples),
+                "confirmed": bool(identity.confirmed),
+                "quality_score": float(identity.quality_score),
+                "custom_name": identity.custom_name,
+                "embeddings": [e.astype(float).tolist() for e in identity.all_embeddings[-self._save_last_n:]],
+                "mean_embedding": identity.mean_embedding.astype(float).tolist(),
+                "updated_at": time.time(),
+            }},
+            upsert=True,
+        )
+
+    def delete(self, unique_id: str) -> None:
+        self._collection.delete_one({"model_key": self._model_key, "unique_id": unique_id})
+
+    def close(self) -> None:
+        self._client.close()
+
+
+class FaceIdentityManager:
+    """Assign transient face tracks to persistent identities."""
+
+    def __init__(
+        self,
+        *,
+        logger=None,
+        store=None,
+        clock: Callable[[], float] = time.time,
+        similarity_threshold: float = 0.50,
+        young_identity_threshold: float = 0.40,
+        match_margin: float = 0.08,
+        stickiness_margin: float = 0.20,
+        merge_threshold: float = 0.70,
+        min_learn_quality: float = 0.50,
+        min_seed_samples: int = 4,
+        seed_consistency: float = 0.55,
+        seed_pairwise_consistency: float = 0.40,
+        min_confirm_samples: int = 12,
+        min_confirm_seconds: float = 1.0,
+        max_embeddings_per_identity: int = 100,
+        min_embeddings_for_merge: int = 6,
+        identity_timeout: float = 30.0,
+        track_timeout: float = 2.0,
+        persist_every: int = 20,
+        min_persist_interval: float = 10.0,
+    ) -> None:
+        self._logger = logger or logging.getLogger(__name__)
+        self._store = store
+        self._clock = clock
         self.similarity_threshold = similarity_threshold
-        self.track_identity_stickiness_margin = track_identity_stickiness_margin
-        self.clustering_threshold = clustering_threshold
-        self.embedding_inclusion_threshold = max(embedding_inclusion_threshold, similarity_threshold)
+        self.young_identity_threshold = min(young_identity_threshold, similarity_threshold)
+        self.match_margin = match_margin
+        self.stickiness_margin = stickiness_margin
+        self.merge_threshold = merge_threshold
+        self.min_learn_quality = min_learn_quality
+        self.min_seed_samples = max(1, min_seed_samples)
+        self.seed_consistency = seed_consistency
+        self.seed_pairwise_consistency = seed_pairwise_consistency
+        self.min_confirm_samples = min_confirm_samples
+        self.min_confirm_seconds = min_confirm_seconds
+        self.max_embeddings_per_identity = max(1, max_embeddings_per_identity)
+        self.min_embeddings_for_merge = min_embeddings_for_merge
         self.identity_timeout = identity_timeout
-        self.min_detections_for_stable_identity = min_detections_for_stable_identity
-        self.enable_debug_output = enable_debug_output
-        self.min_embeddings_for_identity = min_embeddings_for_identity
-        
+        self.track_timeout = track_timeout
+        self.persist_every = max(1, persist_every)
+        self.min_persist_interval = min_persist_interval
 
-        # MongoDB parameters
-        self.use_mongodb = use_mongodb
-        self.save_last_n_embeddings = save_last_n_embeddings  # Number of recent embeddings to save in MongoDB for each identity
-        self.mongo_uri = mongo_uri
-        self.mongo_db_name = mongo_db_name
-        self.mongo_collection_name = mongo_collection_name
-        self.mongo_client = None
-        self.mongo_collection = None
-        
-        # EWMA parameters for mean embedding updates
-        self.use_ewma_for_mean = use_ewma_for_mean
-        self.ewma_alpha = max(0.01, min(0.99, ewma_alpha))  # Clamp alpha to (0.01, 0.99) for stability
-        
-        # Core data structures
-        self.identity_clusters: Dict[str, IdentityCluster] = {}  # unique_id -> IdentityCluster
-        self.track_id_to_unique_id: Dict[int, str] = {}  # track_id -> unique_id
-        
-        # Identity creation tracking
-        self.next_user_number = 1
-        self.pending_identities: Dict[int, List[np.ndarray]] = {}  # track_id -> embeddings
-        
-        # Performance tracking
+        self.identity_clusters: Dict[str, FaceIdentityCluster] = {}
+        self.track_id_to_unique_id: Dict[str, str] = {}
+        self._track_last_seen: Dict[str, float] = {}
+        self._seed_buffers: Dict[str, List[np.ndarray]] = {}
+        self._next_user_number = 1
+
         self.total_identities_created = 0
-        self.total_re_identifications = 0
         self.total_identity_merges = 0
-        
-        # Fixed color mapping for consistent visualization
-        self.identity_color_mapping: Dict[str, str] = {}  # unique_id -> color
-        self.available_colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan',
-                                'magenta', 'yellow', 'navy', 'lime', 'maroon', 'teal', 'silver', 'gold', 'indigo', 'coral']
-        
-        # Initialize MongoDB connection
-        if self.use_mongodb:
-            if _PYMONGO_AVAILABLE and self.mongo_uri and self.mongo_db_name and self.mongo_collection_name:
-                try:
-                    self.mongo_client = MongoClient(self.mongo_uri)
-                    self.mongo_collection = self.mongo_client[self.mongo_db_name][self.mongo_collection_name]
-                    self.logger.info(f"[INFO] Connected to MongoDB at {self.mongo_uri}, database: {self.mongo_db_name}, collection: {self.mongo_collection_name}")
-                    
-                    # Load existing identities from MongoDB on startup
-                    self.load_identity_database(self.save_last_n_embeddings)
-                except Exception as e:
-                    self.logger.error(f"[ERROR] Failed to connect to MongoDB: {e}")
-            else:
-                if not _PYMONGO_AVAILABLE:
-                    self.logger.warning("[WARNING] pymongo not available, identity persistence disabled")
-                else:
-                    self.logger.warning("[WARNING] MongoDB connection parameters not provided, identity persistence disabled")
-        else:
-            self.logger.info("[INFO] MongoDB persistence disabled, identities will not be saved across sessions")
-    def process_new_embedding_batch(self, track_embeddings: Dict[int, np.ndarray]) -> Dict[int, Tuple[Optional[str], float]]:
-        """
-        Process multiple new face embeddings in batch and assign/update identities.
-        
-        This batched version allows for optimal identity assignment by comparing all
-        embeddings against all identities simultaneously, preventing conflicts and
-        enabling better assignment decisions.
-        
-        Args:
-            track_embeddings: Dictionary mapping track_id -> embedding
-            
-        Returns:
-            Dictionary mapping track_id -> (unique_id, confidence_score)
-            where confidence_score is the cosine similarity of the best match
-        """
-        current_time = time.time()
-        results = {}
-        
+        self.total_saves = 0
+
+        if self._store is not None:
+            for identity in self._store.load():
+                identity.persisted = True
+                identity.last_saved_timestamp = self._clock()
+                self.identity_clusters[identity.unique_id] = identity
+                self._next_user_number = max(self._next_user_number, self._user_number(identity.unique_id) + 1)
+        loaded = ", ".join(sorted(self.identity_clusters, key=self._user_number))
+        self._logger.info(f"Face identity manager ready with {len(self.identity_clusters)} persistent identities"
+                          + (f": {loaded}" if loaded else ""))
+
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
+
+    def process_new_embedding_batch(self, track_embeddings: Dict[str, np.ndarray],
+                                    quality: Dict[str, float] | float = 1.0) -> Dict[str, FaceAssignment]:
+        """Assign every face of one frame. Unmatched faces get ``unique_id=None``."""
         if not track_embeddings:
-            return results
+            return {}
+        now = self._clock()
 
-        # Perform merges before matching
-        self._check_and_perform_merges_batch()
+        self._merge_similar_identities()
+        self._absorb_stray_identities()
 
-        # Normalize all embeddings
-        normalized_embeddings = {}
+        vectors: Dict[str, np.ndarray] = {}
         for track_id, embedding in track_embeddings.items():
-            normalized_embeddings[track_id] = self._normalize_embedding(embedding)
-        
-        if self.enable_debug_output:
-            self.logger.debug(f"[IDENTITY_DEBUG] Processing {len(normalized_embeddings)} embeddings in batch")
+            try:
+                vectors[track_id] = normalize_embedding(embedding)
+            except ValueError:
+                continue
+        track_ids = list(vectors)
+        assignments = self._assign_batch(track_ids, vectors)
 
-        # Get batched identity matches with similarity matrix
-        match_results = self._find_best_identity_match_batch(list(normalized_embeddings.values()), list(normalized_embeddings.keys()))
-        
-        # match_results contains: (similarity_matrix, best_matches)
-        similarity_matrix, best_matches = match_results
-        track_ids = list(normalized_embeddings.keys())
+        results: Dict[str, FaceAssignment] = {}
+        for track_id in track_ids:
+            self._track_last_seen[track_id] = now
+            unique_id, score = assignments[track_id]
+            good = self._per_track(quality, track_id) >= self.min_learn_quality
 
-        # Process each track's assignment
-        for i, track_id in enumerate(track_ids):
-            unique_id, confidence = best_matches[i]
-            
-            if unique_id is not None:
-                # Update existing identity
-                self._update_existing_identity(unique_id, track_id, normalized_embeddings[track_id], confidence, current_time, confidence)
-                results[track_id] = (unique_id, confidence)
-                if self.enable_debug_output:
-                    self.logger.debug(f"[IDENTITY_DEBUG] Track {track_id} assigned to existing identity {unique_id} with confidence {confidence:.3f}")
-            else:
-                # Create new identity
-                new_unique_id = self._create_new_identity(track_id, [normalized_embeddings[track_id]], confidence, current_time)
-                results[track_id] = (new_unique_id, confidence)
-                if self.enable_debug_output:
-                    self.logger.debug(f"[IDENTITY_DEBUG] Track {track_id} assigned to new identity {new_unique_id}")
+            if unique_id is None:
+                if self.track_id_to_unique_id.get(track_id) not in self.identity_clusters:
+                    self.track_id_to_unique_id.pop(track_id, None)
+                created = self._seed(track_id, vectors[track_id], now) if good else None
+                results[track_id] = (FaceAssignment(created, 1.0, STATUS_TENTATIVE) if created
+                                     else FaceAssignment(None, 0.0, STATUS_UNKNOWN))
+                continue
 
-        if self.enable_debug_output:
-            self.logger.debug(f"[IDENTITY_DEBUG] Batch processing complete. Total identities: {len(self.identity_clusters)}")
+            self._seed_buffers.pop(track_id, None)
+            identity = self.identity_clusters[unique_id]
+            self.track_id_to_unique_id[track_id] = unique_id
+            identity.current_track_id = track_id
+            identity.last_seen_timestamp = now
+            identity.total_detections += 1
+            bar = self.similarity_threshold if identity.confirmed else self.young_identity_threshold
+            if good and score >= bar:
+                self._add_embedding(identity, vectors[track_id], now)
+            results[track_id] = FaceAssignment(
+                unique_id, max(0.0, score), STATUS_CONFIRMED if identity.confirmed else STATUS_TENTATIVE)
 
+        self._cleanup_stale_tracks(now)
         self.cleanup_inactive_identities()
-
         return results
 
-    def _find_best_identity_match_batch(self, embeddings: List[np.ndarray], track_ids: List[int] = None, 
-                                       mode: str = 'accurate', n_recent_embeddings: int = 20, n_top_embed: int = 10,
-                                       min_embeddings_for_accurate_rep: int = 20) -> Tuple[np.ndarray, List[Tuple[Optional[str], float]]]:
-        """
-        Find the best matching existing identities for a batch of embeddings with exclusive assignment.
-        Each identity can only be assigned to one track (1:1 mapping).
-        
-        Args:
-            embeddings: List of normalized embeddings to match
-            track_ids: List of track IDs for debugging output (optional)
-            n_recent_embeddings: Number of recent embeddings to consider
-            mode: Matching mode ('fast' or 'accurate')
-                  'fast': Uses only mean embeddings for matching
-                  'accurate': Uses mean + recent + top confidence embeddings for better matching
-            min_embeddings_for_accurate_rep: Minimum number of embeddings required for an identity to use the combined representation in 'accurate' mode (otherwise falls back to mean only)
-        Returns:
-            Tuple of (similarity_matrix, best_matches)
-            - similarity_matrix: shape (n_embeddings, n_identities) with cosine similarities
-            - best_matches: List of (unique_id, confidence) for each embedding
-        """
-        if not embeddings or not self.identity_clusters:
-            return np.array([]), [(None, 0.0) for _ in embeddings]
-        
-        # Get all identity mean embeddings
-        identity_ids = list(self.identity_clusters.keys())
-        
-        if mode == "accurate":
-            # Build one representative vector per identity (either mean-only or combined)
-            reps: List[Optional[np.ndarray]] = []
-            for unique_id in identity_ids:
-                c = self.identity_clusters[unique_id]
-                if c.mean_embedding is None:
-                    reps.append(None)
-                    continue
+    # ------------------------------------------------------------------
+    # Matching
+    # ------------------------------------------------------------------
 
-                # If too few embeddings, use mean only (more stable / less noisy)
-                n_emb = len(c.all_embeddings)
-                if n_emb < min_embeddings_for_accurate_rep:
-                    rep = self._normalize_embedding(c.mean_embedding)
-                    reps.append(rep)
-                    continue
+    def _assign_batch(self, track_ids: Sequence[str], vectors: Dict[str, np.ndarray]):
+        result = {track_id: (None, 0.0) for track_id in track_ids}
+        identity_ids = [uid for uid, c in self.identity_clusters.items() if c.mean_embedding is not None]
+        if not identity_ids or not track_ids:
+            return result
 
-                mean = c.mean_embedding
+        representations = np.stack([self._representation(self.identity_clusters[uid]) for uid in identity_ids])
+        similarity = np.stack([vectors[t] for t in track_ids]) @ representations.T
 
-                # Recent avg
-                recent = c.all_embeddings[-min(n_recent_embeddings, n_emb):]
-                recent_avg = np.mean(recent, axis=0) if len(recent) > 0 else mean
+        # Most confident faces first, so a strong match claims its identity before an ambiguous one.
+        order = sorted(range(len(track_ids)), key=lambda i: float(np.max(similarity[i])), reverse=True)
+        claimed: Set[int] = set()
+        for row in order:
+            track_id = track_ids[row]
+            scores = similarity[row]
+            available = [j for j in range(len(identity_ids)) if j not in claimed]
+            if not available:
+                break
+            ranked = sorted(available, key=lambda j: float(scores[j]), reverse=True)
+            best = ranked[0]
+            best_score = float(scores[best])
+            second_score = float(scores[ranked[1]]) if len(ranked) > 1 else -1.0
 
-                # Top confidence avg
-                if c.embedding_confidences and len(c.embedding_confidences) == n_emb:
-                    conf_emb_pairs = list(zip(c.embedding_confidences, c.all_embeddings))
-                    conf_emb_pairs.sort(key=lambda x: x[0], reverse=True)
-                    top = [emb for _, emb in conf_emb_pairs[:min(n_top_embed, n_emb)]]
-                else:
-                    # fallback if confidences missing/misaligned
-                    top = c.all_embeddings[:min(n_top_embed, n_emb)]
+            chosen = None
+            previous = self.track_id_to_unique_id.get(track_id)
+            if previous in identity_ids:
+                previous_index = identity_ids.index(previous)
+                if previous_index not in claimed:
+                    previous_score = float(scores[previous_index])
+                    if (previous_score >= self.young_identity_threshold
+                            and previous_score >= best_score - self.stickiness_margin):
+                        chosen, best_score = previous_index, previous_score
 
-                top_avg = np.mean(top, axis=0) if len(top) > 0 else mean
+            if chosen is None:
+                required = self._required_score(self.identity_clusters[identity_ids[best]])
+                # A near-tie means the faces cannot be told apart: leave unlabeled.
+                if best_score >= required and (best_score - second_score >= self.match_margin or len(ranked) == 1):
+                    chosen = best
 
-                rep = 0.3 * mean + 0.4 * recent_avg + 0.3 * top_avg
-                rep = self._normalize_embedding(rep)
-                reps.append(rep)
+            if chosen is not None:
+                claimed.add(chosen)
+                result[track_id] = (identity_ids[chosen], best_score)
+        return result
 
-            # Filter identities with valid reps
-            valid_cols = [j for j, r in enumerate(reps) if r is not None]
-            if not valid_cols:
-                return np.array([]), [(None, 0.0) for _ in embeddings]
+    def _required_score(self, identity: FaceIdentityCluster) -> float:
+        return self.similarity_threshold if identity.confirmed else self.young_identity_threshold
 
-            reps_matrix = np.stack([reps[j] for j in valid_cols], axis=0)  # (n_valid_id, d)
-            emb_matrix = np.stack(embeddings, axis=0)                      # (n_tracks, d)
+    def _representation(self, identity: FaceIdentityCluster) -> np.ndarray:
+        """Blend the mean with recent history so one drifting vector cannot define a face."""
+        if len(identity.all_embeddings) < 4:
+            return identity.mean_embedding
+        recent = np.mean(np.stack(identity.all_embeddings[-10:]), axis=0)
+        return normalize_embedding(0.6 * identity.mean_embedding + 0.4 * recent)
 
-            # Cosine similarity since normalized
-            sim = emb_matrix @ reps_matrix.T                               # (n_tracks, n_valid_id)
+    def score(self, unique_id: str, embedding: np.ndarray) -> Optional[float]:
+        identity = self.identity_clusters.get(unique_id)
+        if identity is None or identity.mean_embedding is None:
+            return None
+        return float(normalize_embedding(embedding) @ self._representation(identity))
 
-            # Expand back to full (n_tracks, n_identities)
-            similarity_matrix = np.zeros((len(embeddings), len(identity_ids)), dtype=np.float32)
-            for k, j in enumerate(valid_cols):
-                similarity_matrix[:, j] = sim[:, k]
+    # ------------------------------------------------------------------
+    # Identity lifecycle
+    # ------------------------------------------------------------------
 
-            if self.enable_debug_output:
-                self.logger.debug(
-                    f"[IDENTITY_DEBUG] Accurate mode reps built. "
-                    f"min_embeddings_for_accurate_rep={min_embeddings_for_accurate_rep}, "
-                    f"matrix={similarity_matrix.shape}"
-                )
-            if self.enable_debug_output:
-                self.logger.debug(f"[IDENTITY_DEBUG] Accurate mode: computed combined similarity matrix shape: {similarity_matrix.shape}")
-        
-        else:
-            # Fast mode: use only mean embeddings
-            identity_embeddings_matrix = [
-                self.identity_clusters[unique_id].mean_embedding 
-                for unique_id in identity_ids 
-                if self.identity_clusters[unique_id].mean_embedding is not None
-            ]
-        
-            if not identity_embeddings_matrix:
-                return np.array([]), [(None, 0.0) for _ in embeddings]
-            
-            # Calculate similarity matrix
-            similarity_matrix = np.zeros((len(embeddings), len(identity_ids)))
-            for i, embedding in enumerate(embeddings):
-                for j, identity_embedding in enumerate(identity_embeddings_matrix):
-                    if identity_embedding is not None:
-                        similarity = 1 - cosine(embedding, identity_embedding)
-                        similarity_matrix[i, j] = similarity
-        
-        # Debug: Print the similarity matrix
-        if self.enable_debug_output:
-            self.logger.debug("[IDENTITY_DEBUG] Similarity Matrix:")
-            # Convert numpy similarity matrix to a readable string before logging to avoid
-            # passing non-string objects to the ROS2 logger (which expects a str message).
-            try:
-                # Limit verbosity while keeping enough detail for debugging
-                sim_str = np.array2string(similarity_matrix, precision=3, threshold=1000, max_line_width=200)
-            except Exception:
-                sim_str = str(similarity_matrix)
-            self.logger.debug(sim_str)
-        
-        # Find best matches with exclusive assignment (no identity can be assigned to multiple tracks)
-        best_matches = []
-        used_identity_indices = set()  # Track which identities have been assigned
+    def _seed(self, track_id: str, vector: np.ndarray, now: float) -> Optional[str]:
+        """Collect good samples of an unmatched track; create an identity once they agree."""
+        buffer = self._seed_buffers.setdefault(track_id, [])
+        buffer.append(vector)
+        del buffer[:-self.min_seed_samples * 2]
+        if len(buffer) < self.min_seed_samples:
+            return None
+        recent = np.stack(buffer[-self.min_seed_samples:])
+        mean = normalize_embedding(recent.mean(axis=0))
+        consistency = float(np.min(recent @ mean))
+        pairwise = recent @ recent.T
+        pairwise_mean = float((pairwise.sum() - np.trace(pairwise)) / (len(recent) * (len(recent) - 1))) if len(recent) > 1 else 1.0
+        # Both checks: a track alternating between two people has a mean halfway
+        # between them, so every sample still scores ~0.7 against it; the pairwise
+        # mean exposes the mixture.
+        if consistency < self.seed_consistency or pairwise_mean < self.seed_pairwise_consistency:
+            return None  # the track mixes people or poses: keep waiting
 
-        # Get previous IDs of the tracks for stickiness
-        previous_ids_per_trackid = {}
-        for unique_id, cluster in self.identity_clusters.items():
-            for track_id in cluster.associated_track_ids:
-                previous_ids_per_trackid[track_id] = unique_id
-
-        # Get track indices sorted by their best similarity score (descending)
-        track_best_similarities = []
-        for i, embedding_similarities in enumerate(similarity_matrix):
-            best_sim = np.max(embedding_similarities)
-            track_best_similarities.append((i, best_sim))
-        
-        # Sort tracks by best similarity (highest first) to prioritize better matches
-        track_best_similarities.sort(key=lambda x: x[1], reverse=True)
-        
-        # Initialize all matches as None
-        best_matches = [(None, 0.0) for _ in range(len(similarity_matrix))]
-        
-
-        # Assign identities in order of best similarity, ensuring exclusive assignment
-        for track_idx, _ in track_best_similarities:
-            track_id = track_ids[track_idx] if track_ids else track_idx
-            
-            # Get similarities for this track
-            similarities = similarity_matrix[track_idx]
-            
-            # Find best available identity (not yet assigned)
-            best_identity_idx = None
-            best_similarity = self.similarity_threshold
-            
-            # Check if this track had a previous identity and if it's still good enough
-            previous_unique_id = previous_ids_per_trackid.get(track_id)
-            if previous_unique_id in identity_ids:
-                prev_identity_idx = identity_ids.index(previous_unique_id)
-                if prev_identity_idx not in used_identity_indices:
-                    prev_similarity = similarities[prev_identity_idx]
-                    
-                    # Check if the previous identity is still within the stickiness margin
-                    best_available_sim = np.max([sim for j, sim in enumerate(similarities) if j not in used_identity_indices])
-                    if prev_similarity >= best_available_sim - self.track_identity_stickiness_margin:
-                        best_identity_idx = prev_identity_idx
-                        best_similarity = prev_similarity
-            
-            # If no sticky assignment, find the best available identity
-            if best_identity_idx is None:
-                for j, similarity in enumerate(similarities):
-                    if j not in used_identity_indices and similarity > best_similarity:
-                        best_identity_idx = j
-                        best_similarity = similarity
-            
-            # Assign if a good match was found
-            if best_identity_idx is not None:
-                unique_id = identity_ids[best_identity_idx]
-                best_matches[track_idx] = (unique_id, best_similarity)
-                used_identity_indices.add(best_identity_idx)
-                    # Debug: Print the best matches after initialization
-        if self.enable_debug_output:
-            self.logger.debug("[IDENTITY_DEBUG] Best Matches (Initialized):")
-            # Format best_matches as a concise string to avoid passing complex objects
-            try:
-                matches_str = ", ".join([
-                    f"{uid}:{conf:.3f}" if uid is not None else f"None:{conf:.3f}"
-                    for uid, conf in best_matches
-                ])
-            except Exception:
-                matches_str = str(best_matches)
-            self.logger.debug(matches_str)
-        return similarity_matrix, best_matches
-    
-    def _create_new_identity(self, track_id: int, embeddings: List[np.ndarray], confidence: float, timestamp: float) -> str:
-        """
-        Create a new identity for a track with collected embeddings.
-        
-        Args:
-            track_id: Track ID to create identity for
-            embeddings: List of embeddings for this track
-            confidence: Confidence score
-            timestamp: Current timestamp
-            
-        Returns:
-            unique_id: The newly created identity ID
-        """
-        unique_id = f"U{self.next_user_number}"
-        self.next_user_number += 1
-        
-        if self.enable_debug_output:
-            self.logger.debug(f"[IDENTITY_DEBUG] Creating new identity {unique_id} for track {track_id}")
-        
-        # Create new identity cluster
-        new_cluster = IdentityCluster(
-            unique_id=unique_id,
-            creation_timestamp=timestamp,
-            last_seen_timestamp=timestamp
-        )
-        
-        self.identity_clusters[unique_id] = new_cluster
-        
-        # Add all embeddings to the new identity
-        for embedding in embeddings:
-            self._add_embedding_to_cluster(new_cluster, embedding, confidence)
-        
-        # Set track mapping
+        unique_id = f"U{self._next_user_number}"
+        self._next_user_number += 1
+        identity = FaceIdentityCluster(unique_id=unique_id, creation_timestamp=now, last_seen_timestamp=now,
+                                       current_track_id=track_id, total_detections=len(recent))
+        self.identity_clusters[unique_id] = identity
+        for sample in recent:
+            self._add_embedding(identity, sample, now)
         self.track_id_to_unique_id[track_id] = unique_id
-        
+        self._seed_buffers.pop(track_id, None)
         self.total_identities_created += 1
-        self.logger.debug(f"[IDENTITY] Created new identity {unique_id} for track {track_id}")
-        
+        self._logger.info(f"New face identity {unique_id} (track {track_id}, seed consistency {consistency:.3f})")
         return unique_id
-    
-    def _update_existing_identity(self, unique_id: str, track_id: int, 
-                                 embedding: np.ndarray, confidence: float, timestamp: float,
-                                 embedding_similarity: float = None):
-        """
-        Update an existing identity with new embedding data.
-        
-        Args:
-            unique_id: The identity to update
-            track_id: Current track ID
-            embedding: Face embedding vector
-            confidence: Confidence of the embedding
-            timestamp: Current timestamp
-            embedding_similarity: Similarity score between this embedding and the identity (if available)
-        """
-        if unique_id not in self.identity_clusters:
-            return
-        
-        cluster = self.identity_clusters[unique_id]
-        
-        # Check if embedding should be included in the cluster based on similarity
-        should_include_embedding = True
-        if embedding_similarity is not None:
-            should_include_embedding = embedding_similarity >= self.embedding_inclusion_threshold
-        elif cluster.mean_embedding is not None:
-            similarity = 1 - cosine(embedding, cluster.mean_embedding)
-            should_include_embedding = similarity >= self.embedding_inclusion_threshold
-        
-        # Only add embedding to cluster if it meets the inclusion threshold
-        if should_include_embedding:
-            self._add_embedding_to_cluster(cluster, embedding, confidence)
-        
-        # Always update associations, timestamps and statistics regardless of embedding inclusion
-        cluster.associated_track_ids.add(track_id)
-        cluster.current_track_id = track_id
-        cluster.last_seen_timestamp = timestamp
-        cluster.total_detections += 1
-        
-        # Update quality score
-        cluster.quality_score = self._calculate_quality_score(cluster)
-        
-        # Update track_id mapping
-        self.track_id_to_unique_id[track_id] = unique_id
-    
-    def _add_embedding_to_cluster(self, cluster: IdentityCluster, embedding: np.ndarray, confidence: float):
-        """Add an embedding to an identity cluster."""
-        # Ensure embedding is normalized before storing
-        embedding = self._normalize_embedding(embedding)
-        
-        # Add to cluster
-        cluster.all_embeddings.append(embedding)
-        cluster.embedding_confidences.append(confidence)
-        
-        # Maintain maximum embeddings per identity
-        if len(cluster.all_embeddings) > self.max_embeddings_per_identity:
-            cluster.all_embeddings.pop(0)
-            cluster.embedding_confidences.pop(0)
-        
-        # Update mean embedding
-        if self.use_ewma_for_mean and cluster.mean_embedding is not None:
-            # EWMA update: new_mean = alpha * new_embedding + (1-alpha) * old_mean
-            cluster.mean_embedding = self.ewma_alpha * embedding + (1 - self.ewma_alpha) * cluster.mean_embedding
-        else:
-            # Traditional averaging
-            cluster.mean_embedding = np.mean(cluster.all_embeddings, axis=0)
-    
-    def _calculate_quality_score(self, cluster: IdentityCluster) -> float:
-        """Calculate quality score for an identity cluster."""
-        if len(cluster.all_embeddings) < 2:
+
+    def _add_embedding(self, identity: FaceIdentityCluster, vector: np.ndarray, now: float) -> None:
+        identity.all_embeddings.append(vector.copy())
+        if len(identity.all_embeddings) > self.max_embeddings_per_identity:
+            del identity.all_embeddings[0]
+        identity.mean_embedding = normalize_embedding(np.mean(np.stack(identity.all_embeddings), axis=0))
+        identity.good_samples += 1
+        identity.unsaved_updates += 1
+        if identity.first_learned_timestamp is None:
+            identity.first_learned_timestamp = now
+        identity.last_learned_timestamp = now
+        identity.quality_score = self._quality_score(identity)
+
+        if not identity.confirmed and (
+                identity.good_samples >= self.min_confirm_samples
+                and now - identity.first_learned_timestamp >= self.min_confirm_seconds):
+            identity.confirmed = True
+            self._logger.info(f"Face identity {identity.unique_id} confirmed ({identity.good_samples} samples)")
+        self._maybe_save(identity, now)
+
+    def _quality_score(self, identity: FaceIdentityCluster) -> float:
+        if len(identity.all_embeddings) < 2 or identity.mean_embedding is None:
             return 0.0
-        
-        # Consistency score based on embedding similarity
-        similarities = []
-        mean_emb = cluster.mean_embedding
-        
-        for emb in cluster.all_embeddings[-10:]:  # Use last 10 embeddings
-            similarity = 1 - cosine(emb, mean_emb)
-            similarities.append(similarity)
-        
-        consistency_score = np.mean(similarities) if similarities else 0.0
-        
-        # Detection count score
-        detection_score = min(cluster.total_detections / 50.0, 1.0)  # Normalize to 0-1
-        
-        # Time stability score
-        time_active = cluster.last_seen_timestamp - cluster.creation_timestamp
-        time_score = min(time_active / 60.0, 1.0)  # Normalize to 0-1 (60 seconds max)
-        
-        # Combined quality score
-        quality = 0.5 * consistency_score + 0.3 * detection_score + 0.2 * time_score
-        return quality
-    
-    def _check_and_perform_merges_batch(self, mode: str = 'fast', n_recent_embeddings: int = 16, n_top_embed: int = 10, min_embeddings_for_merge: int = 10):
-        """
-        Check all identities for potential merges using batch processing similar to _find_best_identity_match_batch.
-        This compares all identities against each other using similarity matrices.
-        
-        Args:
-            mode: Matching mode ('fast' or 'accurate')
-                  'fast': Uses only mean embeddings for comparison
-                  'accurate': Uses mean + recent + top confidence embeddings for better comparison
-            n_recent_embeddings: Number of recent embeddings to consider in accurate mode
-            n_top_embed: Number of top confidence embeddings to consider in accurate mode
-            min_embeddings_for_merge: Minimum number of embeddings required for an identity to be considered for merging (to ensure stable representations)
-        """
-        if len(self.identity_clusters) < 2:
-            return  # Need at least 2 identities to merge
-        
-        # Get all identity IDs and their clusters
-        identity_ids = list(self.identity_clusters.keys())
-        
-        # Filter out identities without embeddings
-        valid_identity_ids = []
-        valid_clusters = []
-        for unique_id in identity_ids:
-            cluster = self.identity_clusters[unique_id]
-            if cluster.mean_embedding is not None and len(cluster.all_embeddings) >= min_embeddings_for_merge:
-                valid_identity_ids.append(unique_id)
-                valid_clusters.append(cluster)
-        
-        if len(valid_clusters) < 2:
-            return  # Need at least 2 valid identities to merge
-        
-        if self.enable_debug_output:
-            self.logger.debug(f"[IDENTITY_DEBUG] Batch merge check: comparing {len(valid_clusters)} identities")
-            self.logger.debug(f"[IDENTITY_DEBUG] Identity IDs: {valid_identity_ids}")
-        
-        # Use clustering threshold for merges
-        merge_threshold = max(0.0, self.clustering_threshold)
-        if self.enable_debug_output:
-            self.logger.debug(f"[IDENTITY_DEBUG] Using merge threshold: {merge_threshold:.3f}")
-        
-        # Compute similarity matrix between all identities
-        if mode == "accurate":
-            # Accurate mode: compute 3 types of similarities (mean, recent, top confidence)
-            mean_embeddings = []
-            recent_embeddings_lists = []  # List of lists for recent embeddings
-            top_conf_embeddings_lists = []  # List of lists for top confidence embeddings
-            
-            for cluster in valid_clusters:
-                # 1. Mean embedding
-                mean_embeddings.append(cluster.mean_embedding)
-                
-                # 2. Recent embeddings (last n_recent_embeddings)
-                recent_embeddings = cluster.all_embeddings[-n_recent_embeddings:]
-                recent_embeddings_lists.append(recent_embeddings)
-                
-                # 3. Top confidence embeddings (top n_top_embed)
-                if len(cluster.embedding_confidences) > 0:
-                    conf_emb_pairs = list(zip(cluster.embedding_confidences, cluster.all_embeddings))
-                    conf_emb_pairs.sort(key=lambda x: x[0], reverse=True)  # Sort by confidence
-                    top_embeddings = [emb for _, emb in conf_emb_pairs[:n_top_embed]]
-                else:
-                    top_embeddings = cluster.all_embeddings[:n_top_embed] if len(cluster.all_embeddings) >= n_top_embed else cluster.all_embeddings
-                top_conf_embeddings_lists.append(top_embeddings)
-            
-            # Convert to numpy arrays for efficient computation
-            mean_identities_matrix = np.array(mean_embeddings)  # shape: (n_identities, embedding_dim)
-            
-            # Compute 3 similarity matrices
-            # 1. Mean similarity matrix (identity x identity)
-            mean_similarity_matrix = np.dot(mean_identities_matrix, mean_identities_matrix.T)
-            
-            # 2. Recent embeddings similarity matrix (max similarity with recent embeddings)
-            recent_similarity_matrix = np.zeros((len(valid_clusters), len(valid_clusters)))
-            for i, recent_embs_i in enumerate(recent_embeddings_lists):
-                for j, recent_embs_j in enumerate(recent_embeddings_lists):
-                    if i != j and recent_embs_i and recent_embs_j:
-                        recent_matrix_i = np.array(recent_embs_i)  # shape: (n_recent_i, embedding_dim)
-                        recent_matrix_j = np.array(recent_embs_j)  # shape: (n_recent_j, embedding_dim)
-                        # Compute similarity between all pairs and take max
-                        similarity_cross = np.dot(recent_matrix_i, recent_matrix_j.T)  # shape: (n_recent_i, n_recent_j)
-                        recent_similarity_matrix[i, j] = np.max(similarity_cross)
-            
-            # 3. Top confidence embeddings similarity matrix
-            top_conf_similarity_matrix = np.zeros((len(valid_clusters), len(valid_clusters)))
-            for i, top_conf_embs_i in enumerate(top_conf_embeddings_lists):
-                for j, top_conf_embs_j in enumerate(top_conf_embeddings_lists):
-                    if i != j and top_conf_embs_i and top_conf_embs_j:
-                        top_conf_matrix_i = np.array(top_conf_embs_i)  # shape: (n_top_i, embedding_dim)
-                        top_conf_matrix_j = np.array(top_conf_embs_j)  # shape: (n_top_j, embedding_dim)
-                        # Compute similarity between all pairs and take max
-                        similarity_cross = np.dot(top_conf_matrix_i, top_conf_matrix_j.T)  # shape: (n_top_i, n_top_j)
-                        top_conf_similarity_matrix[i, j] = np.max(similarity_cross)
-            
-            # Combined similarity matrix: weighted combination of the 3 matrices
-            combined_similarity_matrix = (0.5 * mean_similarity_matrix + 
-                                        0.3 * recent_similarity_matrix + 
-                                        0.2 * top_conf_similarity_matrix)
-            
-            similarity_matrix = combined_similarity_matrix
-            
-            if self.enable_debug_output:
-                self.logger.debug(f"[IDENTITY_DEBUG] Accurate mode: computed combined similarity matrix shape: {similarity_matrix.shape}")
-        
-        else:
-            # Fast mode: Use only mean embeddings
-            mean_embeddings = [cluster.mean_embedding for cluster in valid_clusters]
-            
-            # Convert to numpy arrays for efficient computation
-            identities_matrix = np.array(mean_embeddings)  # shape: (n_identities, embedding_dim)
-            
-            # Compute cosine similarity matrix: identities x identities
-            similarity_matrix = np.dot(identities_matrix, identities_matrix.T)
-            
-            # if self.enable_debug_output:
-            #     self.logger.debug(f"[IDENTITY_DEBUG] Fast mode: computed similarity matrix shape: {similarity_matrix.shape}")
-            #     self.logger.debug(f"[IDENTITY_DEBUG] Similarity matrix:\n{similarity_matrix}")
-        # Find merge candidates
-        merge_candidates = []
-        
-        # Iterate through upper triangle of similarity matrix (avoid duplicates and self-comparisons)
-        for i in range(len(valid_clusters)):
-            for j in range(i + 1, len(valid_clusters)):
-                similarity = similarity_matrix[i, j]
-                
-                if self.enable_debug_output:
-                    if similarity < 0.2:
-                        continue  # Skip printing for very low similarity
-                    elif 0.2 <= similarity < 0.3:
-                        self.logger.debug(f"\033[93m[IDENTITY_DEBUG] Comparing {valid_identity_ids[i]} <-> {valid_identity_ids[j]}: similarity={similarity:.3f}\033[0m")  # Yellow
-                    elif 0.3 <= similarity < 0.4:
-                        self.logger.debug(f"\033[33m[IDENTITY_DEBUG] Comparing {valid_identity_ids[i]} <-> {valid_identity_ids[j]}: similarity={similarity:.3f}\033[0m")  # Orange
-                    else:
-                        self.logger.debug(f"\033[92m[IDENTITY_DEBUG] Comparing {valid_identity_ids[i]} <-> {valid_identity_ids[j]}: similarity={similarity:.3f}\033[0m")  # Green
-                
-                if similarity > merge_threshold:
-                    merge_candidates.append((valid_identity_ids[i], valid_identity_ids[j], similarity))
-                    if self.enable_debug_output:
-                        self.logger.debug(f"[IDENTITY_DEBUG] Merge candidate: {valid_identity_ids[i]} <-> {valid_identity_ids[j]} (similarity: {similarity:.3f})")
-        
-        # Perform merges with best candidates first
-        if merge_candidates:
-            # Sort by similarity (best first)
-            merge_candidates.sort(key=lambda x: x[2], reverse=True)
-            
-            if self.enable_debug_output:
-                self.logger.debug(f"[IDENTITY_DEBUG] Found {len(merge_candidates)} merge candidates")
-            
-            # Keep track of already merged identities to avoid conflicts
-            merged_identities = set()
-            
-            for id1, id2, similarity in merge_candidates:
-                # Skip if either identity was already merged
-                if id1 in merged_identities or id2 in merged_identities:
-                    continue
-                
-                # Check if both identities still exist (might have been merged already)
-                if id1 not in self.identity_clusters or id2 not in self.identity_clusters:
-                    continue
-                
-                # Always merge into the older identity (lower USER number or older timestamp)
-                id1_num = self._extract_user_number(id1)
-                id2_num = self._extract_user_number(id2)
-                
-                if id1_num is not None and id2_num is not None:
-                    if id1_num < id2_num:
-                        # Keep id1, merge id2 into it
-                        success = self.merge_identities(id1, id2)
-                        if success:
-                            merged_identities.add(id2)
-                            if self.enable_debug_output:
-                                self.logger.debug(f"[IDENTITY] Batch auto-merged {id2} into {id1} (similarity: {similarity:.3f})")
-                    else:
-                        # Keep id2, merge id1 into it
-                        success = self.merge_identities(id2, id1)
-                        if success:
-                            merged_identities.add(id1)
-                            if self.enable_debug_output:
-                                self.logger.debug(f"[IDENTITY] Batch auto-merged {id1} into {id2} (similarity: {similarity:.3f})")
-                else:
-                    # Fallback: merge into older identity by timestamp
-                    cluster1 = self.identity_clusters[id1]
-                    cluster2 = self.identity_clusters[id2]
-                    
-                    if cluster1.creation_timestamp < cluster2.creation_timestamp:
-                        success = self.merge_identities(id1, id2)
-                        if success:
-                            merged_identities.add(id2)
-                            if self.enable_debug_output:
-                                self.logger.debug(f"[IDENTITY] Batch auto-merged {id2} into {id1} (by timestamp)")
-                    else:
-                        success = self.merge_identities(id2, id1)
-                        if success:
-                            merged_identities.add(id1)
-                            if self.enable_debug_output:
-                                self.logger.debug(f"[IDENTITY] Batch auto-merged {id1} into {id2} (by timestamp)")
-            
-            if self.enable_debug_output:
-                self.logger.debug(f"[IDENTITY_DEBUG] Batch merge complete. Merged {len(merged_identities)} identities: {list(merged_identities)}")
-        elif self.enable_debug_output:
-            self.logger.debug(f"[IDENTITY_DEBUG] No merge candidates found above threshold {merge_threshold:.3f}")
+        consistency = float(np.mean(np.stack(identity.all_embeddings[-10:]) @ identity.mean_embedding))
+        population = min(len(identity.all_embeddings) / float(self.max_embeddings_per_identity), 1.0)
+        return 0.7 * consistency + 0.3 * population
 
-    def merge_identities(self, primary_id: str, secondary_id: str) -> bool:
-        """
-        Merge two identities into one.
-        
-        Args:
-            primary_id: The identity to keep
-            secondary_id: The identity to merge into primary
-            
-        Returns:
-            True if merge was successful
-        """
-        if primary_id not in self.identity_clusters or secondary_id not in self.identity_clusters:
+    # ------------------------------------------------------------------
+    # Merging and cleanup
+    # ------------------------------------------------------------------
+
+    def _merge_similar_identities(self) -> None:
+        candidates = [uid for uid, c in self.identity_clusters.items()
+                      if c.mean_embedding is not None and len(c.all_embeddings) >= self.min_embeddings_for_merge]
+        if len(candidates) < 2:
+            return
+        matrix = np.stack([self._representation(self.identity_clusters[uid]) for uid in candidates])
+        similarity = matrix @ matrix.T
+        pairs = sorted(((float(similarity[i, j]), candidates[i], candidates[j])
+                        for i in range(len(candidates)) for j in range(i + 1, len(candidates))
+                        if similarity[i, j] >= self.merge_threshold), reverse=True)
+        merged: Set[str] = set()
+        for score, first, second in pairs:
+            if first in merged or second in merged:
+                continue
+            keep, drop = sorted((first, second), key=self._user_number)
+            if self.merge_identities(keep, drop):
+                merged.add(drop)
+                self._logger.info(f"Merged face identity {drop} into {keep} (similarity {score:.3f})")
+
+    def _absorb_stray_identities(self) -> None:
+        """Fold young identities into a confirmed one they clearly belong to."""
+        mature = [uid for uid, c in self.identity_clusters.items() if c.confirmed and c.mean_embedding is not None]
+        young = [uid for uid, c in self.identity_clusters.items() if not c.confirmed and c.mean_embedding is not None]
+        if not mature or not young:
+            return
+        references = np.stack([self._representation(self.identity_clusters[uid]) for uid in mature])
+        for uid in young:
+            if uid not in self.identity_clusters:
+                continue
+            scores = references @ self.identity_clusters[uid].mean_embedding
+            order = np.argsort(scores)[::-1]
+            best = float(scores[order[0]])
+            second = float(scores[order[1]]) if len(order) > 1 else -1.0
+            if best < self.similarity_threshold or (len(order) > 1 and best - second < self.match_margin):
+                continue
+            keep = mature[int(order[0])]
+            if self.merge_identities(keep, uid):
+                self._logger.info(f"Absorbed stray face identity {uid} into {keep} (similarity {best:.3f})")
+
+    def merge_identities(self, keep_id: str, drop_id: str) -> bool:
+        if keep_id == drop_id or keep_id not in self.identity_clusters or drop_id not in self.identity_clusters:
             return False
-        
-        primary_cluster = self.identity_clusters[primary_id]
-        secondary_cluster = self.identity_clusters[secondary_id]
-        
-        # Merge embeddings - ensure all are normalized
-        # Normalize secondary embeddings before merging
-        normalized_secondary_embeddings = []
-        for emb in secondary_cluster.all_embeddings:
-            normalized_emb = self._normalize_embedding(emb)
-            normalized_secondary_embeddings.append(normalized_emb)
-        
-        primary_cluster.all_embeddings.extend(normalized_secondary_embeddings)
-        primary_cluster.embedding_confidences.extend(secondary_cluster.embedding_confidences)
-        
-        # Limit total embeddings
-        if len(primary_cluster.all_embeddings) > self.max_embeddings_per_identity:
-            # Keep most recent embeddings
-            primary_cluster.all_embeddings = primary_cluster.all_embeddings[-self.max_embeddings_per_identity:]
-            primary_cluster.embedding_confidences = primary_cluster.embedding_confidences[-self.max_embeddings_per_identity:]
-        
-        # Recalculate mean embedding using traditional averaging (not EWMA)
-        # When merging clusters, we want to compute the true mean of all embeddings
-        primary_cluster.mean_embedding = np.mean(primary_cluster.all_embeddings, axis=0)
-        primary_cluster.mean_embedding = self._normalize_embedding(primary_cluster.mean_embedding)
-        
-        # Merge track ID associations
-        primary_cluster.associated_track_ids.update(secondary_cluster.associated_track_ids)
-        primary_cluster.current_track_id = secondary_cluster.current_track_id
-
-        # Update statistics
-        primary_cluster.total_detections += secondary_cluster.total_detections
-        primary_cluster.creation_timestamp = min(primary_cluster.creation_timestamp, secondary_cluster.creation_timestamp)
-        
-        # Update track_id mappings
-        for track_id in secondary_cluster.associated_track_ids:
-            if track_id in self.track_id_to_unique_id:
-                self.track_id_to_unique_id[track_id] = primary_id
-        
-        # Remove secondary identity
-        del self.identity_clusters[secondary_id]
-        
-        # Update quality score
-        primary_cluster.quality_score = self._calculate_quality_score(primary_cluster)
-        
+        keep = self.identity_clusters[keep_id]
+        drop = self.identity_clusters.pop(drop_id)
+        keep.all_embeddings = (keep.all_embeddings + drop.all_embeddings)[-self.max_embeddings_per_identity:]
+        keep.mean_embedding = normalize_embedding(np.mean(np.stack(keep.all_embeddings), axis=0))
+        keep.total_detections += drop.total_detections
+        keep.good_samples += drop.good_samples
+        keep.creation_timestamp = min(keep.creation_timestamp, drop.creation_timestamp)
+        keep.last_seen_timestamp = max(keep.last_seen_timestamp, drop.last_seen_timestamp)
+        firsts = [t for t in (keep.first_learned_timestamp, drop.first_learned_timestamp) if t is not None]
+        keep.first_learned_timestamp = min(firsts) if firsts else None
+        keep.confirmed = keep.confirmed or drop.confirmed
+        keep.custom_name = keep.custom_name or drop.custom_name
+        keep.quality_score = self._quality_score(keep)
+        keep.unsaved_updates += 1
+        for track_id, unique_id in list(self.track_id_to_unique_id.items()):
+            if unique_id == drop_id:
+                self.track_id_to_unique_id[track_id] = keep_id
+        if self._store is not None and drop.persisted:
+            try:
+                self._store.delete(drop_id)
+            except Exception as error:
+                self._logger.warning(f"Could not delete merged face identity {drop_id}: {error}")
+        self._save(keep, self._clock())
         self.total_identity_merges += 1
-        self.logger.debug(f"[IDENTITY] Merged {secondary_id} into {primary_id}")
-        
         return True
 
-    def cleanup_inactive_track_mappings(self, current_active_track_ids: Set[int]):
-        """
-        Clean up track_id mappings for tracks that are no longer active.
-        
-        This is critical to prevent track_id reuse issues where a new track
-        gets the same track_id as a previous track and inherits the wrong identity.
-        
-        Args:
-            current_active_track_ids: Set of track IDs that are currently active in the tracker
-        """
-        inactive_track_ids = []
-        
-        # Find track IDs that are mapped but no longer active
-        for track_id in self.track_id_to_unique_id.keys():
-            if track_id not in current_active_track_ids:
-                inactive_track_ids.append(track_id)
-        
-        if self.enable_debug_output:
-            self.logger.debug(f"[IDENTITY_DEBUG] Inactive track IDs to clean: {inactive_track_ids}")
-        
-        # Remove mappings for inactive tracks
-        for track_id in inactive_track_ids:
-            unique_id = self.track_id_to_unique_id[track_id]
-            del self.track_id_to_unique_id[track_id]
-            
-            # Remove from cluster's current track ID (but keep in associated for history)
-            if unique_id in self.identity_clusters:
-                self.identity_clusters[unique_id].current_track_id = -1
-            
-            if self.enable_debug_output:
-                self.logger.debug(f"[IDENTITY_DEBUG] Cleaned up mapping: track {track_id} -> {unique_id} (track no longer active)")
-        
-        # Clean up pending identities for inactive tracks
-        pending_to_remove = []
-        for track_id in self.pending_identities.keys():
-            if track_id not in current_active_track_ids:
-                pending_to_remove.append(track_id)
-        
-        for track_id in pending_to_remove:
-            del self.pending_identities[track_id]
-            if self.enable_debug_output:
-                self.logger.debug(f"[IDENTITY_DEBUG] Cleaned up pending identity for inactive track {track_id}")
-        
-        if inactive_track_ids and self.enable_debug_output:
-            self.logger.debug(f"[IDENTITY_DEBUG] Cleaned up {len(inactive_track_ids)} inactive track mappings")
-            self.logger.debug(f"[IDENTITY_DEBUG] Active tracks: {sorted(current_active_track_ids)}")
-            self.logger.debug(f"[IDENTITY_DEBUG] Remaining mappings: {dict(sorted(self.track_id_to_unique_id.items(), key=lambda x: str(x[0])))}")
-            self.logger.debug(f"[IDENTITY_DEBUG] Current identity clusters: {list(self.identity_clusters.keys())}")
+    def cleanup_inactive_track_mappings(self, active_track_ids: Set[str]) -> None:
+        """Forget tracks that are gone, so a reused track id never inherits an identity."""
+        for track_id in [t for t in self.track_id_to_unique_id if t not in active_track_ids]:
+            self._forget_track(track_id)
+        for track_id in [t for t in self._seed_buffers if t not in active_track_ids]:
+            self._seed_buffers.pop(track_id, None)
 
-    def _find_track_for_identity(self, unique_id: str) -> Optional[int]:
-        """
-        Find the track ID that is currently assigned to a given identity.
-        
-        Args:
-            unique_id: The identity to search for
-            
-        Returns:
-            track_id if found, None otherwise
-        """
-        found_tracks = []
-        for track_id, assigned_id in self.track_id_to_unique_id.items():
-            if assigned_id == unique_id:
-                found_tracks.append(track_id)
-        
-        if len(found_tracks) > 1:
-            # Multiple tracks found for same identity - this is a violation!
-            if self.enable_debug_output:
-                self.logger.debug(f"[IDENTITY_DEBUG] WARNING: _find_track_for_identity found multiple tracks for {unique_id}: {found_tracks}")
-            # Return the first one, but this indicates a problem
-            return found_tracks[0]
-        elif len(found_tracks) == 1:
-            return found_tracks[0]
-        else:
-            return None
+    def _cleanup_stale_tracks(self, now: float) -> None:
+        for track_id in [t for t, seen in self._track_last_seen.items() if now - seen > self.track_timeout]:
+            self._forget_track(track_id)
+            self._track_last_seen.pop(track_id, None)
 
-    def _get_fixed_color_for_identity(self, unique_id: str) -> str:
-        """
-        Get a fixed color for the given identity. If the identity doesn't have a color assigned yet,
-        assign one from the available colors pool.
-        
-        Args:
-            unique_id: The unique identity ID
-            
-        Returns:
-            str: Color name for this identity
-        """
-        if unique_id not in self.identity_color_mapping:
-            # Extract user number for consistent ordering if possible
-            user_number = self._extract_user_number(unique_id)
-            if user_number is not None:
-                # Use user number to pick color consistently
-                color_index = (user_number - 1) % len(self.available_colors)
-                self.identity_color_mapping[unique_id] = self.available_colors[color_index]
-            else:
-                # For non-standard unique_ids, use the next available color
-                used_colors = set(self.identity_color_mapping.values())
-                available = [c for c in self.available_colors if c not in used_colors]
-                if available:
-                    self.identity_color_mapping[unique_id] = available[0]
-                else:
-                    # Fallback to cycling through colors if all are used
-                    color_index = len(self.identity_color_mapping) % len(self.available_colors)
-                    self.identity_color_mapping[unique_id] = self.available_colors[color_index]
-        
-        return self.identity_color_mapping[unique_id]
+    def _forget_track(self, track_id: str) -> None:
+        unique_id = self.track_id_to_unique_id.pop(track_id, None)
+        self._seed_buffers.pop(track_id, None)
+        identity = self.identity_clusters.get(unique_id) if unique_id else None
+        if identity is not None and identity.current_track_id == track_id:
+            identity.current_track_id = None
 
-    def plot_identity_clusters_embeddings(self):
-        """
-        Plot the identity clusters embeddings using dimensionality reduction.
-        Creates a 2D visualization of all embeddings colored by identity with quality-based styling.
-        """
-        if not _SKLEARN_AVAILABLE:
-            self.logger.debug("[PLOT] Plotting requires sklearn and matplotlib. Install with: pip install scikit-learn matplotlib")
+    def cleanup_inactive_identities(self) -> None:
+        """Drop tentative identities that went quiet. Confirmed or persisted ones are kept."""
+        now = self._clock()
+        for unique_id, identity in list(self.identity_clusters.items()):
+            if identity.confirmed or identity.persisted:
+                continue
+            if now - identity.last_seen_timestamp > self.identity_timeout:
+                del self.identity_clusters[unique_id]
+                for track_id, mapped in list(self.track_id_to_unique_id.items()):
+                    if mapped == unique_id:
+                        del self.track_id_to_unique_id[track_id]
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def _maybe_save(self, identity: FaceIdentityCluster, now: float) -> None:
+        if not identity.confirmed:
             return
-            
+        if not identity.persisted or (identity.unsaved_updates >= self.persist_every
+                                      and now - identity.last_saved_timestamp >= self.min_persist_interval):
+            self._save(identity, now)
+
+    def _save(self, identity: FaceIdentityCluster, now: float) -> None:
+        if self._store is None or not identity.confirmed:
+            return
         try:
-            if not self.identity_clusters:
-                self.logger.debug("[PLOT] No identity clusters to plot")
-                return
-            
-            # Collect all embeddings with quality information
-            all_embeddings = []
-            identity_labels = []
-            embedding_qualities = []  # True if above inclusion threshold, False otherwise
-            embedding_types = []  # 'regular' or 'mean'
-            
-            for unique_id, cluster in self.identity_clusters.items():
-                if cluster.all_embeddings and cluster.mean_embedding is not None:
-                    # Add regular embeddings with quality assessment
-                    for embedding in cluster.all_embeddings:
-                        all_embeddings.append(embedding)
-                        identity_labels.append(unique_id)
-                        embedding_types.append('regular')
-                        
-                        # Calculate similarity to mean embedding to determine quality
-                        similarity = 1 - cosine(embedding, cluster.mean_embedding)
-                        is_high_quality = similarity >= self.embedding_inclusion_threshold
-                        embedding_qualities.append(is_high_quality)
-                    
-                    # Add mean embedding as a separate point
-                    all_embeddings.append(cluster.mean_embedding)
-                    identity_labels.append(unique_id)
-                    embedding_types.append('mean')
-                    embedding_qualities.append(True)  # Mean is always considered high quality
-            
-            if len(all_embeddings) < 2:
-                self.logger.debug(f"[PLOT] Not enough embeddings to plot ({len(all_embeddings)})")
-                return
-            
-            # Convert to numpy array
-            embeddings_matrix = np.array(all_embeddings)
-            self.logger.debug(f"[PLOT] Plotting {len(all_embeddings)} embeddings from {len(self.identity_clusters)} identities")
-            
-            # Use PCA for dimensionality reduction
-            from sklearn.decomposition import PCA
-            pca = PCA(n_components=2, random_state=42)
-            embeddings_2d = pca.fit_transform(embeddings_matrix)
-            
-            # Create the plot
-            import matplotlib.pyplot as plt
-            plt.figure(figsize=(12, 8))
-            
-            # Plot each identity with fixed colors and quality-based styling
-            unique_identities = list(set(identity_labels))
-            
-            for unique_id in unique_identities:
-                # Get fixed color for this identity
-                base_color = self._get_fixed_color_for_identity(unique_id)
-                
-                # Get indices for this identity
-                identity_indices = [i for i, label in enumerate(identity_labels) if label == unique_id]
-                
-                # Separate indices by type and quality
-                regular_high_quality_indices = [i for i in identity_indices if embedding_types[i] == 'regular' and embedding_qualities[i]]
-                regular_low_quality_indices = [i for i in identity_indices if embedding_types[i] == 'regular' and not embedding_qualities[i]]
-                mean_indices = [i for i in identity_indices if embedding_types[i] == 'mean']
-                
-                # Plot high-quality regular embeddings (normal color, full opacity)
-                if regular_high_quality_indices:
-                    x_coords = [embeddings_2d[i, 0] for i in regular_high_quality_indices]
-                    y_coords = [embeddings_2d[i, 1] for i in regular_high_quality_indices]
-                    plt.scatter(x_coords, y_coords, c=base_color, alpha=0.8, s=50, 
-                               label=f"{unique_id} high-quality ({len(regular_high_quality_indices)})")
-                
-                # Plot low-quality regular embeddings (lighter color, reduced opacity)
-                if regular_low_quality_indices:
-                    x_coords = [embeddings_2d[i, 0] for i in regular_low_quality_indices]
-                    y_coords = [embeddings_2d[i, 1] for i in regular_low_quality_indices]
-                    plt.scatter(x_coords, y_coords, c=base_color, alpha=0.3, s=40,
-                               label=f"{unique_id} low-quality ({len(regular_low_quality_indices)})")
-                
-                # Plot mean embeddings (darker color, larger size)
-                if mean_indices:
-                    x_coords = [embeddings_2d[i, 0] for i in mean_indices]
-                    y_coords = [embeddings_2d[i, 1] for i in mean_indices]
-                    plt.scatter(x_coords, y_coords, c=base_color, alpha=1.0, s=120, marker='*',
-                               label=f"{unique_id} mean", edgecolors='black', linewidth=1)
-            
-            plt.title(f"Identity Clusters Embeddings Visualization (PCA)\nInclusion threshold: {self.embedding_inclusion_threshold:.2f}")
-            plt.xlabel("PCA Component 1")
-            plt.ylabel("PCA Component 2")
-            plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
-            plt.grid(True, alpha=0.3)
-            plt.tight_layout()
-            
-            # Save the plot
-            plot_filename = f"/tmp/face_recognition_clusters_{int(time.time())}.png"
-            plt.savefig(plot_filename, dpi=100, bbox_inches='tight')
-            self.logger.debug(f"[PLOT] Identity clusters plot saved to: {plot_filename}")
-            plt.close()
-            
-        except Exception as e:
-            self.logger.debug(f"[PLOT] Error creating identity clusters plot: {e}")
+            self._store.save(identity)
+        except Exception as error:  # a database outage must never stop recognition
+            self._logger.warning(f"Could not persist face identity {identity.unique_id}: {error}")
+            return
+        if not identity.persisted:
+            self._logger.info(f"Persisted face identity {identity.unique_id} ({len(identity.all_embeddings)} embeddings)")
+        identity.persisted = True
+        identity.unsaved_updates = 0
+        identity.last_saved_timestamp = now
+        self.total_saves += 1
 
-    def _extract_user_number(self, unique_id: str) -> Optional[int]:
-        """Extract the user number from a unique ID like 'U1', 'U2', etc."""
-        if unique_id.startswith('U') and unique_id[1:].isdigit():
-            return int(unique_id[1:])
-        return None
+    def flush(self, force: bool = False) -> None:
+        """Save confirmed identities with pending updates (throttled unless ``force``)."""
+        now = self._clock()
+        for identity in list(self.identity_clusters.values()):
+            if not identity.confirmed or (identity.persisted and identity.unsaved_updates == 0):
+                continue
+            if force or not identity.persisted or now - identity.last_saved_timestamp >= self.min_persist_interval:
+                self._save(identity, now)
 
-    def cleanup_inactive_identities(self):
-        """Remove identities that have been inactive for too long."""
-        current_time = time.time()
-        inactive_identities = []
-        
-        for unique_id, cluster in self.identity_clusters.items():
-            time_since_last_seen = current_time - cluster.last_seen_timestamp
-            if time_since_last_seen > self.identity_timeout and len(cluster.all_embeddings) < self.min_embeddings_for_identity:
-                inactive_identities.append(unique_id)
-        
-        for unique_id in inactive_identities:
-            if self.enable_debug_output:
-                self.logger.debug(f"[IDENTITY_DEBUG] Removing inactive identity {unique_id}")
-            del self.identity_clusters[unique_id]
-            # Remove from track mappings
-            tracks_to_remove = []
-            for track_id, mapped_unique_id in self.track_id_to_unique_id.items():
-                if mapped_unique_id == unique_id:
-                    tracks_to_remove.append(track_id)
-            for track_id in tracks_to_remove:
-                del self.track_id_to_unique_id[track_id]
-    
-    def get_unique_id_for_track(self, track_id: int) -> Optional[str]:
-        """Get the unique ID assigned to a track."""
+    def close(self) -> None:
+        self.flush(force=True)
+        if self._store is not None:
+            self._store.close()
+
+    # ------------------------------------------------------------------
+    # Queries
+    # ------------------------------------------------------------------
+
+    def get_unique_id_for_track(self, track_id: str) -> Optional[str]:
         return self.track_id_to_unique_id.get(track_id)
-    
+
     def get_identity_info(self, unique_id: str) -> Optional[Dict]:
-        """Get information about a specific identity."""
-        if unique_id not in self.identity_clusters:
+        identity = self.identity_clusters.get(unique_id)
+        if identity is None:
             return None
-        
-        cluster = self.identity_clusters[unique_id]
         return {
             "unique_id": unique_id,
-            "creation_timestamp": cluster.creation_timestamp,
-            "last_seen_timestamp": cluster.last_seen_timestamp,
-            "total_detections": cluster.total_detections,
-            "quality_score": cluster.quality_score,
-            "num_embeddings": len(cluster.all_embeddings),
-            "associated_track_ids": list(cluster.associated_track_ids),
-            "current_track_id": cluster.current_track_id,
-            "custom_name": cluster.custom_name,
-            "metadata": cluster.metadata
+            "creation_timestamp": identity.creation_timestamp,
+            "last_seen_timestamp": identity.last_seen_timestamp,
+            "total_detections": identity.total_detections,
+            "good_samples": identity.good_samples,
+            "confirmed": identity.confirmed,
+            "persisted": identity.persisted,
+            "quality_score": identity.quality_score,
+            "num_embeddings": len(identity.all_embeddings),
+            "current_track_id": identity.current_track_id,
+            "custom_name": identity.custom_name,
         }
-    
+
     def get_all_identities(self) -> Dict[str, Dict]:
-        """Get information about all identities."""
-        return {unique_id: self.get_identity_info(unique_id) for unique_id in self.identity_clusters.keys()}
-    
-    def get_statistics(self) -> Dict:
-        """Get identity management statistics."""
+        return {uid: self.get_identity_info(uid) for uid in self.identity_clusters}
+
+    def get_statistics(self) -> Dict[str, int]:
         return {
             "total_identities": len(self.identity_clusters),
+            "confirmed_identities": sum(c.confirmed for c in self.identity_clusters.values()),
             "total_identities_created": self.total_identities_created,
-            "total_re_identifications": self.total_re_identifications,
             "total_identity_merges": self.total_identity_merges,
-            "active_tracks": len(self.track_id_to_unique_id)
+            "total_saves": self.total_saves,
+            "active_tracks": len(self.track_id_to_unique_id),
         }
-    
+
     def set_custom_name(self, unique_id: str, custom_name: str) -> bool:
-        """Set a custom name for an identity."""
-        if unique_id in self.identity_clusters:
-            self.identity_clusters[unique_id].custom_name = custom_name
-            return True
-        return False
-        
-    def save_identity_database(self, n_embeddings: int = 1):
-        """Save identities to MongoDB persistent storage."""
+        identity = self.identity_clusters.get(unique_id)
+        if identity is None:
+            return False
+        identity.custom_name = custom_name
+        identity.unsaved_updates += 1
+        self._save(identity, self._clock())
+        return True
 
-        if not _PYMONGO_AVAILABLE:
-            self.logger.error("[ERROR] pymongo not available, cannot save identity database")
-            return
+    @staticmethod
+    def _per_track(value: Dict[str, float] | float, track_id: str) -> float:
+        if isinstance(value, dict):
+            return float(value.get(track_id, 0.0))
+        return float(value)
 
-        if self.mongo_collection is None:
-            self.logger.error("[ERROR] MongoDB connection not established, cannot save identity database")
-            return
-
-        if not self.identity_clusters:
-            self.logger.info("[INFO] No identities to save to MongoDB")
-            return
-
-        try:
-            self.logger.info(
-                f"[INFO] Saving {len(self.identity_clusters)} identities "
-                f"(last {n_embeddings} embeddings each) to MongoDB..."
-            )
-
-            saved_count = 0
-
-            for unique_id, cluster in self.identity_clusters.items():
-
-                # Select last N embeddings
-                selected_embeddings = cluster.all_embeddings[-n_embeddings:] if cluster.all_embeddings else []
-                selected_confidences = cluster.embedding_confidences[-n_embeddings:] if cluster.embedding_confidences else []
-
-                # Convert embeddings to pure Python floats
-                embeddings_serializable = [
-                    emb.astype(float).tolist() for emb in selected_embeddings
-                ]
-
-                confidences_serializable = [
-                    float(c) for c in selected_confidences
-                ]
-
-                mean_embedding_serializable = (
-                    cluster.mean_embedding.astype(float).tolist()
-                    if cluster.mean_embedding is not None else None
-                )
-
-                doc = {
-                    "unique_id": unique_id,
-                    "creation_timestamp": float(cluster.creation_timestamp),
-                    "last_seen_timestamp": float(cluster.last_seen_timestamp),
-                    "total_detections": int(cluster.total_detections),
-                    "quality_score": float(cluster.quality_score),
-                    "custom_name": cluster.custom_name,
-                    "metadata": cluster.metadata,
-                    "embeddings": embeddings_serializable,
-                    "embedding_confidences": confidences_serializable,
-                    "mean_embedding": mean_embedding_serializable,
-                    "updated_at": float(time.time())
-                }
-
-                self.mongo_collection.update_one(
-                    {"unique_id": unique_id},
-                    {"$set": doc},
-                    upsert=True
-                )
-
-                saved_count += 1
-
-                if self.enable_debug_output:
-                    self.logger.info(
-                        f"[INFO] Saved identity {unique_id} "
-                        f"(stored embeddings: {len(selected_embeddings)})"
-                    )
-
-            self.logger.info(f"[INFO] Successfully saved {saved_count} identities to MongoDB")
-
-        except Exception as e:
-            self.logger.error(f"[ERROR] Failed to save identity database to MongoDB: {e}")
-
-    def load_identity_database(self, n_embeddings: int = 1):
-        """Load identities from MongoDB persistent storage."""
-
-        if not _PYMONGO_AVAILABLE:
-            self.logger.warning("[WARNING] pymongo not available, cannot load identity database")
-            return
-
-        if self.mongo_collection is None:
-            self.logger.warning("[WARNING] MongoDB connection not established, cannot load identity database")
-            return
-
-        try:
-            documents = list(self.mongo_collection.find())
-
-            if not documents:
-                self.logger.info("[INFO] No existing identities found in MongoDB")
-                return
-
-            self.logger.info(f"[INFO] Loading {len(documents)} identities from MongoDB...")
-
-            loaded_count = 0
-
-            for doc in documents:
-                unique_id = doc["unique_id"]
-
-                cluster = IdentityCluster(
-                    unique_id=unique_id,
-                    creation_timestamp=float(doc["creation_timestamp"]),
-                    last_seen_timestamp=float(doc["last_seen_timestamp"]),
-                    total_detections=int(doc["total_detections"]),
-                    quality_score=float(doc["quality_score"]),
-                    custom_name=doc.get("custom_name"),
-                    metadata=doc.get("metadata", {})
-                )
-
-                # Restore embeddings
-                if doc.get("embeddings"):
-                    embeddings = doc["embeddings"][-n_embeddings:]
-                    confidences = doc.get("embedding_confidences", [])[-n_embeddings:]
-
-                    cluster.all_embeddings = [
-                        np.array(e, dtype=np.float32) for e in embeddings
-                    ]
-
-                    cluster.embedding_confidences = [
-                        float(c) for c in confidences
-                    ]
-
-                # Backward compatibility
-                elif doc.get("last_embedding"):
-                    cluster.all_embeddings = [
-                        np.array(doc["last_embedding"], dtype=np.float32)
-                    ]
-                    cluster.embedding_confidences = [
-                        float(doc.get("last_embedding_confidence", 0.0))
-                    ]
-
-                if doc.get("mean_embedding") is not None:
-                    cluster.mean_embedding = np.array(
-                        doc["mean_embedding"], dtype=np.float32
-                    )
-
-                self.identity_clusters[unique_id] = cluster
-                loaded_count += 1
-
-                # Update next user number
-                if unique_id.startswith('U'):
-                    try:
-                        user_num = int(unique_id[1:]) + 1
-                        self.next_user_number = max(self.next_user_number, user_num)
-                    except ValueError:
-                        pass
-
-                if self.enable_debug_output:
-                    self.logger.info(
-                        f"[INFO] Loaded identity {unique_id} "
-                        f"(embeddings restored: {len(cluster.all_embeddings)})"
-                    )
-
-            self.logger.info(f"[INFO] Successfully loaded {loaded_count} identities from MongoDB")
-            self.logger.info(f"[INFO] Next user number will be: U{self.next_user_number}")
-
-        except Exception as e:
-            self.logger.error(f"[ERROR] Failed to load identity database from MongoDB: {e}")
-            
-    def _normalize_embedding(self, embedding: np.ndarray) -> np.ndarray:
-        """Normalize an embedding vector."""
-        embedding = embedding.flatten()
-        norm = np.linalg.norm(embedding)
-        if norm == 0:
-            return embedding
-        return embedding / norm
+    @staticmethod
+    def _user_number(unique_id: str) -> int:
+        match = re.search(r"(\d+)$", unique_id)
+        return int(match.group(1)) if match else 0

@@ -83,6 +83,42 @@ Face recognition and identification capabilities.
   - Face matching and verification
   - Database integration
 
+#### Identity management
+
+`face_recognition/identity_manager.py` assigns face tracks (`face_3`) to persistent identities (`U1`, `U2`, ...). The rules are ported from the speech diarization identity layer:
+
+- **Frame pairing**: each detection is cropped from the image with the same stamp, never from a newer frame.
+- **Quality gate** (`face_quality.py`): quality 0–1 from detection confidence and head yaw (inter-ocular distance / face width). Faces below `min_learn_quality` (profiles, false positives) may match a known identity but never create or teach one. Otherwise they stay unlabeled.
+- **Seeding**: a new identity needs `min_seed_samples` consistent good samples of one track, never a single embedding.
+- **Matching**: absolute score plus a best-vs-second `match_margin`. Tentative identities use `young_identity_threshold`. Assignment within a frame is exclusive.
+- **Lifecycle**: `TENTATIVE` → `CONFIRMED` after `min_confirm_samples`. Fragments are merged, young strays absorbed. Only tentative identities expire.
+- **Persistence**: confirmed identities are written to MongoDB when confirmed, then throttled (`persist_every`, `min_persist_interval`) and flushed periodically and on shutdown. A killed container loses at most the last few seconds.
+
+`FacialRecognition` output: `recognized_face_id` is empty when the face is not identified; `identity_status` is `IDENTITY_UNKNOWN`, `IDENTITY_TENTATIVE` or `IDENTITY_CONFIRMED`; `face_quality` is the observation quality. Downstream consumers should use only confirmed identities as long-term keys.
+
+#### Evaluating identity changes offline
+
+```bash
+# 1. Record embeddings from the live stack (inside eut_face_recognition, video publisher running)
+python3 /workspace/src/face_recognition/tools/record_face_dataset.py --duration 70 \
+    --video /tmp/video_3.mp4 --out /workspace/src/face_recognition/database/eval/video_3.npz
+# 2. Label people by position along the looping video (check the contact sheet)
+python3 face_recognition/tools/build_video_ground_truth.py face_recognition/database/eval/video_3.npz \
+    --video ../EutPerceptionUtils/eut_utils/samples/video_3.mp4 --out-dir face_recognition/database/eval
+# 3. Replay through FaceIdentityManager (no ROS, no GPU)
+python3 face_recognition/tools/evaluate_identity_manager.py face_recognition/database/eval/video_3.npz \
+    face_recognition/database/eval/video_3_gt.npy --loops 3 --restart
+```
+
+Results on `video_3.mp4` (5 people, 70 s):
+
+| | created | final | purity | ids per person | hand false positives labeled |
+|---|---|---|---|---|---|
+| Previous manager | 34 | 6 | 0.92 | 6–21 | 49/49 |
+| Current manager (3 loops + restart) | 5 | 5 | 1.00 | 1 | 0/49 |
+
+Unit tests: `cd face_recognition && python3 -m pytest test/test_identity_manager.py`.
+
 ### 3. gaze_estimation 👁️
 Gaze direction estimation from facial landmarks.
 
@@ -241,6 +277,8 @@ db.identity_database.find()
 ```
 
 To delete the database, remove the associated Docker volume.
+
+Documents are namespaced by `model_key` (the embedding model). Documents without `model_key` (written by the previous identity manager) are ignored.
 
 You can also manage entries via the web interface at [http://0.0.0.0:8082/db/face_recognition_db/identity_database/](http://0.0.0.0:8081/db/face_recognition_db/identity_database/).
 
