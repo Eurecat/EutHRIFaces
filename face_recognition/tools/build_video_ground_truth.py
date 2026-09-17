@@ -59,7 +59,7 @@ def main():
     parser.add_argument('--min-coverage', type=float, default=0.3, help='fraction of video frames a person track must cover')
     args = parser.parse_args()
 
-    data = np.load(args.dataset)
+    data = np.load(args.dataset, allow_pickle=True)
     frame_idx, bbox = data['frame_idx'], data['bbox']
     centers = np.c_[(bbox[:, 0] + bbox[:, 2]) / 2, (bbox[:, 1] + bbox[:, 3]) / 2]
     tracks = build_tracklets(frame_idx, centers)

@@ -88,10 +88,12 @@ Face recognition and identification capabilities.
 `face_recognition/identity_manager.py` assigns face tracks (`face_3`) to persistent identities (`U1`, `U2`, ...). The rules are ported from the speech diarization identity layer:
 
 - **Frame pairing**: each detection is cropped from the image with the same stamp, never from a newer frame.
+- **Aligned crops** (`face_alignment.py`, `crop_mode: aligned`): the 5 detector landmarks are warped onto the standard face template before embedding.
 - **Quality gate** (`face_quality.py`): quality 0–1 from detection confidence and head yaw (inter-ocular distance / face width). Faces below `min_learn_quality` (profiles, false positives) may match a known identity but never create or teach one. Otherwise they stay unlabeled.
 - **Seeding**: a new identity needs `min_seed_samples` consistent good samples of one track, never a single embedding.
-- **Matching**: absolute score plus a best-vs-second `match_margin`. Tentative identities use `young_identity_threshold`. Assignment within a frame is exclusive.
-- **Lifecycle**: `TENTATIVE` → `CONFIRMED` after `min_confirm_samples`. Fragments are merged, young strays absorbed. Only tentative identities expire.
+- **Gallery**: each identity keeps up to 100 *distinct* samples (near-duplicates skipped, most redundant evicted). Score = ½ gallery mean + ½ closest `gallery_top_k` samples.
+- **Matching**: absolute score plus a best-vs-second `match_margin`. Tentative identities use `young_identity_threshold`. Assignment within a frame is exclusive. A new track whose averaged seed matches a known identity joins it (`seed_match_threshold`) instead of creating one.
+- **Lifecycle**: `TENTATIVE` → `CONFIRMED` after `min_confirm_samples` over `min_confirm_seconds`. Fragments of one person are merged (`merge_threshold`) and young strays absorbed, **never** when the two identities were seen in the same frame on different faces. Only tentative identities expire. New `U` numbers never reuse a stored one.
 - **Persistence**: confirmed identities are written to MongoDB when confirmed, then throttled (`persist_every`, `min_persist_interval`) and flushed periodically and on shutdown. A killed container loses at most the last few seconds.
 
 `FacialRecognition` output: `recognized_face_id` is empty when the face is not identified; `identity_status` is `IDENTITY_UNKNOWN`, `IDENTITY_TENTATIVE` or `IDENTITY_CONFIRMED`; `face_quality` is the observation quality. Downstream consumers should use only confirmed identities as long-term keys.
@@ -118,6 +120,8 @@ Results on `video_3.mp4` (5 people, 70 s):
 | Current manager (3 loops + restart) | 5 | 5 | 1.00 | 1 | 0/49 |
 
 Unit tests: `cd face_recognition && python3 -m pytest test/test_identity_manager.py`.
+
+Everything tried so far (models, crops, rules, licenses, numbers): [face_recognition/docs/identity_experiments.md](face_recognition/docs/identity_experiments.md).
 
 ### 3. gaze_estimation 👁️
 Gaze direction estimation from facial landmarks.

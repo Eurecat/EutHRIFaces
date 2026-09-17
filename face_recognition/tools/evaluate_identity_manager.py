@@ -130,7 +130,7 @@ def main():
     parser.add_argument('--params', default='{}', help='JSON overrides for FaceIdentityManager')
     args = parser.parse_args()
 
-    data = dict(np.load(args.dataset))
+    data = dict(np.load(args.dataset, allow_pickle=True))
     labels = np.load(args.labels)
     result = replay(data, labels, args.embedding, args.loops, args.restart, json.loads(args.params))
     print(json.dumps(result, indent=2))

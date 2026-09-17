@@ -39,6 +39,7 @@ from sensor_msgs.msg import Image, CompressedImage
 from cv_bridge import CvBridge
 
 from .face_embedding_extractor import create_face_embedding_extractor
+from .face_alignment import align_face, five_points_from_msg
 from .face_quality import FaceQualityConfig, face_quality_from_msg
 from .identity_manager import (
     STATUS_CONFIRMED, STATUS_TENTATIVE, STATUS_UNKNOWN, FaceIdentityManager, MongoFaceIdentityStore)
@@ -378,6 +379,12 @@ class FaceRecognitionNode(Node):
         # Uses only cv2 (already installed) - no extra deps needed
         self.declare_parameter('enable_face_alignment', False)
         self.enable_face_alignment = self.get_parameter('enable_face_alignment').get_parameter_value().bool_value
+        # "aligned": 5-point similarity warp to the standard template (recommended)
+        # "bbox": detection box crop (optionally eye-rotated with enable_face_alignment)
+        self.declare_parameter('crop_mode', 'aligned')
+        self.declare_parameter('aligned_crop_size', 160)
+        self.crop_mode = str(self.get_parameter('crop_mode').value)
+        self.aligned_crop_size = int(self.get_parameter('aligned_crop_size').value)
 
         # Detection/image pairing
         self.declare_parameter('image_buffer_size', 30)       # recent frames kept to match detection stamps
@@ -395,21 +402,24 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('young_identity_threshold', 0.40)
         self.declare_parameter('match_margin', 0.08)
         self.declare_parameter('track_identity_stickiness_margin', 0.20)
-        self.declare_parameter('merge_threshold', 0.70)
+        self.declare_parameter('merge_threshold', 0.50)
+        self.declare_parameter('seed_match_threshold', 0.50)
+        self.declare_parameter('redundancy_threshold', 0.92)
+        self.declare_parameter('gallery_top_k', 3)
+        self.declare_parameter('merge_check_interval', 1.0)
         self.declare_parameter('min_seed_samples', 4)
         self.declare_parameter('seed_consistency', 0.55)
         self.declare_parameter('seed_pairwise_consistency', 0.40)
         self.declare_parameter('min_confirm_samples', 12)
-        self.declare_parameter('min_confirm_seconds', 1.0)
+        self.declare_parameter('min_confirm_seconds', 3.0)
         self.declare_parameter('max_embeddings_per_identity', 100)
-        self.declare_parameter('min_embeddings_for_merge', 6)
         self.declare_parameter('identity_timeout', 30.0)
         self.declare_parameter('track_timeout', 2.0)
         self.declare_parameter('enable_debug_output', False)
 
         # MongoDB parameters for identity storage (incremental, throttled sync)
         self.declare_parameter('use_mongodb', True)
-        self.declare_parameter('save_last_n_embeddings', 20)
+        self.declare_parameter('save_last_n_embeddings', 100)
         self.declare_parameter('persist_every', 20)             # updates before a confirmed identity is re-saved
         self.declare_parameter('min_persist_interval', 10.0)    # s between saves of one identity
         self.declare_parameter('persist_flush_period', 10.0)    # s between background flushes
@@ -582,13 +592,17 @@ class FaceRecognitionNode(Node):
         store = None
         if bool(gp('use_mongodb')):
             try:
+                # Embeddings from different models or crop modes are not comparable
+                model_key = f"{face_embedding_model}-{self.crop_mode}"
                 store = MongoFaceIdentityStore(
-                    str(gp('mongo_uri')), model_key=face_embedding_model,
+                    str(gp('mongo_uri')), model_key=model_key,
                     database_name=str(gp('mongo_db_name')), collection_name=str(gp('mongo_collection_name')),
                     save_last_n_embeddings=int(gp('save_last_n_embeddings')))
                 legacy = store.count_legacy_documents()
-                self.get_logger().info(f"Connected to MongoDB {gp('mongo_db_name')}.{gp('mongo_collection_name')}"
-                                       + (f" ({legacy} legacy documents ignored)" if legacy else ""))
+                other = store.count_other_model_documents()
+                self.get_logger().info(
+                    f"Connected to MongoDB {gp('mongo_db_name')}.{gp('mongo_collection_name')} (model_key {model_key})"
+                    + (f"; ignoring {legacy} legacy and {other} other-model documents" if legacy or other else ""))
             except Exception as e:
                 self.get_logger().error(f"MongoDB unavailable, identities will not persist: {e}")
                 store = None
@@ -601,6 +615,10 @@ class FaceRecognitionNode(Node):
                 match_margin=float(gp('match_margin')),
                 stickiness_margin=float(gp('track_identity_stickiness_margin')),
                 merge_threshold=float(gp('merge_threshold')),
+                seed_match_threshold=float(gp('seed_match_threshold')),
+                redundancy_threshold=float(gp('redundancy_threshold')),
+                gallery_top_k=int(gp('gallery_top_k')),
+                merge_check_interval=float(gp('merge_check_interval')),
                 min_learn_quality=float(gp('min_learn_quality')),
                 min_seed_samples=int(gp('min_seed_samples')),
                 seed_consistency=float(gp('seed_consistency')),
@@ -608,7 +626,6 @@ class FaceRecognitionNode(Node):
                 min_confirm_samples=int(gp('min_confirm_samples')),
                 min_confirm_seconds=float(gp('min_confirm_seconds')),
                 max_embeddings_per_identity=int(gp('max_embeddings_per_identity')),
-                min_embeddings_for_merge=int(gp('min_embeddings_for_merge')),
                 identity_timeout=float(gp('identity_timeout')),
                 track_timeout=float(gp('track_timeout')),
                 persist_every=int(gp('persist_every')),
@@ -789,7 +806,7 @@ class FaceRecognitionNode(Node):
 
         face_crops, crop_msgs = [], []
         for facial_landmarks_msg in msg.ids:
-            face_crop = self._extract_face_crop_from_landmarks(facial_landmarks_msg)
+            face_crop = self._extract_face_crop(facial_landmarks_msg)
             if face_crop is not None:
                 face_crops.append(face_crop)
                 crop_msgs.append(facial_landmarks_msg)
@@ -992,6 +1009,17 @@ class FaceRecognitionNode(Node):
             self.get_logger().warning(f"Face alignment failed: {e}")
             return original_crop
 
+    def _extract_face_crop(self, msg) -> Optional[np.ndarray]:
+        """Crop used for the embedding: validated box crop, then 5-point aligned if configured."""
+        crop = self._extract_face_crop_from_landmarks(msg)
+        if crop is None or self.crop_mode != 'aligned':
+            return crop
+        points = five_points_from_msg(msg)
+        if points is None:
+            return crop
+        aligned = align_face(self.last_image, points, self.aligned_crop_size)
+        return aligned if aligned is not None else crop
+
     def _extract_face_crop_from_landmarks(self, msg) -> Optional[np.ndarray]:
         """Extract face crop from landmarks message using bounding box."""
         try:
@@ -1021,7 +1049,7 @@ class FaceRecognitionNode(Node):
 
                 #if h is less than min_h_size pixels, consider it invalid
                 # w > h check is skipped when face alignment is enabled (tilted faces can appear wider than tall)
-                if h < self.min_h_size or (not self.enable_face_alignment and w > h):
+                if h < self.min_h_size or (not self.enable_face_alignment and self.crop_mode != 'aligned' and w > h):
                     if self.enable_debug_output:
                         self.get_logger().warning(f"Bounding box too small or too wide (w={w}, h={h}), skipping to face id {msg.face_id}")
                     return None
@@ -1043,7 +1071,7 @@ class FaceRecognitionNode(Node):
                         face_crop_balanced = face_crop  # no extra colour processing
 
                         # ---- Face alignment ----
-                        if self.enable_face_alignment:
+                        if self.enable_face_alignment and self.crop_mode != 'aligned':
                             # import os as _os
                             # debug_dir = "/workspace/src/face_recognition/weights/imgs"
                             # _os.makedirs(debug_dir, exist_ok=True)
@@ -1110,7 +1138,7 @@ class FaceRecognitionNode(Node):
                 
                 #if h is less than min_h_size pixels, consider it invalid
                 # w > h check is skipped when face alignment is enabled (tilted faces can appear wider than tall)
-                if h < self.min_h_size or (not self.enable_face_alignment and w > h):
+                if h < self.min_h_size or (not self.enable_face_alignment and self.crop_mode != 'aligned' and w > h):
                     if self.enable_debug_output:
                         self.get_logger().warning(f"Bounding box too small or too wide (w={w}, h={h}), skipping to face id {msg.face_id}")
                     return None
@@ -1122,7 +1150,7 @@ class FaceRecognitionNode(Node):
                         face_crop_balanced = face_crop  # no extra colour processing
 
                         # ---- Face alignment ----
-                        if self.enable_face_alignment:
+                        if self.enable_face_alignment and self.crop_mode != 'aligned':
                             # import os as _os
                             # debug_dir = "/workspace/src/face_recognition/weights/imgs"
                             # _os.makedirs(debug_dir, exist_ok=True)

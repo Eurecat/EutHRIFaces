@@ -21,6 +21,10 @@ face_recognition_node:
     # When enabled, each face crop is rotated before embedding so that both eyes
     # are on the same horizontal line.  Uses only OpenCV + YOLO pupil landmarks
     enable_face_alignment: True
+    # Embedding crop: "aligned" = 5-point similarity warp to the standard template (entry 3 of
+    # docs/identity_experiments.md: margin p10 0.27 -> 0.37 vs box crops), "bbox" = detection box
+    crop_mode: "aligned"
+    aligned_crop_size: 160       # FaceNet input size
     
     # Detection / image pairing: crops always come from the frame the detector saw
     image_buffer_size: 30        # Recent frames kept to find the one matching a detection stamp
@@ -40,20 +44,23 @@ face_recognition_node:
     young_identity_threshold: 0.40       # Relaxed match bar for tentative identities (noisy mean)
     match_margin: 0.08                   # Best must beat second-best by this much, else unlabeled
     track_identity_stickiness_margin: 0.20  # Track keeps its identity unless another is this much better
-    merge_threshold: 0.70                # Identities this similar are merged (keeps lowest U number)
+    merge_threshold: 0.50                # Pair score to merge fragments (keeps lowest U number); vetoed if ever seen together
+    seed_match_threshold: 0.50           # Averaged seed joins an existing identity at this score instead of creating one
+    redundancy_threshold: 0.92           # New sample this close to a stored one is not stored (diverse gallery)
+    gallery_top_k: 3                     # Score = 0.5 * gallery mean + 0.5 * mean of the k closest stored samples
+    merge_check_interval: 1.0            # Seconds between merge/absorb passes
     min_seed_samples: 4                  # Consistent good samples of one track needed to create an identity
     seed_consistency: 0.55               # Min similarity of every seed sample to the seed mean
     seed_pairwise_consistency: 0.40      # Min mean pairwise similarity of seed samples (rejects mixed tracks)
     min_confirm_samples: 12              # Good samples before an identity is confirmed (and persisted)
-    min_confirm_seconds: 1.0             # ...spread over at least this time
-    max_embeddings_per_identity: 100
-    min_embeddings_for_merge: 6
+    min_confirm_seconds: 3.0             # ...spread over at least this time (long enough for strays to be absorbed)
+    max_embeddings_per_identity: 100     # Gallery size; when full the most redundant sample is evicted
     identity_timeout: 30.0               # Tentative identities unseen this long are dropped (confirmed never)
     track_timeout: 2.0                   # Forget a face track id not seen for this long
 
     # Identity Persistence Configuration (continuous, throttled MongoDB sync)
     use_mongodb: true
-    save_last_n_embeddings: 20           # Recent embeddings stored per identity
+    save_last_n_embeddings: 100          # Gallery samples stored per identity (whole diverse gallery)
     persist_every: 20                    # Updates before a confirmed identity is saved again...
     min_persist_interval: 10.0           # ...and at least this many seconds since its last save
     persist_flush_period: 10.0           # Background flush of pending updates

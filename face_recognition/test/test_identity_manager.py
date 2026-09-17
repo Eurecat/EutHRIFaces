@@ -171,12 +171,14 @@ def test_fragments_are_merged_keeping_lowest_number(rng, people):
     feed(manager, clock, [{'face_1': sample(rng, people[1])} for _ in range(20)])
     # Force a duplicate of person 0 as U3
     manager._seed_buffers.clear()
-    uid = manager._seed('face_x', sample(rng, people[0]), clock.t)
-    for _ in range(3):
-        uid = manager._seed('face_x', sample(rng, people[0]), clock.t) or uid
+    manager.seed_match_threshold = 2.0  # force a duplicate instead of joining U1
+    uid = None
+    for _ in range(4):
+        uid = (manager._seed('face_x', sample(rng, people[0]), clock.t, set()) or (uid, 0))[0]
     for _ in range(10):
         manager._add_embedding(manager.identity_clusters[uid], sample(rng, people[0]), clock.t)
     assert uid == 'U3'
+    clock.t += 2.0  # next merge check
     feed(manager, clock, [{'face_1': sample(rng, people[1])}])
     assert 'U3' not in manager.identity_clusters
     assert 'U1' in manager.identity_clusters
@@ -186,7 +188,8 @@ def test_fragments_are_merged_keeping_lowest_number(rng, people):
 def test_confirmed_identities_persist_throttled_and_reload(rng, people):
     clock = Clock()
     store = FakeStore()
-    manager = make(clock, store=store, persist_every=5, min_persist_interval=10.0)
+    manager = make(clock, store=store, persist_every=5, min_persist_interval=10.0, min_confirm_seconds=1.0,
+                   redundancy_threshold=1.01)
     feed(manager, clock, [{'face_0': sample(rng, people[0])} for _ in range(11)])
     assert 'U1' not in store.docs  # tentative identities are never written
     feed(manager, clock, [{'face_0': sample(rng, people[0])} for _ in range(11)])
@@ -246,3 +249,94 @@ def test_face_quality():
     assert face_quality(box, 0.9, 0.43, 0.435, config) == 0.0                 # profile
     assert face_quality(box, 0.2, 0.42, 0.44, config) == 0.0                  # low detection confidence
     assert face_quality(box, 0.9, None, 0.44, config) == 0.0
+
+
+def two_looks(rng, base, similarity=0.6):
+    """Two appearance directions of one person whose cosine is about ``similarity``."""
+    other = rng.normal(size=DIM)
+    other -= (other @ base) * base
+    other /= np.linalg.norm(other)
+    angle = np.arccos(similarity) / 2
+    look_a = np.cos(angle) * base + np.sin(angle) * other
+    look_b = np.cos(angle) * base - np.sin(angle) * other
+    return look_a, look_b
+
+
+def test_person_returning_with_a_new_look_keeps_identity(rng, people):
+    clock = Clock()
+    manager = make(clock)
+    look_a, look_b = two_looks(rng, people[0], similarity=0.62)
+    feed(manager, clock, [{'face_0': sample(rng, look_a, 0.1)} for _ in range(40)])
+    clock.t += 5.0
+    result = feed(manager, clock, [{'face_9': sample(rng, look_b, 0.1)} for _ in range(40)])
+    clock.t += 2.0
+    result = feed(manager, clock, [{'face_9': sample(rng, look_b, 0.1)}])
+    assert result['face_9'].unique_id == 'U1'
+    assert len(manager.identity_clusters) == 1
+
+
+def test_similar_people_seen_together_are_never_merged(rng, people):
+    clock = Clock()
+    manager = make(clock)
+    look_a, look_b = two_looks(rng, people[0], similarity=0.62)  # lookalikes
+    feed(manager, clock, [{'face_0': sample(rng, look_a, 0.1), 'face_1': sample(rng, look_b, 0.1)} for _ in range(40)])
+    assert len(manager.identity_clusters) == 2
+    ids = sorted(manager.identity_clusters)
+    assert ids[1] in manager.identity_clusters[ids[0]].co_occurring
+    clock.t += 5.0
+    feed(manager, clock, [{'face_5': sample(rng, look_a, 0.1)} for _ in range(20)])
+    clock.t += 2.0
+    feed(manager, clock, [{'face_5': sample(rng, look_a, 0.1)}])
+    assert len(manager.identity_clusters) == 2
+
+
+def test_static_face_does_not_grow_gallery_or_writes(rng, people):
+    clock = Clock()
+    store = FakeStore()
+    manager = make(clock, store=store, persist_every=5, min_persist_interval=1.0)
+    frozen = sample(rng, people[0])
+    feed(manager, clock, [{'face_0': frozen} for _ in range(200)])
+    identity = manager.identity_clusters['U1']
+    assert identity.confirmed
+    assert len(identity.all_embeddings) == 1
+    assert store.writes <= 2
+
+
+def test_gallery_eviction_keeps_distinct_looks(rng, people):
+    clock = Clock()
+    manager = make(clock, max_embeddings_per_identity=10, redundancy_threshold=0.99)
+    look_a, look_b = two_looks(rng, people[0], similarity=0.7)
+    feed(manager, clock, [{'face_0': sample(rng, look_b, 0.05)} for _ in range(4)])
+    feed(manager, clock, [{'face_0': sample(rng, look_a, 0.3)} for _ in range(60)])
+    gallery = np.stack(manager.identity_clusters['U1'].all_embeddings)
+    assert len(gallery) == 10
+    assert np.max(gallery @ (look_b / np.linalg.norm(look_b))) > 0.95  # look B survived eviction
+
+
+def test_five_point_alignment():
+    from types import SimpleNamespace
+    from face_recognition.face_alignment import TEMPLATE_112, align_face, five_points_from_msg
+    width, height = 640, 480
+    template = TEMPLATE_112 + np.array([200.0, 150.0], np.float32)  # face at a known place
+    landmarks = [SimpleNamespace(x=0.0, y=0.0, c=0.0) for _ in range(70)]
+    for index, point in zip((42, 39, 30, 54, 48), template):
+        landmarks[index] = SimpleNamespace(x=point[0] / width, y=point[1] / height, c=1.0)
+    msg = SimpleNamespace(landmarks=landmarks, width=width, height=height)
+    points = five_points_from_msg(msg)
+    assert np.allclose(points, template, atol=1e-3)
+    image = np.zeros((height, width, 3), np.uint8)
+    image[150:262, 200:312] = 255
+    crop = align_face(image, points, size=112)
+    assert crop.shape == (112, 112, 3)
+    assert crop.mean() > 250  # the face region maps onto the whole crop
+    landmarks[30] = SimpleNamespace(x=0.5, y=0.5, c=0.0)
+    assert five_points_from_msg(msg) is None
+
+
+def test_new_identities_never_reuse_stored_numbers(rng, people):
+    clock = Clock()
+    store = FakeStore()
+    store.max_user_number = lambda: 13  # e.g. U13 stored under another model key
+    manager = make(clock, store=store)
+    feed(manager, clock, [{'face_0': sample(rng, people[0])} for _ in range(4)])
+    assert list(manager.identity_clusters) == ['U14']
