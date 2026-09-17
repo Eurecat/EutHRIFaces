@@ -44,6 +44,7 @@ except ImportError:
     DlibLandmarkDetector = None  # type: ignore[assignment,misc]
     _DLIB_AVAILABLE = False
 from .mediapipe_landmark_detector import MediaPipeLandmarkDetector
+from .facemesh_landmark_detector import FaceMeshOnnxLandmarkDetector
 
 
 class FaceDetectorNode(Node):
@@ -76,6 +77,7 @@ class FaceDetectorNode(Node):
         self.detector = None
         self.dlib_detector = None
         self.mediapipe_detector = None
+        self.facemesh_detector = None
         # track_id -> [consecutive MediaPipe failures, frames since last attempt]
         self._mediapipe_failures: Dict[Any, List[int]] = {}
         self._initialize_detector()
@@ -284,8 +286,13 @@ class FaceDetectorNode(Node):
                         f"Dlib enhanced {successful_dlib}/{num_faces} faces with 68-point landmarks"
                     )
         
-        # Enhance with MediaPipe 478-point landmarks if enabled (takes priority over dlib)
-        if self.mediapipe_detector is not None and self.mediapipe_detector.is_available():
+        # Enhance with 478-point landmarks if enabled (takes priority over dlib)
+        if self.facemesh_detector is not None and len(detection_results.get('faces', [])) > 0:
+            # Same 68-point layout as the MediaPipe task, from the YOLO boxes in one GPU batch
+            gpu_rgb = getattr(getattr(self, 'jpeg_decoder', None), 'last_gpu_rgb', None)
+            detection_results['mediapipe_landmarks'] = self.facemesh_detector.detect_landmarks_batch(
+                cv_image, detection_results.get('faces', []), detection_results.get('landmarks', []), gpu_rgb=gpu_rgb)
+        elif self.mediapipe_detector is not None and self.mediapipe_detector.is_available():
             num_faces = len(detection_results.get('faces', []))
             if num_faces > 0:
                 mediapipe_landmarks_batch = self._mediapipe_landmarks_with_backoff(
@@ -507,6 +514,15 @@ class FaceDetectorNode(Node):
         self.declare_parameter('mediapipe_min_tracking_confidence', 0.5)
         self.declare_parameter('mediapipe_use_gpu', False)
         self.declare_parameter('mediapipe_num_workers', 4)  # landmarker instances run in parallel (one face each)
+
+        # 68-point landmark backend when enable_mediapipe_landmarks is true:
+        #   "mediapipe":     MediaPipe FaceLandmarker task (own face detector per crop, CPU)
+        #   "facemesh_onnx": MediaPipe's landmark network only, fed with the YOLO boxes, batched on GPU
+        self.declare_parameter('landmark_backend', 'mediapipe')
+        self.declare_parameter('facemesh_model_path', 'weights/face_landmarks_detector.onnx')
+        self.declare_parameter('facemesh_roi_scale', 1.4)
+        self.declare_parameter('facemesh_roi_shift', 0.05)
+        self.declare_parameter('facemesh_min_face_score', 0.0)
         
     def _get_parameters(self):
         """Get parameter values from ROS2 parameter server."""
@@ -630,6 +646,21 @@ class FaceDetectorNode(Node):
         else:
             self.mediapipe_model_path = mediapipe_model_path_param
         
+        self.landmark_backend = self.get_parameter('landmark_backend').get_parameter_value().string_value
+        facemesh_model_param = self.get_parameter('facemesh_model_path').get_parameter_value().string_value
+        self.facemesh_model_path = facemesh_model_param
+        if not os.path.isabs(facemesh_model_param):
+            candidates = [
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))).replace('build', 'src'),
+                             facemesh_model_param),
+                os.path.join('/workspace/src/face_detection', facemesh_model_param),
+            ]
+            try:
+                candidates.append(os.path.join(get_package_share_directory('face_detection'), facemesh_model_param))
+            except Exception:
+                pass
+            self.facemesh_model_path = next((c for c in candidates if os.path.exists(c)), candidates[0])
+
         # Log mode (ros4hri_with_id already set before creating publishers)
         if self.ros4hri_with_id:
             self.get_logger().info("ROS4HRI with ID mode enabled: Publishing individual FacialLandmarks messages per face ID")
@@ -679,8 +710,24 @@ class FaceDetectorNode(Node):
             else:
                 self.get_logger().info("Dlib landmark detection disabled - using YOLO 5-point landmarks")
             
+            # Fast landmark backend: MediaPipe's landmark network on the YOLO boxes (GPU, batched)
+            if self.enable_mediapipe_landmarks and self.landmark_backend == 'facemesh_onnx':
+                self.facemesh_detector = FaceMeshOnnxLandmarkDetector(
+                    model_path=self.facemesh_model_path,
+                    logger=self.get_logger(),
+                    device=self.device,
+                    roi_scale=self.get_parameter('facemesh_roi_scale').get_parameter_value().double_value,
+                    roi_shift=self.get_parameter('facemesh_roi_shift').get_parameter_value().double_value,
+                    min_face_score=self.get_parameter('facemesh_min_face_score').get_parameter_value().double_value,
+                    use_tensorrt=self.use_tensorrt,
+                    trt_cache_dir=os.path.join(os.path.dirname(os.path.abspath(self.model_path)), 'trt_cache'),
+                )
+                if not self.facemesh_detector.is_available():
+                    self.get_logger().warning("Face mesh ONNX landmarks unavailable, falling back to MediaPipe")
+                    self.facemesh_detector = None
+
             # Initialize MediaPipe landmark detector if enabled
-            if self.enable_mediapipe_landmarks:
+            if self.enable_mediapipe_landmarks and self.facemesh_detector is None:
                 self.get_logger().info("Initializing MediaPipe 478-point landmark detector (mapped to ros4hri 68-point)...")
                 self.mediapipe_detector = MediaPipeLandmarkDetector(
                     model_path=self.mediapipe_model_path,

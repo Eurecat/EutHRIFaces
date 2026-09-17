@@ -26,6 +26,7 @@ class JpegDecoder:
     def __init__(self, device: str = 'cuda', logger: Any = None):
         self._logger = logger
         self._gpu = False
+        self.last_gpu_rgb = None  # uint8 3xHxW CUDA tensor of the last GPU-decoded frame (None after CPU decode)
         self._gpu_failures = 0
         device = os.environ.get('JPEG_DECODER_DEVICE', device)
         if not str(device).startswith('cuda'):
@@ -55,6 +56,7 @@ class JpegDecoder:
             try:
                 encoded = self._torch.frombuffer(data, dtype=self._torch.uint8)
                 rgb = self._decode_jpeg(encoded, mode=self._rgb_mode, device=self._device)
+                self.last_gpu_rgb = rgb
                 return rgb.flip(0).permute(1, 2, 0).contiguous().cpu().numpy()
             except Exception as e:
                 self._gpu_failures += 1
@@ -62,6 +64,7 @@ class JpegDecoder:
                     self._gpu = False
                     self._log('warn', f'JpegDecoder: GPU decoding failed {self._gpu_failures} times ({e}), '
                                       'switching to cv2.imdecode')
+        self.last_gpu_rgb = None
         return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
 
     def _log(self, level: str, message: str) -> None:

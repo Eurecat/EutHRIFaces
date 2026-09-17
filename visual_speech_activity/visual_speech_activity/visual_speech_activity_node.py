@@ -49,6 +49,7 @@ except ImportError:
 from sensor_msgs.msg import Image, CompressedImage
 
 from .vsdlm_detector import VSDLMDetector
+from .lip_motion_detector import LipMotionDetector
 from .jpeg_decoder import JpegDecoder
 
 
@@ -78,19 +79,33 @@ class VisualSpeechActivityNode(Node):
         self.get_logger().debug(f"VSDLM weights directory: {vsdlm_weights_dir_path}")
         self.get_logger().debug(f"VSDLM model path: {vsdlm_model_full_path}")
         
-        # Initialize VSDLM detector for visual speech detection
-        self.vsdlm_detector = VSDLMDetector(
-            model_path=vsdlm_model_full_path,
-            model_variant=self.vsdlm_model_variant,
-            providers=self.vsdlm_providers,
-            speaking_threshold=self.speaking_threshold,
-            debug_save_crops=self.vsdlm_debug_save_crops,
-            logger=self.get_logger(),
-            mouth_height_ratio=self.vsdlm_mouth_height_ratio,
-            temporal_smoothing=self.vsdlm_temporal_smoothing,
-            smoothing_window_size=self.vsdlm_smoothing_window_size,
-            min_confidence_for_change=self.vsdlm_min_confidence_for_change
-        )
+        # Speaking detector: "vsdlm" (mouth-crop classifier) or "lip_motion" (lip opening variation
+        # from the landmarks, no model and no image needed). Both expose detect_speaking().
+        self.vsad_method = self.get_parameter('vsad_method').get_parameter_value().string_value
+        if self.vsad_method == 'lip_motion':
+            gp = self.get_parameter
+            self.vsdlm_detector = LipMotionDetector(
+                window_s=gp('lip_motion_window_s').get_parameter_value().double_value,
+                min_samples=gp('lip_motion_min_samples').get_parameter_value().integer_value,
+                min_std=gp('lip_motion_min_std').get_parameter_value().double_value,
+                full_std=gp('lip_motion_full_std').get_parameter_value().double_value,
+                speaking_threshold=gp('lip_motion_speaking_threshold').get_parameter_value().double_value,
+                logger=self.get_logger(),
+            )
+            self.get_logger().info("Visual speech activity: lip_motion (landmark lip-opening variation)")
+        else:
+            self.vsdlm_detector = VSDLMDetector(
+                model_path=vsdlm_model_full_path,
+                model_variant=self.vsdlm_model_variant,
+                providers=self.vsdlm_providers,
+                speaking_threshold=self.speaking_threshold,
+                debug_save_crops=self.vsdlm_debug_save_crops,
+                logger=self.get_logger(),
+                mouth_height_ratio=self.vsdlm_mouth_height_ratio,
+                temporal_smoothing=self.vsdlm_temporal_smoothing,
+                smoothing_window_size=self.vsdlm_smoothing_window_size,
+                min_confidence_for_change=self.vsdlm_min_confidence_for_change
+            )
         
         # Log final provider selection from the detector
         actual_providers = self.vsdlm_detector.session.get_providers() if hasattr(self.vsdlm_detector, 'session') else "unknown"
@@ -186,6 +201,14 @@ class VisualSpeechActivityNode(Node):
         self.declare_parameter('vsdlm_temporal_smoothing', True)  # Enable temporal smoothing to reduce flickering
         self.declare_parameter('vsdlm_smoothing_window_size', 5)  # Number of frames for smoothing window
         self.declare_parameter('vsdlm_min_confidence_for_change', 0.1)  # Min confidence diff to change state
+
+        # Speaking detector selection and lip_motion parameters
+        self.declare_parameter('vsad_method', 'vsdlm')  # "vsdlm" | "lip_motion"
+        self.declare_parameter('lip_motion_window_s', 1.0)  # window of lip-opening samples
+        self.declare_parameter('lip_motion_min_samples', 5)  # samples before reporting confidence
+        self.declare_parameter('lip_motion_min_std', 0.02)  # lip-opening std at/below which confidence is 0
+        self.declare_parameter('lip_motion_full_std', 0.08)  # std at/above which confidence is 1
+        self.declare_parameter('lip_motion_speaking_threshold', 0.5)  # confidence reported as speaking
         
         # Image input parameters (same as face_recognition)
         self.declare_parameter('image_topic', '/camera/color/image_raw')  # Camera image topic
@@ -455,6 +478,15 @@ class VisualSpeechActivityNode(Node):
             # Return most recent image
             return self._decoded_buffer_image(len(self.image_buffer) - 1)
     
+    # lip_motion works on landmarks only; stands in for the frame when nobody watches the annotated image
+    _NO_PIXELS = np.zeros((1, 1, 3), np.uint8)
+
+    def _image_for_landmarks(self, target_timestamp: float) -> Optional[np.ndarray]:
+        if self.vsad_method == 'lip_motion' and (
+                self.image_publisher is None or self.image_publisher.get_subscription_count() == 0):
+            return self._NO_PIXELS  # skip decoding a frame the detector does not use
+        return self._get_image_by_timestamp(target_timestamp, slop=0.1)
+
     def _get_image_by_timestamp(self, target_timestamp: float, slop: float = 0.1) -> Optional[np.ndarray]:
         """
         Get image that matches the target timestamp within slop tolerance.
@@ -716,7 +748,7 @@ class VisualSpeechActivityNode(Node):
         
         # Get image that matches the landmarks timestamp (within 100ms slop)
         landmarks_timestamp = _stamp_to_float(landmarks_msg.header.stamp)
-        cv_image = self._get_image_by_timestamp(landmarks_timestamp, slop=0.1)
+        cv_image = self._image_for_landmarks(landmarks_timestamp)
         
         # Detect speaking using VSDLM
         if cv_image is None:
@@ -805,7 +837,7 @@ class VisualSpeechActivityNode(Node):
             
             # Get image that matches the landmarks timestamp
             landmarks_timestamp = _stamp_to_float(landmarks_msg.header.stamp)
-            cv_image = self._get_image_by_timestamp(landmarks_timestamp, slop=0.1)
+            cv_image = self._image_for_landmarks(landmarks_timestamp)
             
             if self.enable_debug_output:
                 self.get_logger().debug(
@@ -883,7 +915,7 @@ class VisualSpeechActivityNode(Node):
         
         # Get image that matches the landmarks timestamp
         landmarks_timestamp = _stamp_to_float(landmarks_msg.header.stamp)
-        cv_image = self._get_image_by_timestamp(landmarks_timestamp, slop=0.1)
+        cv_image = self._image_for_landmarks(landmarks_timestamp)
         
         if self.enable_debug_output:
             self.get_logger().debug(

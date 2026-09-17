@@ -23,6 +23,14 @@ visual_speech_activity_node:
     # Higher values = fewer false positives but may miss speaking
     # Recommended: 0.4-0.6
     speaking_threshold: 0.75
+    # Speaking detector: "lip_motion" = variation of the inner-lip opening in the landmarks over
+    # lip_motion_window_s (stable across landmark backends, no model); "vsdlm" = mouth-crop classifier
+    vsad_method: "lip_motion"
+    lip_motion_window_s: 1.0
+    lip_motion_min_samples: 5
+    lip_motion_min_std: 0.02            # landmark jitter level: confidence 0
+    lip_motion_full_std: 0.08           # confidence 1 (calibrate live with someone talking)
+    lip_motion_speaking_threshold: 0.5
     
     # Directory containing VSDLM weights (relative to package source)
     vsdlm_weights_path: "weights"
