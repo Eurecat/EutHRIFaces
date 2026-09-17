@@ -60,6 +60,7 @@ face_recognition_node:
 
     # Identity Persistence Configuration (continuous, throttled MongoDB sync)
     use_mongodb: true
+    mongo_db_name: "face_recognition_db"   # the video test compose uses a separate database
     save_last_n_embeddings: 100          # Gallery samples stored per identity (whole diverse gallery)
     persist_every: 20                    # Updates before a confirmed identity is saved again...
     min_persist_interval: 10.0           # ...and at least this many seconds since its last save

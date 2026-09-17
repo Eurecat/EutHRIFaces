@@ -333,6 +333,23 @@ def test_five_point_alignment():
     assert five_points_from_msg(msg) is None
 
 
+def test_five_points_use_eye_contour_centre_when_available():
+    from types import SimpleNamespace
+    from face_recognition.face_alignment import five_points_from_msg
+    width, height = 100, 100
+    landmarks = [SimpleNamespace(x=0.0, y=0.0, c=0.0) for _ in range(70)]
+    for index in (30, 54, 48):
+        landmarks[index] = SimpleNamespace(x=0.5, y=0.8, c=1.0)
+    # MediaPipe-style: inner corners at 39/42, full contours around centres (30, 40) and (70, 40)
+    for index, cx in ((36, 30), (42, 70)):
+        for k, (dx, dy) in enumerate([(-8, 0), (-4, -3), (4, -3), (8, 0), (4, 3), (-4, 3)]):
+            landmarks[index + k] = SimpleNamespace(x=(cx + dx) / width, y=(40 + dy) / height, c=1.0)
+    msg = SimpleNamespace(landmarks=landmarks, width=width, height=height)
+    points = five_points_from_msg(msg)
+    assert np.allclose(points[0], (30, 40), atol=1e-3)
+    assert np.allclose(points[1], (70, 40), atol=1e-3)
+
+
 def test_new_identities_never_reuse_stored_numbers(rng, people):
     clock = Clock()
     store = FakeStore()
