@@ -2,4 +2,4 @@ repositories:
   hri_msgs:
     type: git
     url: https://github.com/Eurecat/hri_msgs.git
-    version: jazzy-devel
+    version: dev/refactor_person_identity

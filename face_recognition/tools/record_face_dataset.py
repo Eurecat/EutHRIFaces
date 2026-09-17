@@ -5,7 +5,8 @@ Record a face-embedding dataset from the live stack for offline identity evaluat
 For every FacialLandmarksArray on /humans/faces/detected it stores, per face:
   - face_id (tracker id), stamp, bbox (normalized), bbox confidence, 70 landmarks
   - embedding from the image whose stamp matches the detection (correct pairing)
-  - embedding from the newest image at processing time (what face_recognition_node does)
+  - embedding from the newest image at processing time (what the node did before stamp matching)
+  - the embedding crop itself (JPEG), so the session can be re-embedded with any model later
   - video frame index (when --video is given), found by thumbnail matching, so
     detections from different loops of a looping test video can be aligned.
 
@@ -72,8 +73,10 @@ class Recorder(Node):
         # Borrow the node's crop/alignment code with a minimal stand-in for `self`
         self.crop_ctx = SimpleNamespace(
             min_h_size=args.min_h_size, enable_face_alignment=args.align, enable_debug_output=False,
+            crop_mode=args.crop_mode, aligned_crop_size=args.aligned_crop_size,
             last_image=None, get_logger=self.get_logger,
-            _align_face_crop=lambda *a: FaceRecognitionNode._align_face_crop(self.crop_ctx, *a))
+            _align_face_crop=lambda *a: FaceRecognitionNode._align_face_crop(self.crop_ctx, *a),
+            _extract_face_crop_from_landmarks=lambda m: FaceRecognitionNode._extract_face_crop_from_landmarks(self.crop_ctx, m))
 
         self.create_subscription(CompressedImage, args.image_topic, self._on_image, qos_profile_sensor_data)
         self.create_subscription(FacialLandmarksArray, args.faces_topic, self._on_faces, 50)
@@ -92,7 +95,7 @@ class Recorder(Node):
 
     def _crops(self, image, faces):
         self.crop_ctx.last_image = image
-        return [FaceRecognitionNode._extract_face_crop_from_landmarks(self.crop_ctx, f) for f in faces]
+        return [FaceRecognitionNode._extract_face_crop(self.crop_ctx, f) for f in faces]
 
     def _embed(self, crops):
         valid = [c for c in crops if c is not None]
@@ -113,13 +116,14 @@ class Recorder(Node):
             frame_idx = -1
             if self.video_thumbs is not None:
                 frame_idx = int(np.argmin(np.mean((self.video_thumbs - thumb(image)) ** 2, axis=1)))
-            emb_matched = self._embed(self._crops(image, msg.ids))
+            crops = self._crops(image, msg.ids)
+            emb_matched = self._embed(crops)
             if latest is not None and latest[0] != t:
                 emb_latest = self._embed(self._crops(self._decode(latest[1]), msg.ids))
                 latest_lag_ms = (latest[0] - t) / 1e6
             else:
                 emb_latest, latest_lag_ms = emb_matched, 0.0
-            for face, e_m, e_l in zip(msg.ids, emb_matched, emb_latest):
+            for face, crop, e_m, e_l in zip(msg.ids, crops, emb_matched, emb_latest):
                 lms = np.array([[p.x, p.y, p.c] for p in face.landmarks], dtype=np.float32)
                 if lms.shape[0] < 70:
                     lms = np.vstack([lms, np.zeros((70 - lms.shape[0], 3), np.float32)])
@@ -129,7 +133,9 @@ class Recorder(Node):
                     bbox=np.array([b.xmin, b.ymin, b.xmax, b.ymax], np.float32),
                     bbox_conf=float(face.bbox_confidence), width=int(face.width), height=int(face.height),
                     landmarks=lms[:70], latest_lag_ms=latest_lag_ms,
-                    emb_matched=e_m, emb_latest=e_l))
+                    emb_matched=e_m, emb_latest=e_l,
+                    crop_jpg=cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 95])[1].tobytes()
+                    if crop is not None else b''))
         if time.time() > self.t_end:
             raise SystemExit
 
@@ -154,6 +160,8 @@ class Recorder(Node):
             latest_lag_ms=np.array([r['latest_lag_ms'] for r in self.rows], np.float32),
             emb_matched=stack_emb('emb_matched'),
             emb_latest=stack_emb('emb_latest'),
+            crop_jpg=np.array([r['crop_jpg'] for r in self.rows], dtype=object),
+            crop_mode=np.array(self.args.crop_mode),
         )
         self.get_logger().info(f'Saved {len(self.rows)} face rows to {self.args.out}')
 
@@ -168,6 +176,8 @@ def main():
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--min-h-size', type=int, default=30)
     parser.add_argument('--no-align', dest='align', action='store_false')
+    parser.add_argument('--crop-mode', default='aligned', choices=['aligned', 'bbox'])
+    parser.add_argument('--aligned-crop-size', type=int, default=160)
     args = parser.parse_args()
 
     rclpy.init()

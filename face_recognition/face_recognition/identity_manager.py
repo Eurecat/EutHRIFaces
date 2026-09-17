@@ -17,7 +17,12 @@ The rules are ported from the speech diarization identity layer
   the young threshold;
 * only good-quality faces (near-frontal, confidently detected) teach an identity;
   poor faces may be matched to a known identity but otherwise stay unlabeled;
-* fragments are merged, and young strays are absorbed once the true identity matured;
+* each identity keeps a *diverse* gallery (near-duplicate frames are skipped and the most
+  redundant sample is evicted), so it remembers every look instead of the last seconds;
+* scores combine the gallery mean with the closest gallery samples;
+* a seed that clearly matches an existing identity joins it instead of creating a new one;
+* fragments are merged, and young strays are absorbed, unless the two identities were
+  ever seen at the same time on different faces (then they are different people);
 * confirmed identities are written to MongoDB incrementally and throttled, not only at
   shutdown, and a database outage never stops recognition.
 """
@@ -28,6 +33,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+from itertools import combinations
 from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Set
 
 import numpy as np
@@ -57,9 +63,13 @@ class FaceIdentityCluster:
     quality_score: float = 0.0
 
     custom_name: Optional[str] = None
+    # Identities seen in the same frame on another face: never the same person
+    co_occurring: Set[str] = field(default_factory=set)
     unsaved_updates: int = 0
     persisted: bool = False
     last_saved_timestamp: float = 0.0
+    # Cached np.stack(all_embeddings); rebuilt when the gallery changes
+    gallery_matrix: Optional[np.ndarray] = field(default=None, repr=False, compare=False)
 
 
 class FaceAssignment(NamedTuple):
@@ -84,7 +94,7 @@ class MongoFaceIdentityStore:
     """
 
     def __init__(self, mongo_uri: str, model_key: str, database_name: str = "face_recognition_db",
-                 collection_name: str = "identity_database", save_last_n_embeddings: int = 20) -> None:
+                 collection_name: str = "identity_database", save_last_n_embeddings: int = 100) -> None:
         from pymongo import MongoClient
 
         self._model_key = model_key
@@ -96,6 +106,19 @@ class MongoFaceIdentityStore:
 
     def count_legacy_documents(self) -> int:
         return self._collection.count_documents({"model_key": {"$exists": False}})
+
+    def count_other_model_documents(self) -> int:
+        return self._collection.count_documents({"model_key": {"$exists": True, "$ne": self._model_key}})
+
+    def max_user_number(self) -> int:
+        """Highest U<n> ever stored under any model key, so new identities never reuse an id
+        that downstream consumers (e.g. PersonManager) may still link to another face."""
+        highest = 0
+        for document in self._collection.find({}, {"unique_id": 1}):
+            match = re.search(r"(\d+)$", str(document.get("unique_id", "")))
+            if match:
+                highest = max(highest, int(match.group(1)))
+        return highest
 
     def load(self) -> List[FaceIdentityCluster]:
         identities = []
@@ -118,6 +141,7 @@ class MongoFaceIdentityStore:
                 confirmed=bool(document.get("confirmed", True)),
                 quality_score=float(document.get("quality_score", 0.0)),
                 custom_name=document.get("custom_name"),
+                co_occurring=set(document.get("co_occurring", [])),
             ))
         return identities
 
@@ -136,6 +160,7 @@ class MongoFaceIdentityStore:
                 "confirmed": bool(identity.confirmed),
                 "quality_score": float(identity.quality_score),
                 "custom_name": identity.custom_name,
+                "co_occurring": sorted(identity.co_occurring),
                 "embeddings": [e.astype(float).tolist() for e in identity.all_embeddings[-self._save_last_n:]],
                 "mean_embedding": identity.mean_embedding.astype(float).tolist(),
                 "updated_at": time.time(),
@@ -163,15 +188,18 @@ class FaceIdentityManager:
         young_identity_threshold: float = 0.40,
         match_margin: float = 0.08,
         stickiness_margin: float = 0.20,
-        merge_threshold: float = 0.70,
+        merge_threshold: float = 0.50,
+        seed_match_threshold: float = 0.50,
         min_learn_quality: float = 0.50,
         min_seed_samples: int = 4,
         seed_consistency: float = 0.55,
         seed_pairwise_consistency: float = 0.40,
         min_confirm_samples: int = 12,
-        min_confirm_seconds: float = 1.0,
+        min_confirm_seconds: float = 3.0,
         max_embeddings_per_identity: int = 100,
-        min_embeddings_for_merge: int = 6,
+        redundancy_threshold: float = 0.92,
+        gallery_top_k: int = 3,
+        merge_check_interval: float = 1.0,
         identity_timeout: float = 30.0,
         track_timeout: float = 2.0,
         persist_every: int = 20,
@@ -185,14 +213,17 @@ class FaceIdentityManager:
         self.match_margin = match_margin
         self.stickiness_margin = stickiness_margin
         self.merge_threshold = merge_threshold
+        self.seed_match_threshold = seed_match_threshold
         self.min_learn_quality = min_learn_quality
         self.min_seed_samples = max(1, min_seed_samples)
         self.seed_consistency = seed_consistency
         self.seed_pairwise_consistency = seed_pairwise_consistency
         self.min_confirm_samples = min_confirm_samples
         self.min_confirm_seconds = min_confirm_seconds
-        self.max_embeddings_per_identity = max(1, max_embeddings_per_identity)
-        self.min_embeddings_for_merge = min_embeddings_for_merge
+        self.max_embeddings_per_identity = max(2, max_embeddings_per_identity)
+        self.redundancy_threshold = redundancy_threshold
+        self.gallery_top_k = max(1, gallery_top_k)
+        self.merge_check_interval = merge_check_interval
         self.identity_timeout = identity_timeout
         self.track_timeout = track_timeout
         self.persist_every = max(1, persist_every)
@@ -203,12 +234,16 @@ class FaceIdentityManager:
         self._track_last_seen: Dict[str, float] = {}
         self._seed_buffers: Dict[str, List[np.ndarray]] = {}
         self._next_user_number = 1
+        self._last_merge_check = float("-inf")
 
         self.total_identities_created = 0
+        self.total_seed_rematches = 0
         self.total_identity_merges = 0
         self.total_saves = 0
 
         if self._store is not None:
+            if hasattr(self._store, "max_user_number"):
+                self._next_user_number = self._store.max_user_number() + 1
             for identity in self._store.load():
                 identity.persisted = True
                 identity.last_saved_timestamp = self._clock()
@@ -229,8 +264,10 @@ class FaceIdentityManager:
             return {}
         now = self._clock()
 
-        self._merge_similar_identities()
-        self._absorb_stray_identities()
+        if now - self._last_merge_check >= self.merge_check_interval:
+            self._last_merge_check = now
+            self._merge_similar_identities()
+            self._absorb_stray_identities()
 
         vectors: Dict[str, np.ndarray] = {}
         for track_id, embedding in track_embeddings.items():
@@ -240,6 +277,7 @@ class FaceIdentityManager:
                 continue
         track_ids = list(vectors)
         assignments = self._assign_batch(track_ids, vectors)
+        claimed = {uid for uid, _ in assignments.values() if uid is not None}
 
         results: Dict[str, FaceAssignment] = {}
         for track_id in track_ids:
@@ -250,9 +288,15 @@ class FaceIdentityManager:
             if unique_id is None:
                 if self.track_id_to_unique_id.get(track_id) not in self.identity_clusters:
                     self.track_id_to_unique_id.pop(track_id, None)
-                created = self._seed(track_id, vectors[track_id], now) if good else None
-                results[track_id] = (FaceAssignment(created, 1.0, STATUS_TENTATIVE) if created
-                                     else FaceAssignment(None, 0.0, STATUS_UNKNOWN))
+                seeded = self._seed(track_id, vectors[track_id], now, claimed) if good else None
+                if seeded is None:
+                    results[track_id] = FaceAssignment(None, 0.0, STATUS_UNKNOWN)
+                    continue
+                unique_id, score = seeded
+                claimed.add(unique_id)
+                identity = self.identity_clusters[unique_id]
+                results[track_id] = FaceAssignment(
+                    unique_id, score, STATUS_CONFIRMED if identity.confirmed else STATUS_TENTATIVE)
                 continue
 
             self._seed_buffers.pop(track_id, None)
@@ -267,6 +311,7 @@ class FaceIdentityManager:
             results[track_id] = FaceAssignment(
                 unique_id, max(0.0, score), STATUS_CONFIRMED if identity.confirmed else STATUS_TENTATIVE)
 
+        self._record_co_occurrence({a.unique_id for a in results.values() if a.unique_id})
         self._cleanup_stale_tracks(now)
         self.cleanup_inactive_identities()
         return results
@@ -275,14 +320,36 @@ class FaceIdentityManager:
     # Matching
     # ------------------------------------------------------------------
 
+    def _gallery(self, identity: FaceIdentityCluster) -> np.ndarray:
+        if identity.gallery_matrix is None or len(identity.gallery_matrix) != len(identity.all_embeddings):
+            identity.gallery_matrix = np.stack(identity.all_embeddings)
+        return identity.gallery_matrix
+
+    def _score_matrix(self, queries: np.ndarray, identity_ids: Sequence[str]) -> np.ndarray:
+        """Similarity of each query to each identity: half gallery mean, half its closest samples."""
+        scores = np.empty((len(queries), len(identity_ids)), dtype=np.float32)
+        for column, unique_id in enumerate(identity_ids):
+            identity = self.identity_clusters[unique_id]
+            gallery = self._gallery(identity)
+            sample_scores = queries @ gallery.T
+            k = min(self.gallery_top_k, gallery.shape[0])
+            closest = np.partition(sample_scores, -k, axis=1)[:, -k:].mean(axis=1)
+            scores[:, column] = 0.5 * (queries @ identity.mean_embedding) + 0.5 * closest
+        return scores
+
+    def _pair_score(self, first: FaceIdentityCluster, second: FaceIdentityCluster, top_k: int = 5) -> float:
+        cross = (self._gallery(first) @ self._gallery(second).T).ravel()
+        k = min(top_k, cross.size)
+        closest = float(np.partition(cross, -k)[-k:].mean())
+        return 0.5 * float(first.mean_embedding @ second.mean_embedding) + 0.5 * closest
+
     def _assign_batch(self, track_ids: Sequence[str], vectors: Dict[str, np.ndarray]):
         result = {track_id: (None, 0.0) for track_id in track_ids}
         identity_ids = [uid for uid, c in self.identity_clusters.items() if c.mean_embedding is not None]
         if not identity_ids or not track_ids:
             return result
 
-        representations = np.stack([self._representation(self.identity_clusters[uid]) for uid in identity_ids])
-        similarity = np.stack([vectors[t] for t in track_ids]) @ representations.T
+        similarity = self._score_matrix(np.stack([vectors[t] for t in track_ids]), identity_ids)
 
         # Most confident faces first, so a strong match claims its identity before an ambiguous one.
         order = sorted(range(len(track_ids)), key=lambda i: float(np.max(similarity[i])), reverse=True)
@@ -322,25 +389,20 @@ class FaceIdentityManager:
     def _required_score(self, identity: FaceIdentityCluster) -> float:
         return self.similarity_threshold if identity.confirmed else self.young_identity_threshold
 
-    def _representation(self, identity: FaceIdentityCluster) -> np.ndarray:
-        """Blend the mean with recent history so one drifting vector cannot define a face."""
-        if len(identity.all_embeddings) < 4:
-            return identity.mean_embedding
-        recent = np.mean(np.stack(identity.all_embeddings[-10:]), axis=0)
-        return normalize_embedding(0.6 * identity.mean_embedding + 0.4 * recent)
-
     def score(self, unique_id: str, embedding: np.ndarray) -> Optional[float]:
         identity = self.identity_clusters.get(unique_id)
         if identity is None or identity.mean_embedding is None:
             return None
-        return float(normalize_embedding(embedding) @ self._representation(identity))
+        return float(self._score_matrix(normalize_embedding(embedding)[None, :], [unique_id])[0, 0])
 
     # ------------------------------------------------------------------
     # Identity lifecycle
     # ------------------------------------------------------------------
 
-    def _seed(self, track_id: str, vector: np.ndarray, now: float) -> Optional[str]:
-        """Collect good samples of an unmatched track; create an identity once they agree."""
+    def _seed(self, track_id: str, vector: np.ndarray, now: float,
+              claimed: Set[str]) -> Optional[Tuple[str, float]]:
+        """Collect good samples of an unmatched track. Once they agree, join the existing
+        identity they clearly match, or create a new one. Returns (unique_id, score)."""
         buffer = self._seed_buffers.setdefault(track_id, [])
         buffer.append(vector)
         del buffer[:-self.min_seed_samples * 2]
@@ -350,12 +412,37 @@ class FaceIdentityManager:
         mean = normalize_embedding(recent.mean(axis=0))
         consistency = float(np.min(recent @ mean))
         pairwise = recent @ recent.T
-        pairwise_mean = float((pairwise.sum() - np.trace(pairwise)) / (len(recent) * (len(recent) - 1))) if len(recent) > 1 else 1.0
+        pairwise_mean = (float((pairwise.sum() - np.trace(pairwise)) / (len(recent) * (len(recent) - 1)))
+                         if len(recent) > 1 else 1.0)
         # Both checks: a track alternating between two people has a mean halfway
         # between them, so every sample still scores ~0.7 against it; the pairwise
         # mean exposes the mixture.
         if consistency < self.seed_consistency or pairwise_mean < self.seed_pairwise_consistency:
             return None  # the track mixes people or poses: keep waiting
+
+        # The averaged seed is far less noisy than single frames: if it clearly matches an
+        # identity not visible elsewhere in this frame, this is a known person in a new look.
+        candidates = [uid for uid, c in self.identity_clusters.items()
+                      if c.mean_embedding is not None and uid not in claimed]
+        if candidates:
+            scores = self._score_matrix(mean[None, :], candidates)[0]
+            order = np.argsort(scores)[::-1]
+            best_score = float(scores[order[0]])
+            second_score = float(scores[order[1]]) if len(order) > 1 else -1.0
+            if best_score >= self.seed_match_threshold and best_score - second_score >= self.match_margin:
+                unique_id = candidates[int(order[0])]
+                identity = self.identity_clusters[unique_id]
+                for sample in recent:
+                    self._add_embedding(identity, sample, now)
+                identity.last_seen_timestamp = now
+                identity.current_track_id = track_id
+                identity.total_detections += len(recent)
+                self.track_id_to_unique_id[track_id] = unique_id
+                self._seed_buffers.pop(track_id, None)
+                self.total_seed_rematches += 1
+                self._logger.info(f"Track {track_id} joined face identity {unique_id} "
+                                  f"(seed score {best_score:.3f}, second {second_score:.3f})")
+                return unique_id, best_score
 
         unique_id = f"U{self._next_user_number}"
         self._next_user_number += 1
@@ -368,84 +455,110 @@ class FaceIdentityManager:
         self._seed_buffers.pop(track_id, None)
         self.total_identities_created += 1
         self._logger.info(f"New face identity {unique_id} (track {track_id}, seed consistency {consistency:.3f})")
-        return unique_id
+        return unique_id, 1.0
 
     def _add_embedding(self, identity: FaceIdentityCluster, vector: np.ndarray, now: float) -> None:
-        identity.all_embeddings.append(vector.copy())
-        if len(identity.all_embeddings) > self.max_embeddings_per_identity:
-            del identity.all_embeddings[0]
-        identity.mean_embedding = normalize_embedding(np.mean(np.stack(identity.all_embeddings), axis=0))
+        """Count a good observation; store it only if it adds a look the gallery lacks."""
         identity.good_samples += 1
-        identity.unsaved_updates += 1
         if identity.first_learned_timestamp is None:
             identity.first_learned_timestamp = now
         identity.last_learned_timestamp = now
-        identity.quality_score = self._quality_score(identity)
+
+        if self._store_sample(identity, vector):
+            identity.unsaved_updates += 1
 
         if not identity.confirmed and (
                 identity.good_samples >= self.min_confirm_samples
                 and now - identity.first_learned_timestamp >= self.min_confirm_seconds):
             identity.confirmed = True
-            self._logger.info(f"Face identity {identity.unique_id} confirmed ({identity.good_samples} samples)")
+            identity.unsaved_updates += 1
+            self._logger.info(f"Face identity {identity.unique_id} confirmed ({identity.good_samples} samples, "
+                              f"{len(identity.all_embeddings)} distinct)")
         self._maybe_save(identity, now)
+
+    def _store_sample(self, identity: FaceIdentityCluster, vector: np.ndarray) -> bool:
+        """Add a sample to the gallery unless it is a near-duplicate. Returns True if stored."""
+        if identity.all_embeddings and float(np.max(self._gallery(identity) @ vector)) >= self.redundancy_threshold:
+            return False  # near-duplicate of a stored look (e.g. a static face)
+        identity.all_embeddings.append(vector.copy())
+        if len(identity.all_embeddings) > self.max_embeddings_per_identity:
+            # Evict the most redundant sample, not the oldest: keep every distinct look.
+            gallery = np.stack(identity.all_embeddings)
+            similarity = gallery @ gallery.T
+            np.fill_diagonal(similarity, -1.0)
+            del identity.all_embeddings[int(np.argmax(similarity.max(axis=1)))]
+        identity.gallery_matrix = None
+        identity.mean_embedding = normalize_embedding(np.mean(self._gallery(identity), axis=0))
+        identity.quality_score = self._quality_score(identity)
+        return True
 
     def _quality_score(self, identity: FaceIdentityCluster) -> float:
         if len(identity.all_embeddings) < 2 or identity.mean_embedding is None:
             return 0.0
-        consistency = float(np.mean(np.stack(identity.all_embeddings[-10:]) @ identity.mean_embedding))
+        consistency = float(np.mean(self._gallery(identity) @ identity.mean_embedding))
         population = min(len(identity.all_embeddings) / float(self.max_embeddings_per_identity), 1.0)
         return 0.7 * consistency + 0.3 * population
+
+    def _record_co_occurrence(self, unique_ids: Set[str]) -> None:
+        for first, second in combinations(sorted(unique_ids), 2):
+            a, b = self.identity_clusters.get(first), self.identity_clusters.get(second)
+            if a is None or b is None or second in a.co_occurring:
+                continue
+            a.co_occurring.add(second)
+            b.co_occurring.add(first)
+            a.unsaved_updates += 1
+            b.unsaved_updates += 1
 
     # ------------------------------------------------------------------
     # Merging and cleanup
     # ------------------------------------------------------------------
 
     def _merge_similar_identities(self) -> None:
+        """Fold fragments of one person together. Identities ever seen together are never merged."""
         candidates = [uid for uid, c in self.identity_clusters.items()
-                      if c.mean_embedding is not None and len(c.all_embeddings) >= self.min_embeddings_for_merge]
-        if len(candidates) < 2:
-            return
-        matrix = np.stack([self._representation(self.identity_clusters[uid]) for uid in candidates])
-        similarity = matrix @ matrix.T
-        pairs = sorted(((float(similarity[i, j]), candidates[i], candidates[j])
-                        for i in range(len(candidates)) for j in range(i + 1, len(candidates))
-                        if similarity[i, j] >= self.merge_threshold), reverse=True)
+                      if c.mean_embedding is not None and c.good_samples >= self.min_confirm_samples]
+        pairs = []
+        for first, second in combinations(candidates, 2):
+            a, b = self.identity_clusters[first], self.identity_clusters[second]
+            if second in a.co_occurring:
+                continue
+            score = self._pair_score(a, b)
+            if score >= self.merge_threshold:
+                pairs.append((score, first, second))
         merged: Set[str] = set()
-        for score, first, second in pairs:
+        for score, first, second in sorted(pairs, reverse=True):
             if first in merged or second in merged:
                 continue
             keep, drop = sorted((first, second), key=self._user_number)
             if self.merge_identities(keep, drop):
                 merged.add(drop)
-                self._logger.info(f"Merged face identity {drop} into {keep} (similarity {score:.3f})")
+                self._logger.info(f"Merged face identity {drop} into {keep} (score {score:.3f})")
 
     def _absorb_stray_identities(self) -> None:
         """Fold young identities into a confirmed one they clearly belong to."""
         mature = [uid for uid, c in self.identity_clusters.items() if c.confirmed and c.mean_embedding is not None]
         young = [uid for uid, c in self.identity_clusters.items() if not c.confirmed and c.mean_embedding is not None]
-        if not mature or not young:
-            return
-        references = np.stack([self._representation(self.identity_clusters[uid]) for uid in mature])
         for uid in young:
-            if uid not in self.identity_clusters:
+            stray = self.identity_clusters.get(uid)
+            options = [m for m in mature if m in self.identity_clusters and m not in stray.co_occurring]
+            if stray is None or not options:
                 continue
-            scores = references @ self.identity_clusters[uid].mean_embedding
-            order = np.argsort(scores)[::-1]
-            best = float(scores[order[0]])
-            second = float(scores[order[1]]) if len(order) > 1 else -1.0
-            if best < self.similarity_threshold or (len(order) > 1 and best - second < self.match_margin):
+            scores = sorted(((self._pair_score(stray, self.identity_clusters[m]), m) for m in options), reverse=True)
+            best, keep = scores[0]
+            second = scores[1][0] if len(scores) > 1 else -1.0
+            if best < self.similarity_threshold or best - second < self.match_margin:
                 continue
-            keep = mature[int(order[0])]
             if self.merge_identities(keep, uid):
-                self._logger.info(f"Absorbed stray face identity {uid} into {keep} (similarity {best:.3f})")
+                self._logger.info(f"Absorbed stray face identity {uid} into {keep} (score {best:.3f})")
 
     def merge_identities(self, keep_id: str, drop_id: str) -> bool:
         if keep_id == drop_id or keep_id not in self.identity_clusters or drop_id not in self.identity_clusters:
             return False
         keep = self.identity_clusters[keep_id]
         drop = self.identity_clusters.pop(drop_id)
-        keep.all_embeddings = (keep.all_embeddings + drop.all_embeddings)[-self.max_embeddings_per_identity:]
-        keep.mean_embedding = normalize_embedding(np.mean(np.stack(keep.all_embeddings), axis=0))
+        now = self._clock()
+        for sample in drop.all_embeddings:
+            self._store_sample(keep, sample)
         keep.total_detections += drop.total_detections
         keep.good_samples += drop.good_samples
         keep.creation_timestamp = min(keep.creation_timestamp, drop.creation_timestamp)
@@ -454,7 +567,11 @@ class FaceIdentityManager:
         keep.first_learned_timestamp = min(firsts) if firsts else None
         keep.confirmed = keep.confirmed or drop.confirmed
         keep.custom_name = keep.custom_name or drop.custom_name
-        keep.quality_score = self._quality_score(keep)
+        keep.co_occurring |= drop.co_occurring - {keep_id}
+        for other in self.identity_clusters.values():
+            if drop_id in other.co_occurring:
+                other.co_occurring.discard(drop_id)
+                other.co_occurring.add(keep_id)
         keep.unsaved_updates += 1
         for track_id, unique_id in list(self.track_id_to_unique_id.items()):
             if unique_id == drop_id:
@@ -464,7 +581,7 @@ class FaceIdentityManager:
                 self._store.delete(drop_id)
             except Exception as error:
                 self._logger.warning(f"Could not delete merged face identity {drop_id}: {error}")
-        self._save(keep, self._clock())
+        self._save(keep, now)
         self.total_identity_merges += 1
         return True
 
@@ -572,6 +689,7 @@ class FaceIdentityManager:
             "total_identities": len(self.identity_clusters),
             "confirmed_identities": sum(c.confirmed for c in self.identity_clusters.values()),
             "total_identities_created": self.total_identities_created,
+            "total_seed_rematches": self.total_seed_rematches,
             "total_identity_merges": self.total_identity_merges,
             "total_saves": self.total_saves,
             "active_tracks": len(self.track_id_to_unique_id),
