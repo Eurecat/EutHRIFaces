@@ -56,6 +56,14 @@ face_detector:
     enable_mediapipe_landmarks: true
     mediapipe_use_gpu: false
     mediapipe_num_workers: 4          # faces of one frame get landmarks in parallel (~14 ms per face on CPU)
+    # Landmark backend (when enable_mediapipe_landmarks is true):
+    #   facemesh_onnx: MediaPipe's landmark network only, on the YOLO boxes, batched on GPU (~15 ms for 5 faces)
+    #   mediapipe:     full MediaPipe FaceLandmarker task on CPU (~45 ms for 5 faces, misses small faces)
+    landmark_backend: "facemesh_onnx"
+    facemesh_model_path: "weights/face_landmarks_detector.onnx"  # not in git: tools/convert_face_landmarks_to_onnx.sh; missing -> mediapipe backend
+    facemesh_roi_scale: 1.4           # crop side / larger YOLO box side
+    facemesh_roi_shift: 0.05          # crop centre moved down by this fraction of the box height
+    facemesh_min_face_score: 0.0      # face-presence logit; below it the face keeps YOLO 5-point landmarks
     mediapipe_model_path: "face_landmarker.task"
     mediapipe_min_detection_confidence: 0.5
     mediapipe_min_tracking_confidence: 0.5
