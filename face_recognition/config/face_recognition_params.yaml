@@ -22,16 +22,41 @@ face_recognition_node:
     # are on the same horizontal line.  Uses only OpenCV + YOLO pupil landmarks
     enable_face_alignment: True
     
-    # Identity Management Configuration
-    similarity_threshold: 0.4
-    clustering_threshold: 0.35
-    max_embeddings_per_identity: 200  # Reduced from 150 to 50 - fewer comparisons
-    identity_timeout: 3.0 # delete identity if not seen for this many seconds and less than min_embeddings_for_identity
-    min_embeddings_for_identity: 100  # Minimum number of embeddings required to consider an identity valid (used for cleanup of inactive identities)
+    # Detection / image pairing: crops always come from the frame the detector saw
+    image_buffer_size: 30        # Recent frames kept to find the one matching a detection stamp
+    image_sync_timeout: 0.5      # Seconds to wait for that frame before reusing cached results
 
-    # Identity Persistence Configuration
-    use_mongodb: true  # Whether to use MongoDB for identity persistence
-    save_last_n_embeddings: 50  # Number of recent embeddings to save in MongoDB for each identity
+    # Face quality gate: who may create or teach an identity
+    # Quality 0..1 from detection confidence and yaw (inter-ocular distance / face width).
+    # Measured on video_3.mp4: eye ratio 0.06-0.14 (3/4 -> profile) matches the right person
+    # only 73-96% of the time; >= 0.14 is 97-99%. Hand false positives have confidence <= 0.25.
+    min_detection_confidence: 0.40
+    profile_eye_ratio: 0.10      # Eye ratio at or below this -> quality 0 (profile)
+    frontal_eye_ratio: 0.18      # Eye ratio at or above this -> full quality
+    min_learn_quality: 0.50      # Faces below this can match a known identity but never create/teach one
+
+    # Identity Management Configuration (rules ported from speech diarization)
+    similarity_threshold: 0.50           # Match bar for confirmed identities
+    young_identity_threshold: 0.40       # Relaxed match bar for tentative identities (noisy mean)
+    match_margin: 0.08                   # Best must beat second-best by this much, else unlabeled
+    track_identity_stickiness_margin: 0.20  # Track keeps its identity unless another is this much better
+    merge_threshold: 0.70                # Identities this similar are merged (keeps lowest U number)
+    min_seed_samples: 4                  # Consistent good samples of one track needed to create an identity
+    seed_consistency: 0.55               # Min similarity of every seed sample to the seed mean
+    seed_pairwise_consistency: 0.40      # Min mean pairwise similarity of seed samples (rejects mixed tracks)
+    min_confirm_samples: 12              # Good samples before an identity is confirmed (and persisted)
+    min_confirm_seconds: 1.0             # ...spread over at least this time
+    max_embeddings_per_identity: 100
+    min_embeddings_for_merge: 6
+    identity_timeout: 30.0               # Tentative identities unseen this long are dropped (confirmed never)
+    track_timeout: 2.0                   # Forget a face track id not seen for this long
+
+    # Identity Persistence Configuration (continuous, throttled MongoDB sync)
+    use_mongodb: true
+    save_last_n_embeddings: 20           # Recent embeddings stored per identity
+    persist_every: 20                    # Updates before a confirmed identity is saved again...
+    min_persist_interval: 10.0           # ...and at least this many seconds since its last save
+    persist_flush_period: 10.0           # Background flush of pending updates
 
     
     # Performance Optimization
@@ -40,10 +65,6 @@ face_recognition_node:
     # For example, 50.0 means recognize every other frame, reusing cached results for skipped frames
     recognition_frame_skip_percentage: 0.0  # Default: 0.0 no skipping (process every frame)
   
-    embedding_inclusion_threshold: 0.0  # Threshold for including embeddings in identity cluster (must be >= similarity_threshold)
-    track_identity_stickiness_margin: 0.4  # Margin to prevent identity switching
-    use_ewma_for_mean: false  # Whether to use EWMA for mean embedding calculation
-    ewma_alpha: 0.6  # Learning rate for EWMA (0 < alpha < 1). Higher values adapt faster to new embeddings.
     min_h_size: 30  # Minimum height size in pixels for valid face detection (default 40)
         
 

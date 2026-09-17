@@ -6,8 +6,10 @@ This node subscribes to FacialLandmarksArray messages from face detection,
 extracts face embeddings, performs identity clustering and temporal tracking,
 and publishes FacialRecognition messages following the ros4hri standard.
 
-The approach is 100% based on the EUT YOLO identity management system,
-providing persistent identity tracking across changing track IDs.
+Identity management follows the speech diarization identity layer: quality-gated
+seeding and learning, margin-based matching, merging and incremental MongoDB sync
+(see identity_manager.py). Each detection is paired with the image that has the
+same stamp, so face crops always come from the frame the detector saw.
 """
 
 import rclpy
@@ -20,6 +22,7 @@ import numpy as np
 import cv2
 import time
 import os
+from collections import deque
 from typing import Dict, List, Optional, Tuple, Any
 
 from std_msgs.msg import Header, String
@@ -36,7 +39,13 @@ from sensor_msgs.msg import Image, CompressedImage
 from cv_bridge import CvBridge
 
 from .face_embedding_extractor import create_face_embedding_extractor
-from .identity_manager import IdentityManager
+from .face_quality import FaceQualityConfig, face_quality_from_msg
+from .identity_manager import (
+    STATUS_CONFIRMED, STATUS_TENTATIVE, STATUS_UNKNOWN, FaceIdentityManager, MongoFaceIdentityStore)
+
+
+def _stamp_ns(stamp) -> int:
+    return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
 
 
 class FaceRecognitionNode(Node):
@@ -62,6 +71,12 @@ class FaceRecognitionNode(Node):
         self.latest_color_image_msg = None
         self.color_image_processed = False
         self.latest_color_image_timestamp = None
+        # Recent images keyed by stamp: detections are paired with their own frame
+        self._image_buffer: deque = deque(maxlen=int(self.get_parameter('image_buffer_size').value))
+        self._landmarks_received_at = 0.0
+        self.frames_without_image = 0
+        self.last_image = None
+        self.last_image_header = None
         
         # Minimum height size for face detection (pixels) default 40 if no ros param
         self.min_h_size = self.get_parameter('min_h_size').get_parameter_value().integer_value
@@ -94,7 +109,7 @@ class FaceRecognitionNode(Node):
             if compressed_topic and compressed_topic.strip():
                 self.get_logger().info(f"Using compressed image topic: {compressed_topic}")
                 real_time_qos = QoSProfile(
-                    depth=1,  # Keep only latest image
+                    depth=5,  # Small queue: frames are matched to detections by stamp
                     reliability=QoSReliabilityPolicy.BEST_EFFORT,  # No retransmissions
                     history=QoSHistoryPolicy.KEEP_LAST,
                     durability=DurabilityPolicy.VOLATILE  # Don't persist messages
@@ -111,7 +126,7 @@ class FaceRecognitionNode(Node):
                     Image, 
                     self.image_input_topic, 
                     self._store_latest_rgb, 
-                    self.qos_profile
+                    QoSProfile(depth=5)
                 )
 
         # Store latest landmarks for processing (array mode)
@@ -167,7 +182,7 @@ class FaceRecognitionNode(Node):
         self.latest_color_image_msg = color_msg
         self.color_image_processed = False
         self.latest_color_image_timestamp = self.get_clock().now()
-        # self.get_logger().debug("Color image received.")
+        self._image_buffer.append((_stamp_ns(color_msg.header.stamp), color_msg))
 
     def _store_latest_compressed_rgb(self, color_msg):
         """
@@ -181,7 +196,7 @@ class FaceRecognitionNode(Node):
         self.latest_color_image_msg = color_msg
         self.color_image_processed = False
         self.latest_color_image_timestamp = self.get_clock().now()
-        self.get_logger().debug("Compressed color image received.")
+        self._image_buffer.append((_stamp_ns(color_msg.header.stamp), color_msg))
 
     # -------------------------------------------------------------------------
     #                         Timer Callback for Inference
@@ -203,47 +218,43 @@ class FaceRecognitionNode(Node):
         if self.landmarks_processed is True:
             return
 
-        # If image processing is enabled, check for image data
-        color_msg = self.latest_color_image_msg
-        color_image_processed = self.color_image_processed
-        
+        landmarks_msg = self.latest_landmarks_array
+        color_msg, waiting = self._image_for_stamp(landmarks_msg.header.stamp)
+        if waiting:
+            return  # the frame these detections came from has not arrived yet
         if color_msg is None:
-            # self.get_logger().warning("No image data received for face recognition")
+            # Frame dropped: never crop from a different frame, reuse last results instead
+            self.landmarks_processed = True
+            self.frames_without_image += 1
+            self.get_logger().warning(
+                f"No image with the detection stamp ({self.frames_without_image} frames so far); "
+                "publishing cached recognitions", throttle_duration_sec=5.0)
+            self._publish_cached_recognitions(landmarks_msg)
             return
-        if color_image_processed is True:
-            return
-        
+
         # Convert image to OpenCV format
         try:
             compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
             if compressed_topic and compressed_topic.strip():
-                # Handle compressed image
                 np_arr = np.frombuffer(color_msg.data, np.uint8)
                 cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                
                 if cv_image is None:
                     self.get_logger().error('Failed to decode compressed image')
                     return
             else:
-                # Handle regular image
                 cv_image = self.cv_bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
         except Exception as e:
             self.get_logger().error(f'Error converting image: {e}')
             return
-        
-        self.color_image_processed = True
-        
+
         if cv_image is None or cv_image.size == 0:
             self.get_logger().warn("Received empty or invalid image")
             return
-            
+
         # Store image for processing
         self.last_image = cv_image
         self.last_image_header = color_msg.header
 
-
-        # Mark landmarks as processed
-        landmarks_msg = self.latest_landmarks_array
         self.landmarks_processed = True
 
         try:
@@ -280,6 +291,19 @@ class FaceRecognitionNode(Node):
                 f"Max: {self.max_processing_time:.2f}ms, "
                 f"Faces: {faces_count}"
             )
+
+    def _image_for_stamp(self, stamp) -> Tuple[Optional[Any], bool]:
+        """Return (image with exactly this stamp, still_waiting)."""
+        target = _stamp_ns(stamp)
+        newest = None
+        for image_stamp, image_msg in reversed(self._image_buffer):
+            if image_stamp == target:
+                return image_msg, False
+            newest = image_stamp if newest is None else max(newest, image_stamp)
+        waited = time.time() - self._landmarks_received_at
+        if (newest is None or newest < target) and waited < self.image_sync_timeout:
+            return None, True
+        return None, False
 
     def process_landmarks_array(self, msg):
         """
@@ -355,26 +379,44 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('enable_face_alignment', False)
         self.enable_face_alignment = self.get_parameter('enable_face_alignment').get_parameter_value().bool_value
 
-        # Identity management parameters
-        self.declare_parameter('max_embeddings_per_identity', 50)
-        self.declare_parameter('similarity_threshold', 0.6)
-        self.declare_parameter('track_identity_stickiness_margin', 0.4) 
-        self.declare_parameter('clustering_threshold', 0.7)
-        self.declare_parameter('embedding_inclusion_threshold', 0.6)
-        self.declare_parameter('identity_timeout', 60.0)
-        self.declare_parameter('min_detections_for_stable_identity', 5)
-        self.declare_parameter('enable_debug_output', True)  # Temporarily enable for debugging
-        self.declare_parameter('use_ewma_for_mean', False)
-        self.declare_parameter('ewma_alpha', 0.6)
-        self.declare_parameter('min_embeddings_for_identity', 5)  # Minimum embeddings required to consider an identity valid (used for cleanup of inactive identities)
-        
-        # MongoDB parameters for identity storage
-        self.declare_parameter('use_mongodb', True)  # Whether to use MongoDB for identity persistence
-        self.declare_parameter('save_last_n_embeddings', 1)  # Number of recent embeddings to save in MongoDB for each identity
-        self.declare_parameter('mongo_uri', 'mongodb://eurecat:cerdanyola@localhost:27018/?authSource=admin&serverSelectionTimeoutMS=5000') #'mongodb://localhost:27018/')# #eurecat:cerdanyola@mongodb:27018/
+        # Detection/image pairing
+        self.declare_parameter('image_buffer_size', 30)       # recent frames kept to match detection stamps
+        self.declare_parameter('image_sync_timeout', 0.5)     # s to wait for the frame of a detection
+        self.image_sync_timeout = float(self.get_parameter('image_sync_timeout').value)
+
+        # Face quality gate (who may create/teach an identity)
+        self.declare_parameter('min_detection_confidence', 0.40)
+        self.declare_parameter('profile_eye_ratio', 0.10)
+        self.declare_parameter('frontal_eye_ratio', 0.18)
+        self.declare_parameter('min_learn_quality', 0.50)
+
+        # Identity management parameters (see identity_manager.py)
+        self.declare_parameter('similarity_threshold', 0.50)
+        self.declare_parameter('young_identity_threshold', 0.40)
+        self.declare_parameter('match_margin', 0.08)
+        self.declare_parameter('track_identity_stickiness_margin', 0.20)
+        self.declare_parameter('merge_threshold', 0.70)
+        self.declare_parameter('min_seed_samples', 4)
+        self.declare_parameter('seed_consistency', 0.55)
+        self.declare_parameter('seed_pairwise_consistency', 0.40)
+        self.declare_parameter('min_confirm_samples', 12)
+        self.declare_parameter('min_confirm_seconds', 1.0)
+        self.declare_parameter('max_embeddings_per_identity', 100)
+        self.declare_parameter('min_embeddings_for_merge', 6)
+        self.declare_parameter('identity_timeout', 30.0)
+        self.declare_parameter('track_timeout', 2.0)
+        self.declare_parameter('enable_debug_output', False)
+
+        # MongoDB parameters for identity storage (incremental, throttled sync)
+        self.declare_parameter('use_mongodb', True)
+        self.declare_parameter('save_last_n_embeddings', 20)
+        self.declare_parameter('persist_every', 20)             # updates before a confirmed identity is re-saved
+        self.declare_parameter('min_persist_interval', 10.0)    # s between saves of one identity
+        self.declare_parameter('persist_flush_period', 10.0)    # s between background flushes
+        self.declare_parameter('mongo_uri', 'mongodb://eurecat:cerdanyola@localhost:27018/?authSource=admin&serverSelectionTimeoutMS=5000')
         self.declare_parameter('mongo_db_name', 'face_recognition_db')
         self.declare_parameter('mongo_collection_name', 'identity_database')
-        
+
         # Processing parameters
         self.declare_parameter('gaze_identity_exclusion_threshold', 0.5)
         
@@ -530,56 +572,59 @@ class FaceRecognitionNode(Node):
             return
         
         # Initialize identity manager
+        gp = lambda name: self.get_parameter(name).value
+        self.enable_debug_output = bool(gp('enable_debug_output'))
+        self.quality_config = FaceQualityConfig(
+            min_detection_confidence=float(gp('min_detection_confidence')),
+            profile_eye_ratio=float(gp('profile_eye_ratio')),
+            frontal_eye_ratio=float(gp('frontal_eye_ratio')),
+        )
+        store = None
+        if bool(gp('use_mongodb')):
+            try:
+                store = MongoFaceIdentityStore(
+                    str(gp('mongo_uri')), model_key=face_embedding_model,
+                    database_name=str(gp('mongo_db_name')), collection_name=str(gp('mongo_collection_name')),
+                    save_last_n_embeddings=int(gp('save_last_n_embeddings')))
+                legacy = store.count_legacy_documents()
+                self.get_logger().info(f"Connected to MongoDB {gp('mongo_db_name')}.{gp('mongo_collection_name')}"
+                                       + (f" ({legacy} legacy documents ignored)" if legacy else ""))
+            except Exception as e:
+                self.get_logger().error(f"MongoDB unavailable, identities will not persist: {e}")
+                store = None
         try:
-            max_embeddings = self.get_parameter('max_embeddings_per_identity').get_parameter_value().integer_value
-            similarity_thresh = self.get_parameter('similarity_threshold').get_parameter_value().double_value
-            stickiness_margin = self.get_parameter('track_identity_stickiness_margin').get_parameter_value().double_value
-            clustering_thresh = self.get_parameter('clustering_threshold').get_parameter_value().double_value
-            embedding_inclusion_thresh = self.get_parameter('embedding_inclusion_threshold').get_parameter_value().double_value
-            identity_timeout = self.get_parameter('identity_timeout').get_parameter_value().double_value
-            min_detections = self.get_parameter('min_detections_for_stable_identity').get_parameter_value().integer_value
-            debug_prints = self.get_parameter('enable_debug_output').get_parameter_value().bool_value
-            use_ewma = self.get_parameter('use_ewma_for_mean').get_parameter_value().bool_value
-            ewma_alpha = self.get_parameter('ewma_alpha').get_parameter_value().double_value
-            min_emin_embeddings_for_identity = self.get_parameter('min_embeddings_for_identity').get_parameter_value().integer_value
-
-            # MongoDB parameters
-            use_mongodb = self.get_parameter('use_mongodb').get_parameter_value().bool_value   
-            save_last_n_embeddings = self.get_parameter('save_last_n_embeddings').get_parameter_value().integer_value
-            mongo_uri = self.get_parameter('mongo_uri').get_parameter_value().string_value
-            mongo_db_name = self.get_parameter('mongo_db_name').get_parameter_value().string_value
-            mongo_collection_name = self.get_parameter('mongo_collection_name').get_parameter_value().string_value
-            
-            # Set debug prints flag
-            self.enable_debug_output = debug_prints
-            
-            self.identity_manager = IdentityManager(
+            self.identity_manager = FaceIdentityManager(
                 logger=self.get_logger(),
-                max_embeddings_per_identity=max_embeddings,
-                similarity_threshold=similarity_thresh,
-                track_identity_stickiness_margin=stickiness_margin,
-                clustering_threshold=clustering_thresh,
-                embedding_inclusion_threshold=embedding_inclusion_thresh,
-                identity_timeout=identity_timeout,
-                min_detections_for_stable_identity=min_detections,
-                enable_debug_output=debug_prints,
-                mongo_uri=mongo_uri,
-                mongo_db_name=mongo_db_name,
-                mongo_collection_name=mongo_collection_name,
-                use_ewma_for_mean=use_ewma,
-                ewma_alpha=ewma_alpha,
-                use_mongodb=use_mongodb,
-                save_last_n_embeddings=save_last_n_embeddings,
-                min_embeddings_for_identity=min_emin_embeddings_for_identity
+                store=store,
+                similarity_threshold=float(gp('similarity_threshold')),
+                young_identity_threshold=float(gp('young_identity_threshold')),
+                match_margin=float(gp('match_margin')),
+                stickiness_margin=float(gp('track_identity_stickiness_margin')),
+                merge_threshold=float(gp('merge_threshold')),
+                min_learn_quality=float(gp('min_learn_quality')),
+                min_seed_samples=int(gp('min_seed_samples')),
+                seed_consistency=float(gp('seed_consistency')),
+                seed_pairwise_consistency=float(gp('seed_pairwise_consistency')),
+                min_confirm_samples=int(gp('min_confirm_samples')),
+                min_confirm_seconds=float(gp('min_confirm_seconds')),
+                max_embeddings_per_identity=int(gp('max_embeddings_per_identity')),
+                min_embeddings_for_merge=int(gp('min_embeddings_for_merge')),
+                identity_timeout=float(gp('identity_timeout')),
+                track_timeout=float(gp('track_timeout')),
+                persist_every=int(gp('persist_every')),
+                min_persist_interval=float(gp('min_persist_interval')),
             )
-            
-            self.get_logger().info("Identity manager initialized")
-            self.get_logger().info(f"Parameters: similarity_threshold={similarity_thresh}, clustering_threshold={clustering_thresh}")
-            
         except Exception as e:
             self.get_logger().error(f"Failed to initialize identity manager: {e}")
             return
-    
+        self.persist_timer = self.create_timer(float(gp('persist_flush_period')), self._flush_identities)
+
+    def _flush_identities(self):
+        try:
+            self.identity_manager.flush()
+        except Exception as e:
+            self.get_logger().warning(f"Identity flush failed: {e}")
+
     def landmarks_array_callback(self, msg):
         """
         Callback for processing array of facial landmarks and computing face recognition for all faces.
@@ -590,6 +635,7 @@ class FaceRecognitionNode(Node):
         # Store latest landmarks for processing
         self.latest_landmarks_array = msg
         self.landmarks_processed = False
+        self._landmarks_received_at = time.time()
         # self.get_logger().info("landmarks arrive")
     
     def tracked_faces_callback(self, msg):
@@ -685,6 +731,7 @@ class FaceRecognitionNode(Node):
             # Process as if it were an array message
             self.latest_landmarks_array = landmarks_array_msg
             self.landmarks_processed = False
+            self._landmarks_received_at = time.time()
             
             # Remove from buffer
             del self.landmarks_buffer[ts_key]
@@ -729,285 +776,121 @@ class FaceRecognitionNode(Node):
         return should_skip
     
     def _process_landmarks_array_batch(self, msg):
-        """Process array of facial landmarks in batch mode for better performance."""
+        """Recognize every face of one frame and publish the results."""
         if not msg.ids:
             return
-        
-        # Increment global frame counter
+
         self.global_frame_counter += 1
-        
-        # Check if we should skip this ENTIRE frame
         if self._should_skip_recognition():
-            # Skip the entire frame - publish cached results for all faces
             if self.enable_debug_output:
-                self.get_logger().info(f"Skipping frame {self.global_frame_counter} - publishing {len(msg.ids)} cached recognitions")
-            
-            all_recognition_results = []
-            for facial_landmarks_msg in msg.ids:
-                face_id = facial_landmarks_msg.face_id
-                
-                # Try to get cached result
-                if face_id in self.recognition_cache:
-                    unique_id, confidence, _ = self.recognition_cache[face_id]
-                    # Format as tuple: (landmarks_msg, unique_id, confidence)
-                    all_recognition_results.append((facial_landmarks_msg, unique_id, confidence))
-                else:
-                    # No cached result - publish unknown
-                    if self.enable_debug_output:
-                        self.get_logger().debug(f"No cached recognition for {face_id}, publishing unknown")
-                    # Format as tuple: (landmarks_msg, unique_id, confidence)
-                    all_recognition_results.append((facial_landmarks_msg, "unknown", 0.0))
-            
-            # Publish all cached/unknown results based on mode
-            if self.ros4hri_with_id:
-                # ROS4HRI with ID mode: Publish to per-ID topics
-                for landmarks_msg, unique_id, confidence in all_recognition_results:
-                    face_id = landmarks_msg.face_id
-                    
-                    # Create publisher for this face ID if it doesn't exist
-                    if face_id not in self.recognition_publishers:
-                        topic_name = f'/humans/faces/{face_id}/recognized'
-                        self.recognition_publishers[face_id] = self.create_publisher(
-                            FacialRecognition,
-                            topic_name,
-                            self.qos_profile
-                        )
-                    
-                    recognition_msg = FacialRecognition()
-                    recognition_msg.header = landmarks_msg.header
-                    recognition_msg.face_id = face_id
-                    recognition_msg.recognized_face_id = unique_id if unique_id != "unknown" else "unknown"
-                    recognition_msg.confidence = float(confidence)
-                    
-                    # Initialize speaking fields if they exist
-                    if hasattr(recognition_msg, 'is_speaking'):
-                        recognition_msg.is_speaking = False
-                        recognition_msg.speaking_confidence = 0.0
-                    
-                    # Publish to the per-ID topic
-                    self.recognition_publishers[face_id].publish(recognition_msg)
-            else:
-                # ROS4HRI array mode: Publish FacialRecognitionArray
-                self._publish_recognition_array(all_recognition_results)
+                self.get_logger().debug(f"Skipping frame {self.global_frame_counter}: publishing cached recognitions")
+            self._publish_cached_recognitions(msg)
             return
-        
-        # Process this frame normally (don't skip)
-        if self.enable_debug_output:
-            self.get_logger().info(f"Processing frame {self.global_frame_counter} with {len(msg.ids)} faces")
-        
-        # Extract face crops and face IDs for all faces
-        if self.enable_debug_output:
-            crop_start_time = time.time()
-        
-        face_crops = []
-        face_ids = []
-        landmarks_msgs = []
-        
+
+        face_crops, crop_msgs = [], []
         for facial_landmarks_msg in msg.ids:
             face_crop = self._extract_face_crop_from_landmarks(facial_landmarks_msg)
             if face_crop is not None:
                 face_crops.append(face_crop)
-                face_ids.append(facial_landmarks_msg.face_id)
-                landmarks_msgs.append(facial_landmarks_msg)
-        
-        if self.enable_debug_output:
-            crop_time = (time.time() - crop_start_time) * 1000
-            self.get_logger().info(f"Face crop extraction took: {crop_time:.2f}ms for {len(msg.ids)} input faces, got {len(face_crops)} valid crops")
-        
-        # Collect all recognition results
-        all_recognition_results = []
-        
-        # Process faces that need recognition
+                crop_msgs.append(facial_landmarks_msg)
+
+        # (landmarks_msg, unique_id, confidence, status, quality) for every detected face
+        results = {m.face_id: (m, None, 0.0, STATUS_UNKNOWN, 0.0) for m in msg.ids}
+
         if face_crops:
-            # Check if face embedding extractor is available
             if not self.face_embedding_extractor.is_available():
                 self.get_logger().error("Face embedding extractor is not available")
                 return
-            
-            # Extract embeddings in batch
-            if self.enable_debug_output:
-                embedding_start_time = time.time()
-            
             embeddings = self.face_embedding_extractor.extract_embeddings_batch(face_crops)
-            
-            if self.enable_debug_output:
-                embedding_time = (time.time() - embedding_start_time) * 1000
-                self.get_logger().debug(f"Embedding extraction took: {embedding_time:.2f}ms for {len(face_crops)} faces")
-            
-            # Create face_embeddings dictionary for identity manager using face_id as key
-            if self.enable_debug_output:
-                prep_start_time = time.time()
-            
-            face_embeddings = {}
-            valid_indices = []
-            
-            for i, (face_id, embedding) in enumerate(zip(face_ids, embeddings)):
-                if embedding is not None:
-                    face_embeddings[face_id] = embedding
-                    valid_indices.append(i)
-                else:
-                    self.get_logger().warning(f"Failed to extract embedding for face {face_ids[i]}")
-            
-            if self.enable_debug_output:
-                prep_time = (time.time() - prep_start_time) * 1000
-                self.get_logger().debug(f"Embedding preparation took: {prep_time:.2f}ms")
-            
-            # Process identities in batch
+            face_embeddings, qualities = {}, {}
+            for landmarks_msg, embedding in zip(crop_msgs, embeddings):
+                if embedding is None:
+                    self.get_logger().warning(f"Failed to extract embedding for face {landmarks_msg.face_id}")
+                    continue
+                face_embeddings[landmarks_msg.face_id] = embedding
+                qualities[landmarks_msg.face_id] = face_quality_from_msg(landmarks_msg, self.quality_config)
+
             if face_embeddings:
+                start = time.time()
+                assignments = self.identity_manager.process_new_embedding_batch(face_embeddings, qualities)
                 if self.enable_debug_output:
-                    identity_start_time = time.time()
-                
-                identity_results = self.identity_manager.process_new_embedding_batch(face_embeddings)
-                
-                if self.enable_debug_output:
-                    identity_time = (time.time() - identity_start_time) * 1000
-                    self.get_logger().debug(f"Identity processing took: {identity_time:.2f}ms for {len(face_embeddings)} faces")
-                
-                # Collect results for batch publishing and update cache
-                for i in valid_indices:
-                    face_id = face_ids[i]
-                    landmarks_msg = landmarks_msgs[i]
-                    unique_id, confidence = identity_results.get(face_id, (None, 0.0))
-                    
-                    # Update recognition cache with current timestamp
-                    current_time = self.get_clock().now()
-                    self.recognition_cache[face_id] = (unique_id, confidence, current_time)
-                    
-                    if self.enable_debug_output:
-                        self.get_logger().debug(f"Face {face_id} -> Identity: {unique_id}, Confidence: {confidence:.3f}")
-                    
-                    all_recognition_results.append((landmarks_msg, unique_id, confidence))
-        
-        # Publish recognition results based on mode
-        if all_recognition_results:
-            if self.enable_debug_output:
-                publish_start_time = time.time()
-            
-            if self.ros4hri_with_id:
-                # ROS4HRI with ID mode: Publish to per-ID topics /humans/faces/<faceID>/recognized
-                # All messages from the same frame share the same timestamp for synchronization
-                frame_timestamp = all_recognition_results[0][0].header.stamp if all_recognition_results else None
-                for landmarks_msg, unique_id, confidence in all_recognition_results:
+                    self.get_logger().debug(f"Identity processing took {(time.time() - start) * 1000:.2f}ms "
+                                            f"for {len(face_embeddings)} faces")
+                now = self.get_clock().now()
+                for landmarks_msg in crop_msgs:
                     face_id = landmarks_msg.face_id
-                    
-                    # Create publisher for this face ID if it doesn't exist
-                    if face_id not in self.recognition_publishers:
-                        topic_name = f'/humans/faces/{face_id}/recognized'
-                        self.recognition_publishers[face_id] = self.create_publisher(
-                            FacialRecognition,
-                            topic_name,
-                            self.qos_profile
-                        )
-                        if self.enable_debug_output:
-                            self.get_logger().debug(f"Created publisher for face ID: {topic_name}")
-                    
-                    recognition_msg = FacialRecognition()
-                    recognition_msg.header = landmarks_msg.header
-                    # Ensure all messages from the same frame have the same timestamp
-                    if frame_timestamp:
-                        recognition_msg.header.stamp = frame_timestamp
-                    recognition_msg.face_id = face_id
-                    if unique_id is not None:
-                        recognition_msg.recognized_face_id = unique_id
-                        recognition_msg.confidence = float(confidence)
-                    else:
-                        recognition_msg.recognized_face_id = "unknown"
-                        recognition_msg.confidence = 0.0
-                    
-                    # Initialize speaking fields if they exist (will be updated by visual_speech_activity node)
-                    if hasattr(recognition_msg, 'is_speaking'):
-                        recognition_msg.is_speaking = False
-                        recognition_msg.speaking_confidence = 0.0
-                    
-                    # Publish to the per-ID topic
-                    self.recognition_publishers[face_id].publish(recognition_msg)
-                    if self.enable_debug_output:
-                        self.get_logger().debug(f"Published FacialRecognition for face_id={face_id} to /humans/faces/{face_id}/recognized, recognized_id={unique_id}")
-            else:
-                # ROS4HRI array mode: Publish FacialRecognitionArray
-                self._publish_recognition_array(all_recognition_results)
-            
-            # Publish annotated image with all recognitions if enabled
-            if self.enable_image_output and self.image_output_publisher and all_recognition_results:
-                # Create image recognition results from all results (processed + cached)
-                image_recognition_results = [(landmarks_msg, (unique_id, confidence)) for landmarks_msg, unique_id, confidence in all_recognition_results]
-                self._publish_batch_annotated_image(image_recognition_results)
-            
-            if self.enable_debug_output:
-                publish_time = (time.time() - publish_start_time) * 1000
-                self.get_logger().debug(f"Publishing results took: {publish_time:.2f}ms for {len(all_recognition_results)} faces")
-        else:
-            # No valid faces to process
-            if not face_crops:
-                self.get_logger().warning("No valid face crops extracted from landmarks array")
-                # Publish empty results when no valid faces
-                if not self.ros4hri_with_id:
-                    self._publish_recognition_array([])
-                self._publish_batch_annotated_image(None)
-    
+                    if face_id not in assignments:
+                        continue
+                    assignment = assignments[face_id]
+                    quality = qualities[face_id]
+                    results[face_id] = (landmarks_msg, assignment.unique_id, assignment.confidence,
+                                        assignment.status, quality)
+                    self.recognition_cache[face_id] = (assignment.unique_id, assignment.confidence,
+                                                       assignment.status, now)
+        elif self.enable_debug_output:
+            self.get_logger().debug("No valid face crops in this frame")
+
+        ordered = [results[m.face_id] for m in msg.ids]
+        self._publish_recognitions(ordered)
+        if self.enable_image_output and self.image_output_publisher:
+            self._publish_batch_annotated_image(ordered)
+
+    def _publish_cached_recognitions(self, msg):
+        """Publish the last known result per face (skipped or unmatched frames)."""
+        results = []
+        for landmarks_msg in msg.ids:
+            unique_id, confidence, status, _ = self.recognition_cache.get(
+                landmarks_msg.face_id, (None, 0.0, STATUS_UNKNOWN, None))
+            results.append((landmarks_msg, unique_id, confidence, status, 0.0))
+        self._publish_recognitions(results)
+
+    def _fill_recognition_msg(self, landmarks_msg, unique_id, confidence, status, quality):
+        recognition_msg = FacialRecognition()
+        recognition_msg.header = landmarks_msg.header
+        recognition_msg.face_id = landmarks_msg.face_id
+        # Empty recognized_face_id means "not identified" (unmatched or too poor to trust)
+        recognition_msg.recognized_face_id = unique_id or ""
+        recognition_msg.confidence = float(confidence) if unique_id else 0.0
+        if hasattr(recognition_msg, 'identity_status'):
+            recognition_msg.identity_status = int(status if unique_id else STATUS_UNKNOWN)
+        if hasattr(recognition_msg, 'face_quality'):
+            recognition_msg.face_quality = float(quality)
+        if hasattr(recognition_msg, 'is_speaking'):
+            recognition_msg.is_speaking = False  # filled by visual_speech_activity
+            recognition_msg.speaking_confidence = 0.0
+        return recognition_msg
+
+    def _publish_recognitions(self, results: List):
+        if not self.ros4hri_with_id:
+            self._publish_recognition_array(results)
+            return
+        # ROS4HRI with ID mode: one topic per face, /humans/faces/<faceID>/recognized
+        for result in results:
+            face_id = result[0].face_id
+            if face_id not in self.recognition_publishers:
+                self.recognition_publishers[face_id] = self.create_publisher(
+                    FacialRecognition, f'/humans/faces/{face_id}/recognized', self.qos_profile)
+            self.recognition_publishers[face_id].publish(self._fill_recognition_msg(*result))
+
     def _publish_recognition_array(self, recognition_results: List):
         """Publish facial recognition results as a single array message."""
-        # Safety check: this method should only be called in array mode
-        if self.ros4hri_with_id:
-            self.get_logger().warning("_publish_recognition_array called in ros4hri_with_id mode - skipping")
-            return
-        
-        # Additional safety check: ensure publisher exists
         if self.recognition_publisher is None:
             self.get_logger().error("Recognition publisher is None - cannot publish array")
             return
-            
         try:
-            # Create FacialRecognitionArray message
             recognition_array_msg = FacialRecognitionArray()
-            
-            # Set header with current timestamp if we have results, otherwise use current time
             if recognition_results:
-                # Use header from first landmarks message
                 recognition_array_msg.header = recognition_results[0][0].header
             else:
                 recognition_array_msg.header = Header()
                 recognition_array_msg.header.stamp = self.get_clock().now().to_msg()
-                recognition_array_msg.header.frame_id = "camera_color_optical_frame"  # Default frame
-            
-            # Create individual recognition messages
-            facial_recognition_msgs = []
-            for landmarks_msg, unique_id, confidence in recognition_results:
-                recognition_msg = FacialRecognition()
-                
-                # Copy header from landmarks message
-                recognition_msg.header = landmarks_msg.header
-                
-                # Set face_id from original message
-                recognition_msg.face_id = landmarks_msg.face_id
-                
-                # Set recognized face ID and confidence
-                if unique_id is not None:
-                    recognition_msg.recognized_face_id = unique_id
-                    recognition_msg.confidence = float(confidence)
-                else:
-                    recognition_msg.recognized_face_id = "unknown"
-                    recognition_msg.confidence = 0.0
-                
-                # Initialize speaking fields if they exist (will be updated by visual_speech_activity node)
-                if hasattr(recognition_msg, 'is_speaking'):
-                    recognition_msg.is_speaking = False
-                    recognition_msg.speaking_confidence = 0.0
-                
-                facial_recognition_msgs.append(recognition_msg)
-            
-            # Set the array
-            recognition_array_msg.facial_recognition = facial_recognition_msgs
-            
-            # Publish the array message
+                recognition_array_msg.header.frame_id = "camera_color_optical_frame"
+            recognition_array_msg.facial_recognition = [
+                self._fill_recognition_msg(*result) for result in recognition_results]
             self.recognition_publisher.publish(recognition_array_msg)
-            
-            if self.enable_debug_output:
-                self.get_logger().debug(f"Published FacialRecognitionArray with {len(facial_recognition_msgs)} faces")
-            
         except Exception as e:
             self.get_logger().error(f"Failed to publish recognition array: {e}")
-    
+
     # -------------------------------------------------------------------------
     #                  Face Alignment (eye-angle, cv2 only)
     # -------------------------------------------------------------------------
@@ -1286,8 +1169,8 @@ class FaceRecognitionNode(Node):
             # Create a copy of the image for annotation
             annotated_image = self.last_image.copy()
             if recognition_results:
-                for landmarks_msg, (unique_id, confidence) in recognition_results:
-                    self._draw_recognition_annotation(annotated_image, landmarks_msg, unique_id, confidence)
+                for landmarks_msg, unique_id, confidence, status, quality in recognition_results:
+                    self._draw_recognition_annotation(annotated_image, landmarks_msg, unique_id, confidence, status, quality)
             # Encode as JPEG
             encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 75]
             small = cv2.resize(annotated_image, tuple(self.img_published_reshape_size), interpolation=cv2.INTER_AREA)
@@ -1329,87 +1212,44 @@ class FaceRecognitionNode(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to publish clean compressed image: {e}")
 
-    def _draw_recognition_annotation(self, image: np.ndarray, landmarks_msg, unique_id: Optional[str], confidence: float):
-        """Draw recognition annotation on the image."""
+    def _draw_recognition_annotation(self, image: np.ndarray, landmarks_msg, unique_id: Optional[str],
+                                     confidence: float, status: int = STATUS_UNKNOWN, quality: float = 0.0):
+        """Green: confirmed identity. Orange: tentative. Red: not identified."""
         try:
-            # Get face bounding box from bbox_xyxy (now NormalizedRegionOfInterest2D type)
-            if hasattr(landmarks_msg.bbox_xyxy, 'xmin') and landmarks_msg.bbox_confidence > 0:
-                # Convert normalized coordinates to pixel coordinates
-                x1_norm, y1_norm = landmarks_msg.bbox_xyxy.xmin, landmarks_msg.bbox_xyxy.ymin
-                x2_norm, y2_norm = landmarks_msg.bbox_xyxy.xmax, landmarks_msg.bbox_xyxy.ymax
-                
-                # Convert normalized coordinates to pixel coordinates
-                x = int(x1_norm * landmarks_msg.width)
-                y = int(y1_norm * landmarks_msg.height)
-                w = int((x2_norm - x1_norm) * landmarks_msg.width)
-                h = int((y2_norm - y1_norm) * landmarks_msg.height)
-                
-                # Draw face bounding box
-                color = (0, 255, 0) if unique_id and unique_id != "unknown" else (0, 0, 255)  # Green for recognized, red for unknown
-                cv2.rectangle(image, (x, y), (x + w, y + h), color, 2)
-                
-                # Prepare text for unique ID
-                if unique_id and unique_id != "unknown":
-                    text = f"{unique_id} ({confidence:.2f})"
-                else:
-                    text = "Unknown"
-                
-                # Draw text background for unique ID
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.6
-                thickness = 2
-                (text_width, text_height), _ = cv2.getTextSize(text, font, font_scale, thickness)
-                
-                # Background rectangle for unique ID text
-                cv2.rectangle(image, (x, y - text_height - 10), (x + text_width + 10, y), color, -1)
-                
-                # Draw unique ID text
-                cv2.putText(image, text, (x + 5, y - 5), font, font_scale, (0, 0, 0), thickness)
-                
-                # Prepare and draw face ID (original detection ID) text
-                face_id_text = f"Face: {landmarks_msg.face_id}"
-                (face_id_text_width, face_id_text_height), _ = cv2.getTextSize(face_id_text, font, font_scale, thickness)
-                
-                # Background rectangle for face ID text
-                cv2.rectangle(image, (x, y + h + 10), (x + face_id_text_width + 10, y + h + 10 + face_id_text_height), color, -1)
-                
-                # Draw face ID text
-                cv2.putText(image, face_id_text, (x + 5, y + h + 10 + face_id_text_height - 5), font, font_scale, (0, 0, 0), thickness)
+            box = landmarks_msg.bbox_xyxy
+            if not (hasattr(box, 'xmin') and landmarks_msg.bbox_confidence > 0):
+                return
+            x = int(box.xmin * landmarks_msg.width)
+            y = int(box.ymin * landmarks_msg.height)
+            w = int((box.xmax - box.xmin) * landmarks_msg.width)
+            h = int((box.ymax - box.ymin) * landmarks_msg.height)
+            if unique_id and status == STATUS_CONFIRMED:
+                color, text = (0, 255, 0), f"{unique_id} ({confidence:.2f})"
+            elif unique_id:
+                color, text = (0, 165, 255), f"{unique_id}? ({confidence:.2f})"
             else:
-                # Fallback: estimate position from landmarks
-                landmarks = []
-                for landmark in landmarks_msg.landmarks:
-                    if landmark.c > 0:  # Valid landmark
-                        # Convert normalized coordinates to pixel coordinates
-                        x_pixel = int(landmark.x * landmarks_msg.width)
-                        y_pixel = int(landmark.y * landmarks_msg.height)
-                        landmarks.append([x_pixel, y_pixel])
-                
-                if len(landmarks) >= 2:
-                    landmarks = np.array(landmarks)
-                    x_min, y_min = np.min(landmarks, axis=0)
-                    x_max, y_max = np.max(landmarks, axis=0)
-                    
-                    # Draw minimal annotation
-                    color = (0, 255, 0) if unique_id and unique_id != "unknown" else (0, 0, 255)
-                    text = f"{unique_id} ({confidence:.2f})" if unique_id and unique_id != "unknown" else "Unknown"
-                    cv2.putText(image, text, (x_min, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-            
+                color, text = (0, 0, 255), "Unknown"
+            cv2.rectangle(image, (x, y), (x + w, y + h), color, 2)
+
+            font, font_scale, thickness = cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
+            (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
+            cv2.rectangle(image, (x, y - th - 10), (x + tw + 10, y), color, -1)
+            cv2.putText(image, text, (x + 5, y - 5), font, font_scale, (0, 0, 0), thickness)
+
+            info = f"{landmarks_msg.face_id} q:{quality:.2f}"
+            (iw, ih), _ = cv2.getTextSize(info, font, font_scale, thickness)
+            cv2.rectangle(image, (x, y + h + 10), (x + iw + 10, y + h + 10 + ih), color, -1)
+            cv2.putText(image, info, (x + 5, y + h + 10 + ih - 5), font, font_scale, (0, 0, 0), thickness)
         except Exception as e:
             self.get_logger().error(f"Failed to draw recognition annotation: {e}")
-    
+
     def destroy_node(self):
-        """Clean up when node is destroyed."""
-        self.get_logger().info("Destroy node")
-        # Save identity database before shutdown
-        if self.identity_manager and hasattr(self.identity_manager, 'save_identity_database'):
+        """Flush identities before shutdown (they are also synced periodically while running)."""
+        if self.identity_manager is not None:
             try:
-                self.identity_manager.save_identity_database(self.save_last_n_embeddings)
-                self.get_logger().debug("Identity database saved")
+                self.identity_manager.close()
             except Exception as e:
-                self.get_logger().error(f"Failed to save identity database: {e}")
-        else:
-            self.get_logger().info("No identity manager to save database from")
+                self.get_logger().error(f"Failed to flush identity database: {e}")
         super().destroy_node()
 
 
