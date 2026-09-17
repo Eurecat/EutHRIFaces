@@ -16,6 +16,7 @@ The output uses the same 478 -> 68 mapping as MediaPipeLandmarkDetector, so cons
 """
 import os
 import threading
+import urllib.request
 from typing import Any, List, Optional, Sequence, Tuple
 
 import cv2
@@ -42,11 +43,13 @@ class FaceMeshOnnxLandmarkDetector:
         use_tensorrt: Build a TensorRT FP16 engine in the background (cached next to the model
             weights) and switch to it when ready; CUDA serves meanwhile.
         max_batch: Largest number of faces in one TensorRT batch (bigger batches are split).
+        model_url: Downloaded to model_path when the file is missing (env FACEMESH_MODEL_URL wins).
+            The model is not in git; see tools/convert_face_landmarks_to_onnx.sh.
     """
 
     def __init__(self, model_path: str, logger: Any, device: str = "cuda", roi_scale: float = 1.4,
                  roi_shift: float = 0.05, min_face_score: float = 0.0, use_tensorrt: bool = True, max_batch: int = 8,
-                 trt_cache_dir: Optional[str] = None):
+                 trt_cache_dir: Optional[str] = None, model_url: str = ""):
         self.logger = logger
         self.model_path = model_path
         self.roi_scale = roi_scale
@@ -55,8 +58,18 @@ class FaceMeshOnnxLandmarkDetector:
         self.max_batch = max(1, int(max_batch))
         self.session = None
         self._input_name = None
+        model_url = os.environ.get("FACEMESH_MODEL_URL", model_url)
+        if not os.path.exists(model_path) and model_url:
+            try:
+                self.logger.info(f"Downloading face mesh landmark model from {model_url}")
+                os.makedirs(os.path.dirname(model_path) or ".", exist_ok=True)
+                urllib.request.urlretrieve(model_url, model_path)
+            except Exception as e:
+                self.logger.error(f"Could not download {model_url}: {e}")
         if not os.path.exists(model_path):
-            self.logger.error(f"Face mesh landmark model not found: {model_path}")
+            self.logger.error(
+                f"Face mesh landmark model not found: {model_path} "
+                "(build it with tools/convert_face_landmarks_to_onnx.sh or set facemesh_model_url)")
             return
         gpu = str(device).startswith("cuda") and "CUDAExecutionProvider" in ort.get_available_providers()
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if gpu else ["CPUExecutionProvider"]
