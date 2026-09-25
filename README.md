@@ -65,7 +65,7 @@ This repository contains four main packages:
 YOLO-based face detection with 5 key facial landmarks.
 
 - **Input**: RGB camera images
-- **Output**: `hri_msgs/FacialLandmarksArray` (ros4hri compatible)
+- **Output**: `hri_msgs/FacialLandmarksArray` (ros4hri compatible). In array mode an image without faces gives an empty array with that image's stamp, so a consumer can tell "no face in this frame" from "frame skipped by the detector".
 - **Features**: 
   - Auto-download YOLO face model (and optionally mediapipe and dlip models)
   - CPU/GPU support

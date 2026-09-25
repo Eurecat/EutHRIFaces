@@ -432,7 +432,13 @@ class FaceDetectorNode(Node):
                 self.facial_landmarks_publisher.publish(facial_landmarks_array)
                 if self.enable_debug_output:
                     self.get_logger().debug(f"[ROS PUBLISH] Published FacialLandmarksArray with {len(facial_landmarks_msgs)} faces")
-        
+        elif not self.ros4hri_with_id:
+            # No face in this image: publish an empty array anyway, so consumers (PersonManager)
+            # can tell "no face in this frame" from "frame skipped by the detector"
+            empty_array = FacialLandmarksArray()
+            empty_array.header = color_msg.header
+            self.facial_landmarks_publisher.publish(empty_array)
+
         # Error logging (always log errors)
         if len(facial_landmarks_msgs) == 0 and num_faces > 0:
             self.get_logger().error(f"[ERROR] Detected {num_faces} faces but converted 0 messages!")
