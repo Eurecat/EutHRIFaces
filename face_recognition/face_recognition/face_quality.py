@@ -20,7 +20,7 @@ LEFT_EYE_INSIDE = 42
 
 @dataclass
 class FaceQualityConfig:
-    min_detection_confidence: float = 0.40
+    min_detection_confidence: float = 0.50
     profile_eye_ratio: float = 0.10   # eye distance / face width at or below -> quality 0
     frontal_eye_ratio: float = 0.18   # at or above -> full yaw score
 
