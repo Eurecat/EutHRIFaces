@@ -34,7 +34,7 @@ face_recognition_node:
     # Quality 0..1 from detection confidence and yaw (inter-ocular distance / face width).
     # Measured on video_3.mp4: eye ratio 0.06-0.14 (3/4 -> profile) matches the right person
     # only 73-96% of the time; >= 0.14 is 97-99%. Hand false positives have confidence <= 0.25.
-    min_detection_confidence: 0.40
+    min_detection_confidence: 0.50
     profile_eye_ratio: 0.10      # Eye ratio at or below this -> quality 0 (profile)
     frontal_eye_ratio: 0.18      # Eye ratio at or above this -> full quality
     min_learn_quality: 0.50      # Faces below this can match a known identity but never create/teach one

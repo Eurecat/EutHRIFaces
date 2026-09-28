@@ -16,7 +16,7 @@ face_detector:
     
     # Model Configuration
     model_path: "yolov8n-face.onnx"
-    confidence_threshold: 0.1
+    confidence_threshold: 0.5   # below this, false positives dominate (hand/object bboxes at 0.2-0.44); real faces score higher
     iou_threshold: 0.4
     
     # Face ID Configuration

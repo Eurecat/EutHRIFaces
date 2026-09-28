@@ -394,7 +394,7 @@ class FaceRecognitionNode(Node):
         self.image_sync_timeout = float(self.get_parameter('image_sync_timeout').value)
 
         # Face quality gate (who may create/teach an identity)
-        self.declare_parameter('min_detection_confidence', 0.40)
+        self.declare_parameter('min_detection_confidence', 0.50)
         self.declare_parameter('profile_eye_ratio', 0.10)
         self.declare_parameter('frontal_eye_ratio', 0.18)
         self.declare_parameter('min_learn_quality', 0.50)
