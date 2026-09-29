@@ -435,6 +435,11 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('profile_scope', '')   # empty -> $FACE_PROFILE_SCOPE
         # Provenance written into every persisted profile. Empty means "single robot".
         self.declare_parameter('robot_id', '')        # empty -> $ROBOT_ID
+        # How often this robot pulls identities that other robots enrolled or changed in the
+        # shared database, so a face enrolled elsewhere is recognized here without a restart.
+        # 0 disables the poll (single-robot deployments then pay nothing for it); negative
+        # means "take it from $FACE_GALLERY_REFRESH_S", defaulting to 15 s.
+        self.declare_parameter('gallery_refresh_period', -1.0)
 
         # Processing parameters
         self.declare_parameter('gaze_identity_exclusion_threshold', 0.5)
@@ -655,11 +660,54 @@ class FaceRecognitionNode(Node):
             return
         self.persist_timer = self.create_timer(float(gp('persist_flush_period')), self._flush_identities)
 
+        # Cross-robot gallery refresh (see the refresh_from_store docstring). Kept off the
+        # frame path on purpose: it is a timer of its own, so recognition cost is unaffected.
+        refresh_period = float(gp('gallery_refresh_period'))
+        if refresh_period < 0:
+            refresh_period = float(os.environ.get('FACE_GALLERY_REFRESH_S') or 15.0)
+        self._gallery_refresh_period = max(0.0, refresh_period)
+        self._gallery_refresh_failures = 0
+        self._gallery_refresh_retry_at = 0.0
+        if self._gallery_refresh_period > 0:
+            self.gallery_refresh_timer = self.create_timer(self._gallery_refresh_period, self._refresh_gallery)
+            self.get_logger().info(f"Shared gallery refresh every {self._gallery_refresh_period:.1f}s")
+        else:
+            self.gallery_refresh_timer = None
+            self.get_logger().info("Shared gallery refresh disabled (gallery_refresh_period=0)")
+
     def _flush_identities(self):
         try:
             self.identity_manager.flush()
         except Exception as e:
             self.get_logger().warning(f"Identity flush failed: {e}")
+
+    def _refresh_gallery(self):
+        """Adopt identities other robots enrolled or changed since the last poll.
+
+        A failure is logged once and retried with exponential backoff up to 60 s, while
+        recognition keeps running from the identities already held here.
+        """
+        now = time.time()
+        if now < self._gallery_refresh_retry_at:
+            return
+        try:
+            counters = self.identity_manager.refresh_from_store()
+        except Exception as e:
+            self._gallery_refresh_failures += 1
+            delay = min(60.0, self._gallery_refresh_period * (2 ** min(self._gallery_refresh_failures, 6)))
+            self._gallery_refresh_retry_at = now + delay
+            self.get_logger().warning(f"Shared gallery refresh failed "
+                                      f"({self._gallery_refresh_failures} in a row), retrying in {delay:.0f}s: {e}")
+            return
+        if self._gallery_refresh_failures:
+            self.get_logger().info(f"Shared gallery refresh succeeded again after "
+                                   f"{self._gallery_refresh_failures} failure(s)")
+            self._gallery_refresh_failures = 0
+        if counters and (counters['adopted'] or counters['updated'] or counters['retired']):
+            self.get_logger().info(f"Shared gallery refresh: adopted {counters['adopted']}, "
+                                   f"updated {counters['updated']} "
+                                   f"(+{counters['embeddings_added']} embeddings), "
+                                   f"retired {counters['retired']}")
 
     def landmarks_array_callback(self, msg):
         """

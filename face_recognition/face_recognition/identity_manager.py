@@ -68,6 +68,10 @@ class FaceIdentityCluster:
     unsaved_updates: int = 0
     persisted: bool = False
     last_saved_timestamp: float = 0.0
+    # Revision of this identity in the shared database, as last read or written by this
+    # process. Several robots may hold a copy of one identity; the higher revision is the
+    # newer one, so a refresh keeps it and only unions the embedding galleries.
+    revision: int = 0
     # Cached np.stack(all_embeddings); rebuilt when the gallery changes
     gallery_matrix: Optional[np.ndarray] = field(default=None, repr=False, compare=False)
 
@@ -143,7 +147,10 @@ class MongoFaceIdentityStore:
 
     def load(self) -> List[FaceIdentityCluster]:
         identities = []
-        for document in self._collection.find({"model_key": self._model_key}):
+        # Tombstoned documents (an identity merged into another) are not live identities: a
+        # restarting robot must not bring back an id the fleet has already retired.
+        for document in self._collection.find({"model_key": self._model_key,
+                                               "merged_into": {"$exists": False}}):
             embeddings = [normalize_embedding(np.asarray(e, dtype=np.float32))
                           for e in document.get("embeddings", [])]
             mean = document.get("mean_embedding")
@@ -163,14 +170,28 @@ class MongoFaceIdentityStore:
                 quality_score=float(document.get("quality_score", 0.0)),
                 custom_name=document.get("custom_name"),
                 co_occurring=set(document.get("co_occurring", [])),
+                revision=int(document.get("revision", 0) or 0),
             ))
         return identities
+
+    def changed_since(self, watermark: float) -> List[dict]:
+        """Documents of this scope written after ``watermark``, oldest first.
+
+        One indexed range scan on ``updated_at``. This is the whole cost of cross-robot
+        gallery synchronisation: it runs on a timer, never on the frame path.
+        """
+        cursor = (self._collection
+                  .find({"model_key": self._model_key, "updated_at": {"$gt": float(watermark)}})
+                  .sort("updated_at", 1))
+        return list(cursor)
 
     def save(self, identity: FaceIdentityCluster) -> None:
         if identity.mean_embedding is None:
             return
         now = time.time()
-        self._collection.update_one(
+        # return_document=True is pymongo's ReturnDocument.AFTER, written this way to keep the
+        # store importable (and testable) without importing pymongo here.
+        document = self._collection.find_one_and_update(
             {"model_key": self._model_key, "unique_id": identity.unique_id},
             {"$set": {
                 "model_key": self._model_key,
@@ -196,10 +217,44 @@ class MongoFaceIdentityStore:
              },
              "$inc": {"revision": 1}},
             upsert=True,
+            return_document=True,
         )
+        # Track the revision the database actually holds, so a later refresh can tell our
+        # copy apart from a peer's without another read.
+        if document is not None:
+            identity.revision = int(document.get("revision", identity.revision + 1))
+        else:
+            identity.revision += 1
 
     def delete(self, unique_id: str) -> None:
         self._collection.delete_one({"model_key": self._model_key, "unique_id": unique_id})
+
+    def mark_merged(self, unique_id: str, merged_into: str) -> bool:
+        """Tombstone an identity that was merged into another one, instead of deleting it.
+
+        Deleting the document is only safe while one process owns the database. With several
+        robots each holding a copy of every identity, a hard delete is invisible to the
+        others: they keep using the retired id, and the first frame that matches it writes it
+        straight back. A tombstone carries the ``$inc revision`` that makes the other robots'
+        refresh pick the change up and retire the id locally.
+
+        The embedding gallery is dropped here because the surviving identity has already
+        absorbed it (``FaceIdentityManager.merge_identities`` unions before writing this), and
+        a robot that never had the merged id has nothing to transfer.
+        """
+        now = time.time()
+        result = self._collection.update_one(
+            {"model_key": self._model_key, "unique_id": unique_id},
+            {"$set": {"merged_into": merged_into,
+                       "merged_at": now,
+                       "updated_at": now,
+                       "updated_by_robot": self._robot_id,
+                       "confirmed": True,
+                       "embeddings": [],
+                       "mean_embedding": None},
+             "$inc": {"revision": 1}},
+        )
+        return result.matched_count == 1
 
     def close(self) -> None:
         self._client.close()
@@ -234,6 +289,7 @@ class FaceIdentityManager:
         track_timeout: float = 2.0,
         persist_every: int = 20,
         min_persist_interval: float = 10.0,
+        refresh_slack: float = 2.0,
     ) -> None:
         self._logger = logger or logging.getLogger(__name__)
         self._store = store
@@ -265,11 +321,23 @@ class FaceIdentityManager:
         self._seed_buffers: Dict[str, List[np.ndarray]] = {}
         self._next_user_number = 1
         self._last_merge_check = float("-inf")
+        # Cross-robot refresh: only documents written after this watermark are pulled. The
+        # slack absorbs writer/reader clock skew, so a document written while we were reading
+        # is not skipped.
+        self._refresh_watermark = 0.0
+        self._refresh_slack = max(0.0, refresh_slack)
 
         self.total_identities_created = 0
         self.total_seed_rematches = 0
         self.total_identity_merges = 0
         self.total_saves = 0
+        # Refresh accounting, so a deployment can see whether the shared gallery is actually
+        # being adopted (and how much traffic it costs).
+        self.total_refresh_polls = 0
+        self.total_refresh_failures = 0
+        self.total_gallery_adoptions = 0
+        self.total_gallery_updates = 0
+        self.total_identities_retired = 0
 
         if self._store is not None:
             if hasattr(self._store, "max_user_number"):
@@ -279,6 +347,9 @@ class FaceIdentityManager:
                 identity.last_saved_timestamp = self._clock()
                 self.identity_clusters[identity.unique_id] = identity
                 self._next_user_number = max(self._next_user_number, self._user_number(identity.unique_id) + 1)
+        # Everything already in the store was loaded above, so watch the shared gallery from
+        # now on: the first poll only picks up what other robots write from here.
+        self._refresh_watermark = self._clock() - self._refresh_slack
         loaded = ", ".join(sorted(self.identity_clusters, key=self._user_number))
         self._logger.info(f"Face identity manager ready with {len(self.identity_clusters)} persistent identities"
                           + (f": {loaded}" if loaded else ""))
@@ -608,9 +679,15 @@ class FaceIdentityManager:
                 self.track_id_to_unique_id[track_id] = keep_id
         if self._store is not None and drop.persisted:
             try:
-                self._store.delete(drop_id)
+                if hasattr(self._store, "mark_merged"):
+                    # Tombstone, do not delete: the other robots hold their own copy of this
+                    # id, keep using it, and would write it back on the next matching frame.
+                    self._store.mark_merged(drop_id, keep_id)
+                    self.total_identities_retired += 1
+                else:
+                    self._store.delete(drop_id)
             except Exception as error:
-                self._logger.warning(f"Could not delete merged face identity {drop_id}: {error}")
+                self._logger.warning(f"Could not retire merged face identity {drop_id}: {error}")
         self._save(keep, now)
         self.total_identity_merges += 1
         return True
@@ -680,6 +757,174 @@ class FaceIdentityManager:
                 continue
             if force or not identity.persisted or now - identity.last_saved_timestamp >= self.min_persist_interval:
                 self._save(identity, now)
+
+    # ------------------------------------------------------------------
+    # Cross-robot gallery refresh
+    # ------------------------------------------------------------------
+
+    def refresh_from_store(self) -> Dict[str, int]:
+        """Adopt identities other robots enrolled or changed, without restarting.
+
+        Runs on a timer (``FACE_GALLERY_REFRESH_S``), never from the frame path: one indexed
+        range query on ``updated_at``, no image work. This is what lets a robot that started
+        earlier, or that is running on another machine, recognize a face enrolled meanwhile -
+        the local registry is a cache, and the shared gallery is the source of truth.
+
+        Guarantees, in the order they matter:
+
+        * an identity the peer has and we do not is adopted whole, gallery included;
+        * when both hold a copy the higher revision wins, and the two galleries are unioned
+          (a gallery is append-mostly, so a union loses nothing);
+        * a locally confirmed identity is never dropped just because a peer's copy lacks it -
+          a peer that has only just started may still be loading;
+        * a peer's merge tombstone retires the merged id locally, keeping its gallery;
+        * an identity whose union brought nothing new is not written back, so two robots
+          adopting each other's copy converge instead of bumping revisions forever.
+
+        Raises on database failure; the caller logs once and backs off.
+        """
+        if self._store is None or not hasattr(self._store, "changed_since"):
+            return {}
+        query_started = self._clock()
+        try:
+            documents = self._store.changed_since(self._refresh_watermark)
+        except Exception:
+            self.total_refresh_failures += 1
+            raise
+
+        counters = {"polled": len(documents), "adopted": 0, "updated": 0,
+                    "retired": 0, "embeddings_added": 0}
+        for document in documents:
+            unique_id = str(document.get("unique_id", "") or "")
+            if not unique_id:
+                continue
+
+            merged_into = document.get("merged_into")
+            if merged_into:
+                if self._retire_merged(unique_id, str(merged_into)):
+                    counters["retired"] += 1
+                continue
+
+            gallery, mean, malformed = self._remote_gallery(document)
+            if malformed:
+                continue
+            remote_revision = int(document.get("revision", 0) or 0)
+            local = self.identity_clusters.get(unique_id)
+
+            if local is None:
+                cluster = self._cluster_from_document(document, gallery, mean, remote_revision)
+                self.identity_clusters[unique_id] = cluster
+                self._next_user_number = max(self._next_user_number, self._user_number(unique_id) + 1)
+                counters["adopted"] += 1
+                self.total_gallery_adoptions += 1
+                self._logger.info(
+                    f"Adopted face identity {unique_id} from the shared gallery "
+                    f"({len(cluster.all_embeddings)} embeddings, revision {remote_revision}, "
+                    f"robot {document.get('updated_by_robot') or '?'})")
+                continue
+
+            if local.persisted and remote_revision <= local.revision:
+                continue  # our copy is at least as new as the peer's
+
+            added = self._absorb_remote_gallery(local, document, gallery, mean, remote_revision)
+            counters["updated"] += 1
+            counters["embeddings_added"] += added
+            self.total_gallery_updates += 1
+
+        # Everything written before the query started is in this batch, so watching from then
+        # on cannot skip a document.
+        self._refresh_watermark = query_started - self._refresh_slack
+        self.total_refresh_polls += 1
+        return counters
+
+    @staticmethod
+    def _remote_gallery(document: dict):
+        """``(embeddings, mean, malformed)`` from a store document, skipping unusable rows."""
+        gallery: List[np.ndarray] = []
+        for raw in document.get("embeddings", []) or []:
+            try:
+                gallery.append(normalize_embedding(np.asarray(raw, dtype=np.float32)))
+            except (TypeError, ValueError):
+                continue
+        mean = None
+        if document.get("mean_embedding") is not None:
+            try:
+                mean = normalize_embedding(np.asarray(document["mean_embedding"], dtype=np.float32))
+            except (TypeError, ValueError):
+                mean = None
+        return gallery, mean, (not gallery and mean is None)
+
+    def _cluster_from_document(self, document: dict, gallery: List[np.ndarray],
+                              mean: Optional[np.ndarray], revision: int) -> FaceIdentityCluster:
+        """Build a local identity from a peer's document, marked as already persisted."""
+        cluster = FaceIdentityCluster(
+            unique_id=str(document["unique_id"]),
+            creation_timestamp=float(document.get("creation_timestamp", 0.0) or 0.0),
+            last_seen_timestamp=float(document.get("last_seen_timestamp", 0.0) or 0.0),
+            all_embeddings=[vector.copy() for vector in gallery],
+            mean_embedding=(mean if mean is not None
+                            else normalize_embedding(np.mean(np.stack(gallery), axis=0))),
+            total_detections=int(document.get("total_detections", 0) or 0),
+            good_samples=int(document.get("good_samples", len(gallery)) or 0),
+            confirmed=bool(document.get("confirmed", True)),
+            quality_score=float(document.get("quality_score", 0.0) or 0.0),
+            custom_name=document.get("custom_name"),
+            co_occurring=set(document.get("co_occurring", []) or []),
+            revision=revision,
+        )
+        # It lives in the shared database already and is not ours to rewrite, so leave it
+        # clean: the refresh must not turn into a write storm.
+        cluster.persisted = True
+        cluster.last_saved_timestamp = self._clock()
+        return cluster
+
+    def _absorb_remote_gallery(self, local: FaceIdentityCluster, document: dict,
+                               gallery: List[np.ndarray], mean: Optional[np.ndarray],
+                               remote_revision: int) -> int:
+        """Union a peer's gallery into ours and take the newer scalars. Returns embeddings added."""
+        added = 0
+        for vector in (gallery or ([mean] if mean is not None else [])):
+            if self._store_sample(local, vector):
+                added += 1
+        if added:
+            # Only a genuine addition is worth writing back; with nothing new, both robots
+            # would otherwise keep bumping the revision at each other forever.
+            local.unsaved_updates += added
+        local.revision = remote_revision
+        local.confirmed = local.confirmed or bool(document.get("confirmed", False))
+        local.custom_name = local.custom_name or document.get("custom_name")
+        local.co_occurring |= set(document.get("co_occurring", []) or [])
+        local.total_detections = max(local.total_detections,
+                                     int(document.get("total_detections", 0) or 0))
+        local.good_samples = max(local.good_samples, int(document.get("good_samples", 0) or 0))
+        local.last_seen_timestamp = max(local.last_seen_timestamp,
+                                        float(document.get("last_seen_timestamp", 0.0) or 0.0))
+        creation = float(document.get("creation_timestamp", 0.0) or 0.0)
+        if creation and (not local.creation_timestamp or creation < local.creation_timestamp):
+            local.creation_timestamp = creation
+        return added
+
+    def _retire_merged(self, unique_id: str, merged_into: str) -> bool:
+        """A peer merged this identity into another: stop using it here, keep its gallery."""
+        local = self.identity_clusters.get(unique_id)
+        if local is None:
+            return False
+        target = self.identity_clusters.get(merged_into)
+        if target is not None:
+            for vector in local.all_embeddings:
+                self._store_sample(target, vector)
+        for track_id, mapped in list(self.track_id_to_unique_id.items()):
+            if mapped != unique_id:
+                continue
+            if target is None:
+                del self.track_id_to_unique_id[track_id]
+            else:
+                self.track_id_to_unique_id[track_id] = merged_into
+        del self.identity_clusters[unique_id]
+        self.total_identities_retired += 1
+        self._logger.info(f"Face identity {unique_id} retired locally: a peer merged it into "
+                          f"{merged_into}")
+        return True
 
     def close(self) -> None:
         self.flush(force=True)

@@ -47,6 +47,16 @@ class FakeCollection:
         self.updates.append((dict(query), update, upsert))
         return SimpleNamespace(matched_count=1, modified_count=1, upserted_id=None)
 
+    def find_one_and_update(self, query, update, upsert=False, return_document=False):
+        """Recorded exactly like update_one; returns the post-update document, as pymongo does.
+
+        The store uses find_one_and_update so it can learn the revision the database actually
+        holds (needed to tell its own copy from a peer's during a shared-gallery refresh).
+        """
+        self.updates.append((dict(query), update, upsert))
+        revision = int(update.get('$inc', {}).get('revision', 0))
+        return {**dict(query), **update.get('$set', {}), 'revision': revision}
+
     def delete_one(self, query):
         self.deletes.append(dict(query))
         return SimpleNamespace(deleted_count=1)

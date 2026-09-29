@@ -85,6 +85,16 @@ face_recognition_node:
     # to the robot name (e.g. "robot_a") when several robots share one database.
     robot_id: ""
 
+    # Cross-robot gallery synchronisation: how often (seconds) this robot pulls the
+    # identities other robots enrolled or changed, so a face enrolled elsewhere is
+    # recognized here without restarting. Runs on its own timer, never in the frame path.
+    #   0        disabled (single-robot deployments pay nothing)
+    #   negative take it from $FACE_GALLERY_REFRESH_S, default 15 s
+    # The poll is one indexed range query on updated_at; it adopts what it finds, unions
+    # embedding galleries when both robots hold the same identity (higher revision wins),
+    # and retires identities a peer has merged away.
+    gallery_refresh_period: -1.0
+
     
     # Performance Optimization
     # Percentage of frames to skip face recognition (0-100)
