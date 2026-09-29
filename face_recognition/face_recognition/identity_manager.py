@@ -91,18 +91,39 @@ class MongoFaceIdentityStore:
 
     Documents are namespaced by ``model_key`` so embeddings of different models are
     never compared. Documents without ``model_key`` (pre-refactor format) are ignored.
+
+    ``model_key`` **is** the profile scope: it identifies the embedding model, the crop
+    mode and, since :func:`FaceIdentityManager` is shared by several robots, everything
+    else that makes two embeddings comparable. Callers that need a custom scope string
+    pass it as ``model_key`` (the node exposes it as the ``profile_scope`` parameter);
+    embeddings produced under different scopes never share a gallery.
+
+    Each document also carries provenance (``created_by_robot``, ``updated_by_robot``,
+    ``last_seen_by_robot``) and a monotonic ``revision``, so a shared database can tell
+    which robot minted or last touched a face profile. Older documents simply lack those
+    fields and are read as before.
     """
 
     def __init__(self, mongo_uri: str, model_key: str, database_name: str = "face_recognition_db",
-                 collection_name: str = "identity_database", save_last_n_embeddings: int = 100) -> None:
+                 collection_name: str = "identity_database", save_last_n_embeddings: int = 100,
+                 robot_id: str = "") -> None:
         from pymongo import MongoClient
 
         self._model_key = model_key
         self._save_last_n = max(1, save_last_n_embeddings)
+        self._robot_id = robot_id
         self._client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
         self._client.admin.command("ping")
         self._collection = self._client[database_name][collection_name]
         self._collection.create_index([("model_key", 1), ("unique_id", 1)], unique=True)
+        # Supports the incremental "what changed" polls used when several robots share
+        # one database (see docs/multi_robot.md).
+        self._collection.create_index("updated_at")
+
+    @property
+    def model_key(self) -> str:
+        """The profile scope of this gallery (see the class docstring)."""
+        return self._model_key
 
     def count_legacy_documents(self) -> int:
         return self._collection.count_documents({"model_key": {"$exists": False}})
@@ -148,6 +169,7 @@ class MongoFaceIdentityStore:
     def save(self, identity: FaceIdentityCluster) -> None:
         if identity.mean_embedding is None:
             return
+        now = time.time()
         self._collection.update_one(
             {"model_key": self._model_key, "unique_id": identity.unique_id},
             {"$set": {
@@ -163,8 +185,16 @@ class MongoFaceIdentityStore:
                 "co_occurring": sorted(identity.co_occurring),
                 "embeddings": [e.astype(float).tolist() for e in identity.all_embeddings[-self._save_last_n:]],
                 "mean_embedding": identity.mean_embedding.astype(float).tolist(),
-                "updated_at": time.time(),
-            }},
+                "updated_at": now,
+                # Provenance: which robot wrote this, and which one last saw that face.
+                "updated_by_robot": self._robot_id,
+                "last_seen_by_robot": self._robot_id,
+            },
+             "$setOnInsert": {
+                "created_at": now,
+                "created_by_robot": self._robot_id,
+             },
+             "$inc": {"revision": 1}},
             upsert=True,
         )
 

@@ -425,9 +425,15 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('persist_every', 20)             # updates before a confirmed identity is re-saved
         self.declare_parameter('min_persist_interval', 10.0)    # s between saves of one identity
         self.declare_parameter('persist_flush_period', 10.0)    # s between background flushes
-        self.declare_parameter('mongo_uri', 'mongodb://eurecat:cerdanyola@localhost:27018/?authSource=admin&serverSelectionTimeoutMS=5000')
+        self.declare_parameter('mongo_uri', '')   # empty -> $FACE_DB_MONGO_URI, else localhost:27018
         self.declare_parameter('mongo_db_name', 'face_recognition_db')
         self.declare_parameter('mongo_collection_name', 'identity_database')
+        # Profile scope of the persisted gallery. Empty derives it from the embedding
+        # model and crop mode (see MongoFaceIdentityStore); set it explicitly to pin a
+        # gallery name that must not change when a default is tweaked.
+        self.declare_parameter('profile_scope', '')   # empty -> $FACE_PROFILE_SCOPE
+        # Provenance written into every persisted profile. Empty means "single robot".
+        self.declare_parameter('robot_id', '')        # empty -> $ROBOT_ID
 
         # Processing parameters
         self.declare_parameter('gaze_identity_exclusion_threshold', 0.5)
@@ -594,16 +600,26 @@ class FaceRecognitionNode(Node):
         store = None
         if bool(gp('use_mongodb')):
             try:
-                # Embeddings from different models or crop modes are not comparable
-                model_key = f"{face_embedding_model}-{self.crop_mode}"
+                # Embeddings from different models or crop modes are not comparable, so the
+                # gallery is scoped by model_key. An explicit profile_scope overrides the
+                # derived value; both work in single-robot and shared-database mode.
+                model_key = (str(gp('profile_scope')).strip()
+                             or os.environ.get('FACE_PROFILE_SCOPE', '').strip()
+                             or f"{face_embedding_model}-{self.crop_mode}")
+                robot_id = str(gp('robot_id')).strip() or os.environ.get('ROBOT_ID', '').strip()
+                mongo_uri = (str(gp('mongo_uri')).strip()
+                             or os.environ.get('FACE_DB_MONGO_URI', '').strip()
+                             or 'mongodb://eurecat:cerdanyola@localhost:27018/?authSource=admin&serverSelectionTimeoutMS=5000')
                 store = MongoFaceIdentityStore(
-                    str(gp('mongo_uri')), model_key=model_key,
+                    mongo_uri, model_key=model_key,
                     database_name=str(gp('mongo_db_name')), collection_name=str(gp('mongo_collection_name')),
-                    save_last_n_embeddings=int(gp('save_last_n_embeddings')))
+                    save_last_n_embeddings=int(gp('save_last_n_embeddings')),
+                    robot_id=robot_id)
                 legacy = store.count_legacy_documents()
                 other = store.count_other_model_documents()
                 self.get_logger().info(
                     f"Connected to MongoDB {gp('mongo_db_name')}.{gp('mongo_collection_name')} (model_key {model_key})"
+                    + (f" as robot '{robot_id}'" if robot_id else "")
                     + (f"; ignoring {legacy} legacy and {other} other-model documents" if legacy or other else ""))
             except Exception as e:
                 self.get_logger().error(f"MongoDB unavailable, identities will not persist: {e}")
