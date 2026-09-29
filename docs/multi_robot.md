@@ -113,8 +113,37 @@ with two global face profiles and two canonical persons.
 
 ## 6. Cross-robot refresh
 
-Load is startup-only today. A robot that is already running does not yet see profiles another
-robot enrolled afterwards; it will after a restart, and the periodic refresh that removes
-that restriction is planned in `EutPerceptionStack/plan.md` phase 5. The `updated_at` index
-and the `revision` field are already in place so that refresh can pull only what changed and
-detect conflicting writers.
+Implemented. The node owns a timer (`gallery_refresh_period`, `0` disables it, negative means
+"take `$FACE_GALLERY_REFRESH_S`", default 15 s) and calls `IdentityManager.refresh_from_store()`,
+which does one indexed range scan on `updated_at` from a watermark of `query_start - 2 s`:
+
+* an identity this robot does not have is **adopted whole**, gallery included;
+* when both hold a copy, the higher `revision` wins and the galleries are **unioned**, so neither
+  robot loses the faces it saw;
+* a union that adds nothing is **not written back** - otherwise two robots adopting each other
+  would bump revisions forever;
+* a locally confirmed identity is never dropped because the peer's copy lacks it.
+
+On failure it logs once and backs off exponentially to 60 s; recognition keeps serving from the
+gallery it already has. Nothing was added to the frame path: measured 9.545 Hz with the poll at
+15 s against 9.679 Hz with it off.
+
+**Measured latency**: a profile enrolled by robot A was resolvable by robot B **11.61 s** later,
+one poll, with no restart.
+
+## 7. Merges are tombstones
+
+`merge_identities` used to delete the absorbed document, which is invisible to the other robots: a
+deleted document cannot be returned by a range scan on `updated_at`, so the peers kept resolving the
+retired id from their own copy, and the first frame that matched it could write it back.
+`mark_merged()` now writes `merged_into` + `merged_at`, bumps `revision` and clears the gallery (the
+survivor absorbed it). `load()` filters tombstones out and the refresh retires them in the peers,
+so a restart cannot resurrect a retired id either.
+
+## 8. What is still not solved here
+
+The shared allocator for `U<n>` is still not atomic across processes: two robots that see a
+*genuinely new* face at the same instant can both mint an id, and the merge pass consolidates them a
+moment later. PersonManager does not have that luxury (two persons for one human is not recoverable
+by merging), which is why its profile links are protected by a database constraint instead - see
+`EutPersonManager/docs/multi_robot.md`.
