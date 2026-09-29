@@ -4,8 +4,11 @@
 gaze_estimation_node:
   ros__parameters:
     # Topic Configuration
-    input_topic: "/humans/faces/detected"
-    output_topic: "/humans/faces/gaze"
+    # Relative on purpose: the node namespace is applied to these, so a node launched with
+    # `ros_namespace:=/robot_a` uses /robot_a/... instead. Under the default root namespace
+    # the absolute topic is unchanged, so single-robot deployments are identical.
+    input_topic: "humans/faces/detected"
+    output_topic: "humans/faces/gaze"
     compressed_topic: ""
     
     # Processing Configuration
@@ -35,8 +38,8 @@ gaze_estimation_node:
     # Image Visualization Configuration
     enable_image_output: true
     img_published_reshape_size: [1080, 720]  # Size to reshape published annotated images for visualization (format: [width, height])
-    image_input_topic: "/camera/color/image_rect_raw"
-    output_image_topic: "/humans/faces/gaze/annotated_img/compressed"
+    image_input_topic: "camera/color/image_rect_raw"
+    output_image_topic: "humans/faces/gaze/annotated_img/compressed"
     
     # Debug Configuration
     enable_debug_output: false

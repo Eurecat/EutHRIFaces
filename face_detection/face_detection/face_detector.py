@@ -130,10 +130,10 @@ class FaceDetectorNode(Node):
             self.facial_landmarks_publishers = {}  # {face_id: {'roi': Publisher, ...}}
             self.tracked_face_ids = set()  # Set of currently tracked face IDs
             
-            # Publisher for tracked faces list
+            # Publisher for tracked faces list (relative: the node namespace applies)
             self.tracked_faces_publisher = self.create_publisher(
                 IdsList,
-                '/humans/faces/tracked',
+                'humans/faces/tracked',
                 10
             )
             self.facial_landmarks_publisher = None
@@ -363,7 +363,10 @@ class FaceDetectorNode(Node):
                         self.facial_landmarks_publishers[face_id] = {}
                         
                         # Publisher for full FacialLandmarks message
-                        detected_topic = f'/humans/faces/{face_id}/detected'
+                        # Relative topics on purpose: the node namespace is applied to them,
+                        # so two robots on one ROS domain do not publish over each other.
+                        # Under the default root namespace the name is unchanged.
+                        detected_topic = f'humans/faces/{face_id}/detected'
                         self.facial_landmarks_publishers[face_id]['detected'] = self.create_publisher(
                             FacialLandmarks,
                             detected_topic,
@@ -372,7 +375,7 @@ class FaceDetectorNode(Node):
                         self.get_logger().info(f"Created FacialLandmarks publisher for face ID: {detected_topic}")
                         
                         # Publisher for ROI (bounding box) - individual field
-                        roi_topic = f'/humans/faces/{face_id}/roi'
+                        roi_topic = f'humans/faces/{face_id}/roi'
                         self.facial_landmarks_publishers[face_id]['roi'] = self.create_publisher(
                             NormalizedRegionOfInterest2D,
                             roi_topic,
@@ -474,9 +477,14 @@ class FaceDetectorNode(Node):
     def _declare_parameters(self):
         """Declare ROS2 parameters with default values."""
         self.declare_parameter('compressed_topic', '')
-        self.declare_parameter('input_topic', '/camera/color/image_rect_raw')
-        self.declare_parameter('output_topic', '/humans/faces/detected')
-        self.declare_parameter('output_image_topic', '/humans/faces/detected/annotated_img/compressed')
+        # Topic names are relative on purpose: a node launched with
+        # `ros_namespace:=/robot_a` then uses /robot_a/... instead, which is what keeps two
+        # robots on one ROS domain apart. Under the default root namespace a relative name
+        # resolves to the same absolute topic as before, so single-robot is unchanged. Give
+        # an absolute value only for a publisher that cannot be namespaced.
+        self.declare_parameter('input_topic', 'camera/color/image_rect_raw')
+        self.declare_parameter('output_topic', 'humans/faces/detected')
+        self.declare_parameter('output_image_topic', 'humans/faces/detected/annotated_img/compressed')
         
         # Processing rate parameter (copied from perception node)
         self.declare_parameter('processing_rate_hz', 30.0)  # Default 10 Hz

@@ -4,10 +4,13 @@
 visual_speech_activity_node:
   ros__parameters:
     # Topic Configuration
-    recognition_input_topic: "/humans/faces/recognized"
-    landmarks_input_topic: "/humans/faces/detected"
-    output_topic: "/humans/faces/speaking"
-    output_image_topic: "/humans/faces/speaking/annotated_img/compressed"
+    # Relative on purpose: the node namespace is applied to these, so a node launched with
+    # `ros_namespace:=/robot_a` uses /robot_a/... instead. Under the default root namespace
+    # the absolute topic is unchanged, so single-robot deployments are identical.
+    recognition_input_topic: "humans/faces/recognized"
+    landmarks_input_topic: "humans/faces/detected"
+    output_topic: "humans/faces/speaking"
+    output_image_topic: "humans/faces/speaking/annotated_img/compressed"
     
     # ROS4HRI Configuration
     # Set to true for per-ID topics (/humans/faces/<id>/speaking)
@@ -109,8 +112,8 @@ visual_speech_activity_node:
     
     # Compressed image topic (optional, recommended for bandwidth)
     # Leave empty to use regular image_topic
-    # Example: "/camera/color/image_raw/compressed"
-    compressed_topic: "/camera/image_raw/compressed"
+    # Example: "camera/color/image_raw/compressed"
+    compressed_topic: "camera/image_raw/compressed"
     
     # Face Recognition Integration
     # Set to true to use face recognition for robust identity tracking (recommended)

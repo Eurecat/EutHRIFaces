@@ -353,11 +353,12 @@ class FaceRecognitionNode(Node):
     
     def _declare_parameters(self):
         """Declare ROS2 parameters."""
-        # Input/Output topics
+        # Input/Output topics. Relative on purpose so the node namespace applies
+        # (`ros_namespace:=/robot_a` in multi-robot mode); unchanged under the root namespace.
         self.declare_parameter('compressed_topic', '')
-        self.declare_parameter('input_topic', '/humans/faces/detected')
-        self.declare_parameter('output_topic', '/humans/faces/recognized')
-        self.declare_parameter('image_input_topic', '/camera/color/image_rect_raw')
+        self.declare_parameter('input_topic', 'humans/faces/detected')
+        self.declare_parameter('output_topic', 'humans/faces/recognized')
+        self.declare_parameter('image_input_topic', 'camera/color/image_rect_raw')
         
         # Processing rate parameter (copied from perception node)
         self.declare_parameter('processing_rate_hz', 10.0)  # Default 10 Hz
@@ -369,7 +370,7 @@ class FaceRecognitionNode(Node):
         # Image output parameters
         self.declare_parameter('enable_image_output', True)
         self.declare_parameter('img_published_reshape_size', [640, 360])  # Resolution for published annotated images
-        self.declare_parameter('output_image_topic', '/humans/faces/recognized/annotated_img/compressed')
+        self.declare_parameter('output_image_topic', 'humans/faces/recognized/annotated_img/compressed')
         
         # Face embedding parameters
         self.declare_parameter('face_embedding_model', 'vggface2')
@@ -469,7 +470,7 @@ class FaceRecognitionNode(Node):
             # Subscribe to tracked faces list
             self.tracked_faces_subscriber = self.create_subscription(
                 IdsList,
-                '/humans/faces/tracked',
+                'humans/faces/tracked',
                 self.tracked_faces_callback,
                 self.qos_profile
             )
@@ -687,7 +688,7 @@ class FaceRecognitionNode(Node):
         for face_id in new_tracked_ids:
             if face_id not in self.tracked_face_ids:
                 # Create subscriber for this face ID
-                topic_name = f'/humans/faces/{face_id}/detected'
+                topic_name = f'humans/faces/{face_id}/detected'
                 self.landmarks_subscribers[face_id] = self.create_subscription(
                     FacialLandmarks,
                     topic_name,
@@ -696,7 +697,7 @@ class FaceRecognitionNode(Node):
                 )
                 
                 # Create publisher for this face ID
-                output_topic_name = f'/humans/faces/{face_id}/recognized'
+                output_topic_name = f'humans/faces/{face_id}/recognized'
                 self.recognition_publishers[face_id] = self.create_publisher(
                     FacialRecognition,
                     output_topic_name,
@@ -908,7 +909,7 @@ class FaceRecognitionNode(Node):
             face_id = result[0].face_id
             if face_id not in self.recognition_publishers:
                 self.recognition_publishers[face_id] = self.create_publisher(
-                    FacialRecognition, f'/humans/faces/{face_id}/recognized', self.qos_profile)
+                    FacialRecognition, f'humans/faces/{face_id}/recognized', self.qos_profile)
             self.recognition_publishers[face_id].publish(self._fill_recognition_msg(*result))
 
     def _publish_recognition_array(self, recognition_results: List):

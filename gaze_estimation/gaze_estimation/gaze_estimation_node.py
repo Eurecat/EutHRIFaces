@@ -82,10 +82,10 @@ class GazeEstimationNode(Node):
             self.gaze_publishers = {}  # {face_id: Publisher}
             self.tracked_face_ids = set()  # Set of currently tracked face IDs
             
-            # Subscribe to tracked faces list
+            # Subscribe to tracked faces list (relative: the node namespace applies)
             self.tracked_faces_sub = self.create_subscription(
                 IdsList,
-                '/humans/faces/tracked',
+                'humans/faces/tracked',
                 self.tracked_faces_callback,
                 self.qos_profile
             )
@@ -387,7 +387,7 @@ class GazeEstimationNode(Node):
                     
                     # Create publisher for this face ID if it doesn't exist
                     if face_id not in self.gaze_publishers:
-                        topic_name = f'/humans/faces/{face_id}/gaze'
+                        topic_name = f'humans/faces/{face_id}/gaze'
                         self.gaze_publishers[face_id] = self.create_publisher(
                             Gaze,
                             topic_name,
@@ -441,10 +441,11 @@ class GazeEstimationNode(Node):
     
     def declare_and_get_parameters(self):
         """Declare and get all ROS2 parameters."""
-        # Declare and get topic parameters
+        # Declare and get topic parameters. Relative on purpose so the node namespace
+        # applies (`ros_namespace:=/robot_a` in multi-robot mode); unchanged under root.
         self.declare_parameter('compressed_topic', '')
-        self.declare_parameter('input_topic', '/humans/faces/detected')
-        self.declare_parameter('output_topic', '/humans/faces/gaze')
+        self.declare_parameter('input_topic', 'humans/faces/detected')
+        self.declare_parameter('output_topic', 'humans/faces/gaze')
         self.compressed_topic = self.get_parameter('compressed_topic').get_parameter_value().string_value
         self.input_topic = self.get_parameter('input_topic').get_parameter_value().string_value
         self.output_topic = self.get_parameter('output_topic').get_parameter_value().string_value
@@ -493,8 +494,8 @@ class GazeEstimationNode(Node):
         # Declare and get image visualization parameters
         self.declare_parameter('enable_image_output', True)
         self.declare_parameter('img_published_reshape_size', [1080, 720])  # Size to reshape published annotated images for visualization
-        self.declare_parameter('image_input_topic', '/camera/color/image_rect_raw')
-        self.declare_parameter('output_image_topic', '/humans/faces/gaze/annotated_img/compressed')
+        self.declare_parameter('image_input_topic', 'camera/color/image_rect_raw')
+        self.declare_parameter('output_image_topic', 'humans/faces/gaze/annotated_img/compressed')
         
         # ROS4HRI mode parameter - when enabled, subscribes to per-ID messages and publishes per-ID
         self.declare_parameter('ros4hri_with_id', False)  # Default to array mode (ROS4HRI array)
@@ -567,7 +568,7 @@ class GazeEstimationNode(Node):
         for face_id in new_tracked_ids:
             if face_id not in self.tracked_face_ids:
                 # Create subscriber for this face ID
-                topic_name = f'/humans/faces/{face_id}/detected'
+                topic_name = f'humans/faces/{face_id}/detected'
                 self.landmarks_subscribers[face_id] = self.create_subscription(
                     FacialLandmarks,
                     topic_name,
@@ -576,7 +577,7 @@ class GazeEstimationNode(Node):
                 )
                 
                 # Create publisher for this face ID
-                output_topic_name = f'/humans/faces/{face_id}/gaze'
+                output_topic_name = f'humans/faces/{face_id}/gaze'
                 self.gaze_publishers[face_id] = self.create_publisher(
                     Gaze,
                     output_topic_name,
