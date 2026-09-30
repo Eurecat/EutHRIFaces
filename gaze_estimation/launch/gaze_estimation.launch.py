@@ -65,7 +65,15 @@ def _setup_gaze_estimation(context, *args, **kwargs):
         executable='gaze_estimation_node',
         name='gaze_estimation_node',
         # Pass config file first, then overrides
-        parameters=[config_file, node_params],
+        # The file AND its ros__parameters as a dict: a parameter file is matched against a node
+        # by name, so the bare `gaze_estimation_node:` key does not match a namespaced node such as
+        # /robot_a/gaze_estimation_node, which then silently runs on its code defaults (for face detection:
+        # 5 keypoints instead of the landmarks, so speaking falls back to the face crop). A dict
+        # applies whatever the namespace. Empty lists and nulls are dropped: the parameter
+        # service rejects them, and they change nothing.
+        parameters=[config_file,
+                    {k: v for k, v in defaults.items() if v is not None and v != []},
+                    node_params],
         output='screen',
         emulate_tty=True,
     )

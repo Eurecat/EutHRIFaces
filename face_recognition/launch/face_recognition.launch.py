@@ -88,7 +88,15 @@ def _setup_face_recognition(context, *args, **kwargs):
         executable='face_recognition_node',
         name='face_recognition_node',
         # Pass config file first, then overrides
-        parameters=[config_file, node_params],
+        # The file AND its ros__parameters as a dict: a parameter file is matched against a node
+        # by name, so the bare `face_recognition_node:` key does not match a namespaced node such as
+        # /robot_a/face_recognition_node, which then silently runs on its code defaults (for face detection:
+        # 5 keypoints instead of the landmarks, so speaking falls back to the face crop). A dict
+        # applies whatever the namespace. Empty lists and nulls are dropped: the parameter
+        # service rejects them, and they change nothing.
+        parameters=[config_file,
+                    {k: v for k, v in defaults.items() if v is not None and v != []},
+                    node_params],
         arguments=node_arguments,
         output='screen',
         emulate_tty=True,
