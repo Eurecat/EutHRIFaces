@@ -1,6 +1,6 @@
 """5-point similarity alignment of face crops.
 
-Measured on video_3.mp4 (docs/identity_experiments.md, entry 3): aligning FaceNet crops to
+Measured on video_3.mp4 (plans/face_identity_experiments.md, entry 3): aligning FaceNet crops to
 the standard 5-point template instead of cropping the raw detection box raised the
 margin p10 between a face's own person and the best other person from 0.27 to 0.37.
 """

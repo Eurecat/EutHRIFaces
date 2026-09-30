@@ -4,9 +4,12 @@
 face_recognition_node:
   ros__parameters:
     # Topic Configuration
-    input_topic: "/humans/faces/detected"
-    output_topic: "/humans/faces/recognized"
-    image_input_topic: "/camera/color/image_rect_raw"
+    # Relative on purpose: the node namespace is applied to these, so a node launched with
+    # `ros_namespace:=/robot_a` uses /robot_a/... instead. Under the default root namespace
+    # the absolute topic is unchanged, so single-robot deployments are identical.
+    input_topic: "humans/faces/detected"
+    output_topic: "humans/faces/recognized"
+    image_input_topic: "camera/color/image_rect_raw"
     compressed_topic: ""
     
     # Processing Configuration
@@ -61,10 +64,36 @@ face_recognition_node:
     # Identity Persistence Configuration (continuous, throttled MongoDB sync)
     use_mongodb: true
     mongo_db_name: "face_recognition_db"   # the video test compose uses a separate database
+    # MongoDB URI of the face gallery. Empty uses $FACE_DB_MONGO_URI, then localhost:27018.
+    # A URI is never accepted as a launch argument (empty values do not survive them), so
+    # set it here or in the environment; the multi-robot compose sets the environment.
+    mongo_uri: ""
     save_last_n_embeddings: 100          # Gallery samples stored per identity (whole diverse gallery)
     persist_every: 20                    # Updates before a confirmed identity is saved again...
     min_persist_interval: 10.0           # ...and at least this many seconds since its last save
     persist_flush_period: 10.0           # Background flush of pending updates
+
+    # Profile scope of the persisted gallery. Empty derives it from the embedding model
+    # and the crop mode (e.g. "vggface2-aligned"), which is what a single robot wants; it
+    # can also come from $FACE_PROFILE_SCOPE. Set it explicitly to pin a gallery name
+    # across config changes. Two robots that must share faces use the same scope; two
+    # whose embeddings are not comparable must not.
+    profile_scope: ""
+
+    # Provenance written into every persisted profile (created_by_robot, updated_by_robot,
+    # last_seen_by_robot). Empty means "single robot"; can also come from $ROBOT_ID. Set it
+    # to the robot name (e.g. "robot_a") when several robots share one database.
+    robot_id: ""
+
+    # Cross-robot gallery synchronisation: how often (seconds) this robot pulls the
+    # identities other robots enrolled or changed, so a face enrolled elsewhere is
+    # recognized here without restarting. Runs on its own timer, never in the frame path.
+    #   0        disabled (single-robot deployments pay nothing)
+    #   negative take it from $FACE_GALLERY_REFRESH_S, default 15 s
+    # The poll is one indexed range query on updated_at; it adopts what it finds, unions
+    # embedding galleries when both robots hold the same identity (higher revision wins),
+    # and retires identities a peer has merged away.
+    gallery_refresh_period: -1.0
 
     
     # Performance Optimization

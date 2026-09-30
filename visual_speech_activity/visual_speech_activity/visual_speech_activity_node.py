@@ -180,11 +180,12 @@ class VisualSpeechActivityNode(Node):
     
     def _declare_parameters(self):
         """Declare ROS2 parameters."""
-        # Input/Output topics
-        self.declare_parameter('recognition_input_topic', '/humans/faces/recognized')
-        self.declare_parameter('landmarks_input_topic', '/humans/faces/detected')
-        self.declare_parameter('output_topic', '/humans/faces/speaking')
-        self.declare_parameter('output_image_topic', '/humans/faces/speaking/annotated_img/compressed')
+        # Input/Output topics. Relative on purpose so the node namespace applies
+        # (`ros_namespace:=/robot_a` in multi-robot mode); unchanged under the root namespace.
+        self.declare_parameter('recognition_input_topic', 'humans/faces/recognized')
+        self.declare_parameter('landmarks_input_topic', 'humans/faces/detected')
+        self.declare_parameter('output_topic', 'humans/faces/speaking')
+        self.declare_parameter('output_image_topic', 'humans/faces/speaking/annotated_img/compressed')
         self.declare_parameter('img_published_reshape_size', [1080, 720])  # Size to reshape published annotated images for visualization (format: [width, height])
         # ROS4HRI mode parameter
         self.declare_parameter('ros4hri_with_id', False)  # Default to array mode
@@ -211,7 +212,7 @@ class VisualSpeechActivityNode(Node):
         self.declare_parameter('lip_motion_speaking_threshold', 0.5)  # confidence reported as speaking
         
         # Image input parameters (same as face_recognition)
-        self.declare_parameter('image_topic', '/camera/color/image_raw')  # Camera image topic
+        self.declare_parameter('image_topic', 'camera/color/image_raw')  # Camera image topic
         self.declare_parameter('compressed_topic', '')  # Compressed image topic (optional)
         
         # Face recognition dependency parameter
@@ -321,7 +322,7 @@ class VisualSpeechActivityNode(Node):
             # Subscribe to tracked faces list to dynamically create subscribers
             self.tracked_faces_subscriber = self.create_subscription(
                 IdsList,
-                '/humans/faces/tracked',
+                'humans/faces/tracked',
                 self._tracked_faces_callback,
                 self.qos_profile
             )
@@ -565,7 +566,7 @@ class VisualSpeechActivityNode(Node):
     def _create_per_id_subscribers(self, face_id: str):
         """Create per-ID subscribers for a new tracked face."""
         # Subscribe to landmarks for this face - use 'detected' not 'landmarks'
-        landmarks_topic = f'/humans/faces/{face_id}/detected'
+        landmarks_topic = f'humans/faces/{face_id}/detected'
         self.landmarks_subscribers[face_id] = self.create_subscription(
             FacialLandmarks,
             landmarks_topic,
@@ -619,7 +620,7 @@ class VisualSpeechActivityNode(Node):
     def _create_per_id_recognition_subscriber(self, face_id: str):
         """Create per-ID subscriber for recognition messages."""
         if face_id not in self.recognition_subscribers:
-            recognition_topic = f'/humans/faces/{face_id}/recognized'
+            recognition_topic = f'humans/faces/{face_id}/recognized'
             self.recognition_subscribers[face_id] = self.create_subscription(
                 FacialRecognition,
                 recognition_topic,
@@ -1108,7 +1109,7 @@ class VisualSpeechActivityNode(Node):
         """Publish speaking detection result for a single face ID."""
         # Create publisher if it doesn't exist - use face_id for topic naming
         if face_id not in self.speaking_publishers:
-            topic = f'/humans/faces/{face_id}/speaking'
+            topic = f'humans/faces/{face_id}/speaking'
             self.speaking_publishers[face_id] = self.create_publisher(
                 FacialRecognition,
                 topic,

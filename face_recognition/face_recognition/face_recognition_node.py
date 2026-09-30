@@ -353,11 +353,12 @@ class FaceRecognitionNode(Node):
     
     def _declare_parameters(self):
         """Declare ROS2 parameters."""
-        # Input/Output topics
+        # Input/Output topics. Relative on purpose so the node namespace applies
+        # (`ros_namespace:=/robot_a` in multi-robot mode); unchanged under the root namespace.
         self.declare_parameter('compressed_topic', '')
-        self.declare_parameter('input_topic', '/humans/faces/detected')
-        self.declare_parameter('output_topic', '/humans/faces/recognized')
-        self.declare_parameter('image_input_topic', '/camera/color/image_rect_raw')
+        self.declare_parameter('input_topic', 'humans/faces/detected')
+        self.declare_parameter('output_topic', 'humans/faces/recognized')
+        self.declare_parameter('image_input_topic', 'camera/color/image_rect_raw')
         
         # Processing rate parameter (copied from perception node)
         self.declare_parameter('processing_rate_hz', 10.0)  # Default 10 Hz
@@ -369,7 +370,7 @@ class FaceRecognitionNode(Node):
         # Image output parameters
         self.declare_parameter('enable_image_output', True)
         self.declare_parameter('img_published_reshape_size', [640, 360])  # Resolution for published annotated images
-        self.declare_parameter('output_image_topic', '/humans/faces/recognized/annotated_img/compressed')
+        self.declare_parameter('output_image_topic', 'humans/faces/recognized/annotated_img/compressed')
         
         # Face embedding parameters
         self.declare_parameter('face_embedding_model', 'vggface2')
@@ -425,9 +426,20 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('persist_every', 20)             # updates before a confirmed identity is re-saved
         self.declare_parameter('min_persist_interval', 10.0)    # s between saves of one identity
         self.declare_parameter('persist_flush_period', 10.0)    # s between background flushes
-        self.declare_parameter('mongo_uri', 'mongodb://eurecat:cerdanyola@localhost:27018/?authSource=admin&serverSelectionTimeoutMS=5000')
+        self.declare_parameter('mongo_uri', '')   # empty -> $FACE_DB_MONGO_URI, else localhost:27018
         self.declare_parameter('mongo_db_name', 'face_recognition_db')
         self.declare_parameter('mongo_collection_name', 'identity_database')
+        # Profile scope of the persisted gallery. Empty derives it from the embedding
+        # model and crop mode (see MongoFaceIdentityStore); set it explicitly to pin a
+        # gallery name that must not change when a default is tweaked.
+        self.declare_parameter('profile_scope', '')   # empty -> $FACE_PROFILE_SCOPE
+        # Provenance written into every persisted profile. Empty means "single robot".
+        self.declare_parameter('robot_id', '')        # empty -> $ROBOT_ID
+        # How often this robot pulls identities that other robots enrolled or changed in the
+        # shared database, so a face enrolled elsewhere is recognized here without a restart.
+        # 0 disables the poll (single-robot deployments then pay nothing for it); negative
+        # means "take it from $FACE_GALLERY_REFRESH_S", defaulting to 15 s.
+        self.declare_parameter('gallery_refresh_period', -1.0)
 
         # Processing parameters
         self.declare_parameter('gaze_identity_exclusion_threshold', 0.5)
@@ -463,7 +475,7 @@ class FaceRecognitionNode(Node):
             # Subscribe to tracked faces list
             self.tracked_faces_subscriber = self.create_subscription(
                 IdsList,
-                '/humans/faces/tracked',
+                'humans/faces/tracked',
                 self.tracked_faces_callback,
                 self.qos_profile
             )
@@ -594,16 +606,26 @@ class FaceRecognitionNode(Node):
         store = None
         if bool(gp('use_mongodb')):
             try:
-                # Embeddings from different models or crop modes are not comparable
-                model_key = f"{face_embedding_model}-{self.crop_mode}"
+                # Embeddings from different models or crop modes are not comparable, so the
+                # gallery is scoped by model_key. An explicit profile_scope overrides the
+                # derived value; both work in single-robot and shared-database mode.
+                model_key = (str(gp('profile_scope')).strip()
+                             or os.environ.get('FACE_PROFILE_SCOPE', '').strip()
+                             or f"{face_embedding_model}-{self.crop_mode}")
+                robot_id = str(gp('robot_id')).strip() or os.environ.get('ROBOT_ID', '').strip()
+                mongo_uri = (str(gp('mongo_uri')).strip()
+                             or os.environ.get('FACE_DB_MONGO_URI', '').strip()
+                             or 'mongodb://eurecat:cerdanyola@localhost:27018/?authSource=admin&serverSelectionTimeoutMS=5000')
                 store = MongoFaceIdentityStore(
-                    str(gp('mongo_uri')), model_key=model_key,
+                    mongo_uri, model_key=model_key,
                     database_name=str(gp('mongo_db_name')), collection_name=str(gp('mongo_collection_name')),
-                    save_last_n_embeddings=int(gp('save_last_n_embeddings')))
+                    save_last_n_embeddings=int(gp('save_last_n_embeddings')),
+                    robot_id=robot_id)
                 legacy = store.count_legacy_documents()
                 other = store.count_other_model_documents()
                 self.get_logger().info(
                     f"Connected to MongoDB {gp('mongo_db_name')}.{gp('mongo_collection_name')} (model_key {model_key})"
+                    + (f" as robot '{robot_id}'" if robot_id else "")
                     + (f"; ignoring {legacy} legacy and {other} other-model documents" if legacy or other else ""))
             except Exception as e:
                 self.get_logger().error(f"MongoDB unavailable, identities will not persist: {e}")
@@ -638,11 +660,54 @@ class FaceRecognitionNode(Node):
             return
         self.persist_timer = self.create_timer(float(gp('persist_flush_period')), self._flush_identities)
 
+        # Cross-robot gallery refresh (see the refresh_from_store docstring). Kept off the
+        # frame path on purpose: it is a timer of its own, so recognition cost is unaffected.
+        refresh_period = float(gp('gallery_refresh_period'))
+        if refresh_period < 0:
+            refresh_period = float(os.environ.get('FACE_GALLERY_REFRESH_S') or 15.0)
+        self._gallery_refresh_period = max(0.0, refresh_period)
+        self._gallery_refresh_failures = 0
+        self._gallery_refresh_retry_at = 0.0
+        if self._gallery_refresh_period > 0:
+            self.gallery_refresh_timer = self.create_timer(self._gallery_refresh_period, self._refresh_gallery)
+            self.get_logger().info(f"Shared gallery refresh every {self._gallery_refresh_period:.1f}s")
+        else:
+            self.gallery_refresh_timer = None
+            self.get_logger().info("Shared gallery refresh disabled (gallery_refresh_period=0)")
+
     def _flush_identities(self):
         try:
             self.identity_manager.flush()
         except Exception as e:
             self.get_logger().warning(f"Identity flush failed: {e}")
+
+    def _refresh_gallery(self):
+        """Adopt identities other robots enrolled or changed since the last poll.
+
+        A failure is logged once and retried with exponential backoff up to 60 s, while
+        recognition keeps running from the identities already held here.
+        """
+        now = time.time()
+        if now < self._gallery_refresh_retry_at:
+            return
+        try:
+            counters = self.identity_manager.refresh_from_store()
+        except Exception as e:
+            self._gallery_refresh_failures += 1
+            delay = min(60.0, self._gallery_refresh_period * (2 ** min(self._gallery_refresh_failures, 6)))
+            self._gallery_refresh_retry_at = now + delay
+            self.get_logger().warning(f"Shared gallery refresh failed "
+                                      f"({self._gallery_refresh_failures} in a row), retrying in {delay:.0f}s: {e}")
+            return
+        if self._gallery_refresh_failures:
+            self.get_logger().info(f"Shared gallery refresh succeeded again after "
+                                   f"{self._gallery_refresh_failures} failure(s)")
+            self._gallery_refresh_failures = 0
+        if counters and (counters['adopted'] or counters['updated'] or counters['retired']):
+            self.get_logger().info(f"Shared gallery refresh: adopted {counters['adopted']}, "
+                                   f"updated {counters['updated']} "
+                                   f"(+{counters['embeddings_added']} embeddings), "
+                                   f"retired {counters['retired']}")
 
     def landmarks_array_callback(self, msg):
         """
@@ -671,7 +736,7 @@ class FaceRecognitionNode(Node):
         for face_id in new_tracked_ids:
             if face_id not in self.tracked_face_ids:
                 # Create subscriber for this face ID
-                topic_name = f'/humans/faces/{face_id}/detected'
+                topic_name = f'humans/faces/{face_id}/detected'
                 self.landmarks_subscribers[face_id] = self.create_subscription(
                     FacialLandmarks,
                     topic_name,
@@ -680,7 +745,7 @@ class FaceRecognitionNode(Node):
                 )
                 
                 # Create publisher for this face ID
-                output_topic_name = f'/humans/faces/{face_id}/recognized'
+                output_topic_name = f'humans/faces/{face_id}/recognized'
                 self.recognition_publishers[face_id] = self.create_publisher(
                     FacialRecognition,
                     output_topic_name,
@@ -892,7 +957,7 @@ class FaceRecognitionNode(Node):
             face_id = result[0].face_id
             if face_id not in self.recognition_publishers:
                 self.recognition_publishers[face_id] = self.create_publisher(
-                    FacialRecognition, f'/humans/faces/{face_id}/recognized', self.qos_profile)
+                    FacialRecognition, f'humans/faces/{face_id}/recognized', self.qos_profile)
             self.recognition_publishers[face_id].publish(self._fill_recognition_msg(*result))
 
     def _publish_recognition_array(self, recognition_results: List):

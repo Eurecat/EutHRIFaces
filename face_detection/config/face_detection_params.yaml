@@ -4,9 +4,13 @@
 face_detector:
   ros__parameters:
     # Topic Configuration
-    input_topic: "/camera/color/image_rect_raw"
-    output_topic: "/humans/faces/detected"
-    output_image_topic: "/humans/faces/detected/annotated_img/compressed"
+    # Relative on purpose: the node namespace is applied to these, so a node launched with
+    # `ros_namespace:=/robot_a` publishes /robot_a/... instead. Under the default root
+    # namespace the absolute topic is unchanged, so single-robot deployments are identical.
+    # Use an absolute value (leading '/') only for a publisher that cannot be namespaced.
+    input_topic: "camera/color/image_rect_raw"
+    output_topic: "humans/faces/detected"
+    output_image_topic: "humans/faces/detected/annotated_img/compressed"
     compressed_topic: ""
     
     # Processing Configuration
