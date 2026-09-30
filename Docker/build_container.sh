@@ -158,11 +158,11 @@ fi
 # Import/update dependencies repository using VCS tools (currently empty)
 if ! $NO_VCS; then
     echo "Importing/updating dependencies repository using VCS..."
-    if [ -s faces.repos ]; then
-        vcs import ${DEPS_DIR} < faces.repos
+    if [ -s deps.repos ]; then
+        vcs import ${DEPS_DIR} < deps.repos
         vcs pull ${DEPS_DIR}
     else
-        echo "No external dependencies defined in faces.repos"
+        echo "No external dependencies defined in deps.repos"
     fi
 else
     echo "Skipping VCS operations..."

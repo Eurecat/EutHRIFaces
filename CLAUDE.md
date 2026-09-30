@@ -12,7 +12,7 @@ face_recognition/        embeddings + identity_manager.py (U<n> lifecycle, Mongo
 gaze_estimation/         head pose + gaze
 visual_speech_activity/  lip movement → speaking
 Docker/                  Dockerfile(.arm), build_container.sh, docker-compose.yaml, eth-docker-compose.yaml,
-                         faces.repos → deps/hri_msgs (jazzy-devel), .env.example, entrypoint.sh
+                         deps.repos → deps/hri_msgs (jazzy-devel), .env.example, entrypoint.sh
 docs/multi_robot.md      shared face gallery: scope, provenance, refresh, tombstones
 plans/                   dev notes (face_identity_experiments.md: every identity experiment + numbers)
 ```
