@@ -11,7 +11,7 @@ face_detection/          YOLO face (ONNX) + landmarks, optional BOXMOT tracking
 face_recognition/        embeddings + identity_manager.py (U<n> lifecycle, Mongo gallery); tools/ = offline eval
 gaze_estimation/         head pose + gaze
 visual_speech_activity/  lip movement → speaking
-Docker/                  Dockerfile(.arm), build_container.sh, docker-compose.yaml, eth-docker-compose.yaml,
+Docker/                  Dockerfile(.arm), build_container.sh, docker-compose.yaml, tiago-eth-docker-compose.yaml,
                          deps.repos → deps/hri_msgs (jazzy-devel), .env.example, entrypoint.sh
 docs/multi_robot.md      shared face gallery: scope, provenance, refresh, tombstones
 plans/                   dev notes (face_identity_experiments.md: every identity experiment + numbers)
