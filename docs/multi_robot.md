@@ -106,7 +106,7 @@ with two global face profiles and two canonical persons.
   from `max_user_number()` — so **two robots racing to bootstrap a brand-new gallery can
   still mint the same number**. In single-robot mode this is not reachable; when running
   several robots against one database, let one robot create the first identity, or wait for
-  the shared allocator (planned, see `EutPerceptionStack/plan.md` phase 6).
+  the shared allocator (planned, see `EutPerceptionStack/plans/multi_robot/PLAN.md` phase 6).
 * Ownership of a face profile (which `person_<uuid>` it belongs to) is decided by
   `EutPersonManager`, which performs the race-safe resolve-or-create. The face gallery never
   decides that.
