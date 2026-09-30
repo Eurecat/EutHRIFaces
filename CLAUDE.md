@@ -61,3 +61,8 @@ Multi-robot env: `FACE_DB_MONGO_URI`, `FACE_PROFILE_SCOPE` (must match on all ro
   when the mounted copy is missing or truncated.
 - Weights are auto-downloaded into `<pkg>/weights/` (gitignored).
 - `main` is protected: changes reach it through a pull request.
+
+## Commits
+
+Plain human sentences describing the change, no prefixes. No AI attribution: no
+`Co-Authored-By` trailer, no "Generated with" line.
