@@ -121,7 +121,7 @@ Results on `video_3.mp4` (5 people, 70 s):
 
 Unit tests: `cd face_recognition && python3 -m pytest test/test_identity_manager.py`.
 
-Everything tried so far (models, crops, rules, licenses, numbers): [face_recognition/docs/identity_experiments.md](face_recognition/docs/identity_experiments.md).
+Everything tried so far (models, crops, rules, licenses, numbers): [plans/face_identity_experiments.md](plans/face_identity_experiments.md).
 
 ### 3. gaze_estimation 👁️
 Gaze direction estimation from facial landmarks.
@@ -140,6 +140,23 @@ Visual speech activity detection from lip movements.
   - Visual speech activity detection (VAD)
   - Speaking/non-speaking classification
   - Multimodal fusion support
+
+## 🤝 Multi-robot deployment
+
+Several robots can share one face gallery, so a face enrolled by one robot is recognised by the
+others with the same `U<n>`. Each robot still runs all four nodes locally; only the gallery
+documents are shared, through a MongoDB on the identity backend host. All topic names are
+relative, so launching with `ros_namespace:=/robot_a` puts every output under `/robot_a/humans/faces/…`.
+
+| Variable | Meaning |
+|---|---|
+| `FACE_DB_MONGO_URI` | the shared gallery (backend host, port 27118) |
+| `FACE_PROFILE_SCOPE` | gallery scope; **identical on every robot**, or they share nothing |
+| `FACE_GALLERY_REFRESH_S` | how often identities enrolled by other robots are adopted (default 15 s) |
+| `ROBOT_ID` | written as provenance (`created_by_robot`, `updated_by_robot`) |
+
+Details (document schema, concurrent enrolment, merges as tombstones): [`docs/multi_robot.md`](docs/multi_robot.md).
+How to run the robots: `EutPerceptionStack/Docker/multi_robot/README.md`.
 
 ---
 
@@ -249,11 +266,14 @@ All packages follow and extend the [ros4hri](https://github.com/ros4hri) standar
 
 ```
 EutHRIFaces/
-├── face_detection/            # YOLO face detection + mediapipe + dlip (IMPLEMENTED)
-├── face_recognition/          # Face identification (IMPLEMENTED)
-├── gaze_estimation/           # Gaze direction (IMPLEMENTED)
-├── visual_speech_activity/    # Visual speech activity detection (IMPLEMENTED)
-└── Docker/                    # Docker deployment files
+├── face_detection/            # YOLO face detection + mediapipe + dlip
+├── face_recognition/          # Face identification + persistent identity manager
+├── gaze_estimation/           # Gaze direction
+├── visual_speech_activity/    # Visual speech activity detection
+├── Docker/                    # Docker build + deployment files
+├── docs/                      # Reference docs (multi_robot.md)
+├── plans/                     # Development notes and experiment logs
+└── CLAUDE.md                  # Guide for coding agents (AGENTS.md links to it)
 ```
 
 ## Dependencies
@@ -284,7 +304,7 @@ To delete the database, remove the associated Docker volume.
 
 Documents are namespaced by `model_key` (the embedding model). Documents without `model_key` (written by the previous identity manager) are ignored.
 
-You can also manage entries via the web interface at [http://0.0.0.0:8082/db/face_recognition_db/identity_database/](http://0.0.0.0:8081/db/face_recognition_db/identity_database/).
+You can also manage entries via the web interface at [http://localhost:8082/db/face_recognition_db/identity_database/](http://localhost:8082/db/face_recognition_db/identity_database/).
 
 user: admin
 password: pass
