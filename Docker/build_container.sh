@@ -117,7 +117,7 @@ done
 # Jetson board for --arm: L4T R36 (JetPack 6) is Orin, anything else is Thor.
 # Orin images get an _arm_orin suffix. Override with JETSON_TARGET=orin|thor.
 if [ -z "${JETSON_TARGET:-}" ]; then
-    L4T_MAJOR=$(sed -n 's/^# R\([0-9]\+\) .*/\1/p' /etc/nv_tegra_release 2>/dev/null)
+    L4T_MAJOR=$(sed -n 's/^# R\([0-9]\+\) .*/\1/p' /etc/nv_tegra_release 2>/dev/null) || true
     if [ "${L4T_MAJOR:-0}" = "36" ]; then JETSON_TARGET="orin"; else JETSON_TARGET="thor"; fi
 fi
 case "$JETSON_TARGET" in
