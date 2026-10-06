@@ -11,7 +11,7 @@
 # - Jetson Thor / ARM64:  ./build_container.sh --arm
 # - Clean rebuild: ./build_container.sh --clean-rebuild [--standard-ros] [--cpu] [--arm]
 #
-# --arm uses Dockerfile.arm and base image eut_ros_torch_arm:jazzy (ARM).
+# --arm uses Dockerfile.arm and base image eut_ros_torch${ARM_SUFFIX}:jazzy (ARM).
 # Build context is the EutHRIFaces repo root so COPY of ROS packages works.
 # Mutually exclusive with --vulcanexus / --humble / --cpu (Jazzy + GPU only).
 #
@@ -114,6 +114,19 @@ for arg in "$@"; do
     fi
 done
 
+# Jetson board for --arm: L4T R36 (JetPack 6) is Orin, anything else is Thor.
+# Orin images get an _arm_orin suffix. Override with JETSON_TARGET=orin|thor.
+if [ -z "${JETSON_TARGET:-}" ]; then
+    L4T_MAJOR=$(sed -n 's/^# R\([0-9]\+\) .*/\1/p' /etc/nv_tegra_release 2>/dev/null)
+    if [ "${L4T_MAJOR:-0}" = "36" ]; then JETSON_TARGET="orin"; else JETSON_TARGET="thor"; fi
+fi
+case "$JETSON_TARGET" in
+    thor) ARM_SUFFIX="_arm" ;;
+    orin) ARM_SUFFIX="_arm_orin" ;;
+    *) echo "Error: JETSON_TARGET must be 'thor' or 'orin' (got '$JETSON_TARGET')."; exit 1 ;;
+esac
+export JETSON_TARGET
+
 # --arm validation: mutually exclusive with --vulcanexus / --humble / --cpu
 if $USE_ARM; then
     if $USE_VULCANEXUS; then
@@ -134,7 +147,7 @@ fi
 
 # Resolve base image from selected flags
 if $USE_ARM; then
-    BASE_IMAGE="eut_ros_torch_arm:${TARGET_DISTRO}"
+    BASE_IMAGE="eut_ros_torch${ARM_SUFFIX}:${TARGET_DISTRO}"
 elif $USE_VULCANEXUS; then
     BASE_IMAGE="eut_ros_vulcanexus_torch:${TARGET_DISTRO}"
 else
@@ -170,7 +183,7 @@ fi
 
 # Display build configuration
 if $USE_ARM; then
-    echo "Building Jetson Thor / ARM64 (Jazzy + PyTorch ARM) image..."
+    echo "Building Jetson ${JETSON_TARGET} / ARM64 (Jazzy + PyTorch ARM) image..."
 elif [[ "${BASE_IMAGE}" == *"vulcanexus"* ]]; then
     echo "Building with Vulcanexus ${TARGET_DISTRO} base image..."
 else
@@ -179,7 +192,7 @@ fi
 
 # Set image name based on the base image choice and CPU/ARM flags
 if $USE_ARM; then
-    IMAGE_NAME="eut_human_face_arm:${TARGET_DISTRO}"
+    IMAGE_NAME="eut_human_face${ARM_SUFFIX}:${TARGET_DISTRO}"
 elif [[ "${BASE_IMAGE}" == *"vulcanexus"* ]]; then
     if [ "$CPU_ONLY" = "true" ]; then
         IMAGE_NAME="eut_human_face_vulcanexus_cpu:${TARGET_DISTRO}"
