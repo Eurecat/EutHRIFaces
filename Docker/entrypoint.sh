@@ -61,6 +61,15 @@ if [ -f "$MP_SRC" ]; then
     fi
 fi
 
+# Same for the face mesh ONNX (landmark_backend facemesh_onnx), baked by Dockerfile.arm.
+FM_SRC="/opt/mediapipe_weights/face_landmarks_detector.onnx"
+FM_DST="/workspace/src/face_detection/weights/face_landmarks_detector.onnx"
+if [ -f "$FM_SRC" ] && [ "$(stat -c%s "$FM_DST" 2>/dev/null || echo 0)" -lt 1048576 ]; then
+    echo "Restoring face_landmarks_detector.onnx from baked copy..."
+    mkdir -p "$(dirname "$FM_DST")"
+    cp "$FM_SRC" "$FM_DST"
+fi
+
 # Build face detection packages
 echo "Building ros2 packages of this repo..."
 cd /workspace

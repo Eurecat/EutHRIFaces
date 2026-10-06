@@ -52,6 +52,21 @@ seen in the same frame. `U` numbers are never reused. Gallery documents are keye
 Multi-robot env: `FACE_DB_MONGO_URI`, `FACE_PROFILE_SCOPE` (must match on all robots),
 `FACE_GALLERY_REFRESH_S` (15), `ROBOT_ID`. Refresh runs on its own timer, never in the frame path.
 
+## Jetson speed-ups (Thor and Orin)
+
+All automatic in the ARM image; check them before tuning anything else:
+- `face_detector` builds TensorRT FP16 engines for the YOLO face model and the face mesh in the
+  background on first start (several minutes; logs "switched to TensorRT FP16") and caches them in
+  `face_detection/weights/trt_cache/` (per GPU + TensorRT version, gitignored). Until then it runs on
+  `CUDAExecutionProvider`. Deleting `trt_cache/` forces a rebuild.
+- `landmark_backend: facemesh_onnx` needs `weights/face_landmarks_detector.onnx`. `Dockerfile.arm`
+  converts it in a throwaway build stage into `/opt/mediapipe_weights/` and the entrypoint copies it
+  into the mounted weights folder; without it the node silently falls back to MediaPipe on CPU
+  (log "falling back to MediaPipe"). x86: `face_detection/tools/convert_face_landmarks_to_onnx.sh`.
+- onnxruntime must list `CUDAExecutionProvider` (`python3 -c "import onnxruntime as o; print(o.get_available_providers())"`);
+  the Orin image fails the build otherwise. Measured on AGX Orin with the whole HRI stack:
+  `humans/faces/detected` 17 Hz (CPU landmarks, no engine) -> 27-29 Hz.
+
 ## Traps
 
 - Params YAML is passed as a dict of its `ros__parameters`, so a namespaced node keeps its config.

@@ -13,6 +13,20 @@
 #
 ARG BASE_IMAGE="eut_ros_torch:jazzy"
 
+# ------------------------------------------------------------
+# Face mesh landmark network as ONNX, for landmark_backend "facemesh_onnx" (batched on the GPU,
+# ~15 ms for 5 faces) instead of the MediaPipe CPU fallback. Same steps as
+# face_detection/tools/convert_face_landmarks_to_onnx.sh, in a throwaway stage so TensorFlow
+# never reaches the runtime image. The ONNX graph is not device specific (Thor and Orin).
+# ------------------------------------------------------------
+FROM python:3.12-slim AS facemesh_onnx
+ARG FACE_LANDMARKER_URL="https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
+RUN pip install --no-cache-dir "tensorflow==2.21.0" "tf2onnx==1.17.0" && \
+    mkdir -p /out && cd /tmp && \
+    python -c "import urllib.request, zipfile; urllib.request.urlretrieve('${FACE_LANDMARKER_URL}', 'face_landmarker.task'); zipfile.ZipFile('face_landmarker.task').extract('face_landmarks_detector.tflite', '.')" && \
+    python -m tf2onnx.convert --tflite face_landmarks_detector.tflite --output /out/face_landmarks_detector.onnx --opset 17 && \
+    python -c "import os; s = os.path.getsize('/out/face_landmarks_detector.onnx'); print('face_landmarks_detector.onnx', s, 'bytes'); assert s > 1_000_000"
+
 FROM ${BASE_IMAGE}
 
 ARG BASE_IMAGE
@@ -136,6 +150,7 @@ import os, sys; \
 size = os.path.getsize('/opt/mediapipe_weights/face_landmarker.task'); \
 print(f'face_landmarker.task: {size} bytes'); \
 sys.exit(0 if size > 1*1024*1024 else 1)"
+COPY --from=facemesh_onnx /out/face_landmarks_detector.onnx /opt/mediapipe_weights/face_landmarks_detector.onnx
 
 # ------------------------------------------------------------
 # Install ROS dependencies from package.xmls
