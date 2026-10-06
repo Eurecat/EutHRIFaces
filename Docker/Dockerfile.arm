@@ -1,4 +1,4 @@
-# EutHRIFaces — Jetson Thor / ARM64 image
+# EutHRIFaces — Jetson Thor / Orin ARM64 image
 #
 # Builds on top of the EutRobAIDockers ARM base image (ROS 2 Jazzy + PyTorch ARM64).
 # Build the base first:
@@ -12,6 +12,20 @@
 # there is no /opt/ros_python_env venv — packages are installed via system pip.
 #
 ARG BASE_IMAGE="eut_ros_torch:jazzy"
+
+# ------------------------------------------------------------
+# Face mesh landmark network as ONNX, for landmark_backend "facemesh_onnx" (batched on the GPU,
+# ~15 ms for 5 faces) instead of the MediaPipe CPU fallback. Same steps as
+# face_detection/tools/convert_face_landmarks_to_onnx.sh, in a throwaway stage so TensorFlow
+# never reaches the runtime image. The ONNX graph is not device specific (Thor and Orin).
+# ------------------------------------------------------------
+FROM python:3.12-slim AS facemesh_onnx
+ARG FACE_LANDMARKER_URL="https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
+RUN pip install --no-cache-dir "tensorflow==2.21.0" "tf2onnx==1.17.0" && \
+    mkdir -p /out && cd /tmp && \
+    python -c "import urllib.request, zipfile; urllib.request.urlretrieve('${FACE_LANDMARKER_URL}', 'face_landmarker.task'); zipfile.ZipFile('face_landmarker.task').extract('face_landmarks_detector.tflite', '.')" && \
+    python -m tf2onnx.convert --tflite face_landmarks_detector.tflite --output /out/face_landmarks_detector.onnx --opset 17 && \
+    python -c "import os; s = os.path.getsize('/out/face_landmarks_detector.onnx'); print('face_landmarks_detector.onnx', s, 'bytes'); assert s > 1_000_000"
 
 FROM ${BASE_IMAGE}
 
@@ -54,7 +68,8 @@ WORKDIR /workspace
 COPY Docker/requirements_arm_thor.txt /workspace/requirements_arm_thor.txt
 RUN pip install --no-cache-dir --ignore-installed blinker && \
     grep -v "^facenet-pytorch" /workspace/requirements_arm_thor.txt > /tmp/req_no_facenet.txt && \
-    pip install --no-cache-dir -r /tmp/req_no_facenet.txt && \
+    pip install --no-cache-dir -r /tmp/req_no_facenet.txt \
+        $([ -f /opt/jetson_constraints.txt ] && echo "-c /opt/jetson_constraints.txt") && \
     pip install --no-cache-dir --no-deps "facenet-pytorch>=2.5.2"
 
 # ------------------------------------------------------------
@@ -65,10 +80,25 @@ RUN pip install --no-cache-dir --ignore-installed blinker && \
 # and replaces any CPU-only onnxruntime installed earlier.
 # SHA-256 is embedded in the URL fragment for pip verification.
 # ------------------------------------------------------------
-RUN pip install --no-cache-dir --force-reinstall \
+RUN if [ "${JETSON_TARGET:-thor}" = "thor" ]; then \
+    pip install --no-cache-dir --force-reinstall \
     "https://pypi.jetson-ai-lab.io/sbsa/cu130/+f/012/c10bef23a39f0/onnxruntime_gpu-1.24.0-cp312-cp312-linux_aarch64.whl#sha256=012c10bef23a39f074730d158b72f797a7314f2695c65835a0669b57282422f6" \
     && echo "[OK] onnxruntime-gpu 1.24.0 (sbsa/cu130) installed" \
-    || echo "[WARN] onnxruntime-gpu Jetson wheel install failed; GPU inference unavailable"
+    || echo "[WARN] onnxruntime-gpu Jetson wheel install failed; GPU inference unavailable"; \
+fi
+
+# Jetson Orin (JetPack 6): onnxruntime-gpu 1.23.0 for Python 3.12 from the jp6/cu129 feed
+# (CUDA + TensorRT EPs; runs on the CUDA 12.8 Orin base). The CPU onnxruntime from the
+# requirements shares the onnxruntime/ package dir, so remove it first (its other deps
+# stay; coloredlogs is the one the CPU wheel no longer pulls in), and fail the
+# build if CUDAExecutionProvider is missing instead of silently running on CPU.
+ARG ORT_GPU_WHEEL_ORIN="https://pypi.jetson-ai-lab.io/jp6/cu129/+f/2e3/a07114007df15/onnxruntime_gpu-1.23.0-cp312-cp312-linux_aarch64.whl#sha256=2e3a07114007df15db673852d798d6f47f91362f0ac084d6fa04e414a06dc25e"
+RUN if [ "${JETSON_TARGET:-thor}" = "orin" ]; then \
+    pip uninstall -y onnxruntime onnxruntime-gpu \
+    && pip install --no-cache-dir --no-deps "${ORT_GPU_WHEEL_ORIN}" \
+    && pip install --no-cache-dir coloredlogs \
+    && python3 -c "import onnxruntime as o; p = o.get_available_providers(); print(o.__version__, p); assert 'CUDAExecutionProvider' in p"; \
+fi
 
 # onnxruntime-gpu 1.24.0 pulls in numpy>=2 as a transitive dep, but cv_bridge
 # and the NGC PyTorch wheel are compiled against NumPy 1.x ABI. Downgrade numpy.
@@ -79,7 +109,8 @@ RUN pip install --no-cache-dir "numpy>=1.26,<2" "protobuf>=4.21,<5"
 # The entrypoint injects /opt/ros_python_env/lib/python3.12/site-packages into
 # sys.path first, so any CPU-only onnxruntime installed there shadows the system
 # GPU wheel. Install the GPU wheel + version pins into the venv as well.
-RUN if [ -d /opt/ros_python_env/bin ]; then \
+# On Orin /opt/ros_python_env is the venv pip already installed into, so skip it there.
+RUN if [ -d /opt/ros_python_env/bin ] && [ "${JETSON_TARGET:-thor}" = "thor" ]; then \
     /opt/ros_python_env/bin/pip install --no-cache-dir --force-reinstall \
         "https://pypi.jetson-ai-lab.io/sbsa/cu130/+f/012/c10bef23a39f0/onnxruntime_gpu-1.24.0-cp312-cp312-linux_aarch64.whl#sha256=012c10bef23a39f074730d158b72f797a7314f2695c65835a0669b57282422f6" \
     && /opt/ros_python_env/bin/pip install --no-cache-dir "numpy>=1.26,<2" "protobuf>=4.21,<5" \
@@ -119,6 +150,7 @@ import os, sys; \
 size = os.path.getsize('/opt/mediapipe_weights/face_landmarker.task'); \
 print(f'face_landmarker.task: {size} bytes'); \
 sys.exit(0 if size > 1*1024*1024 else 1)"
+COPY --from=facemesh_onnx /out/face_landmarks_detector.onnx /opt/mediapipe_weights/face_landmarks_detector.onnx
 
 # ------------------------------------------------------------
 # Install ROS dependencies from package.xmls
