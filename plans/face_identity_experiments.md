@@ -190,7 +190,30 @@ one such frame vetoes the merge forever. Fix: `co_occurrence_override` (0.85) ig
 when the mean embeddings are that close; different people stay below ~0.6 (the next live pair was
 0.54). Unit tests: 24 pass.
 
+**Calibration on the team, same day.** `live_2026-10-21_team2.npz`: 90 s, Pep, Oscar and Juan only
+(4210 faces, 55–108 px). Tracks labeled by hand on the saved crops; the tracker reused `face_850`
+for Juan from 81.5 s, so it is split there. `tools/evaluate_team_session.py` replays team + team2
+on an empty gallery, then team2 again after a restart, and counts only CONFIRMED assignments (what
+PersonManager sees).
+
+| Setting | one confirmed id per person (of 6) | frames on own id, mean (worst) | frames on another of the three |
+|---|---|---|---|
+| entry 5 as deployed: sim 0.60, learn 0.65, 80 px | 4 | 0.70 (0.46) | 1 |
+| **sim 0.55 / young 0.45, learn 0.65, 80 px** | **6** | 0.73 (0.54) | 5 |
+| sim 0.50 / young 0.40, learn 0.60, 80 px | 6 | 0.80 (0.70) | 23 |
+| old YAML (sim 0.50, no learn gates) | 1 (duplicates) | 0.86 (0.69) | 2 |
+
+After the restart, sim 0.55 gives Pep 0.93, Oscar 0.91, Juan 0.75 (Juan sat mostly in side view);
+correct by face height: <60 px 75%, 60–80 px 87%, 80–100 px 93%. 0.60 left 0.50–0.60 frames
+unlabeled, so their tracks re-seeded and some became second confirmed ids. Deployed: sim 0.55,
+young 0.45. `match_margin`, `merge_threshold`, `seed_match_threshold` and `min_h_size` changed
+nothing on this data; `min_learn_face_height_px` 80 vs 0 costs ~0.1 of coverage but is what keeps
+duplicates and far-face pollution out.
+
 **Open:**
+- Strangers: the colleagues at the end of the session were not captured (the recording stopped
+  first). Record a session with other people only and replay it against the team gallery before
+  lowering the match bar any further.
 - The 80 px / 50 px limits are estimates (~2.5 m / ~4 m). Calibrate with labeled recordings, one
   person at a time at 1–5 m, regulars and strangers (`record_face_dataset.py --min-h-size 10`), and
   downscale the 1 m crops to simulate far faces.

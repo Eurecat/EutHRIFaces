@@ -49,8 +49,8 @@ face_recognition_node:
     # Identity Management Configuration (rules ported from speech diarization)
     # 2026-10-21: raised after lab visitors polluted the galleries of the regular users. A wrong
     # match is permanent (it teaches the gallery), a missed one only costs a new or unknown id.
-    similarity_threshold: 0.60           # Match bar for confirmed identities (was 0.50)
-    young_identity_threshold: 0.50       # Relaxed match bar for tentative identities (was 0.40)
+    similarity_threshold: 0.55           # Match bar for confirmed identities (was 0.50; 0.60 split people, see entry 5)
+    young_identity_threshold: 0.45       # Relaxed match bar for tentative identities (was 0.40)
     learn_threshold: 0.65                # A matched face is added to the gallery only at this score
     match_margin: 0.10                   # Best must beat second-best by this much, else unlabeled (was 0.08)
     track_identity_stickiness_margin: 0.20  # Track keeps its identity unless another is this much better
