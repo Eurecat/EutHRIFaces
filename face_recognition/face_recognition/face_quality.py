@@ -5,6 +5,9 @@ Measured on video_3.mp4 (5 people, 2289 detections):
     0.06 and 0.14 (3/4 view turning into profile) the embedding picks the right person
     only 73-96% of the time with negative best-vs-second margins; above 0.14 it is 97-99%.
   - hand false positives have bbox confidence <= 0.25; real faces are >= 0.53 (p5).
+  - far faces (few pixels) give blurry embeddings that look alike for everyone: in the
+    2026-10-21 lab session a 45-60 px face scored higher against a polluted gallery than
+    the same person at 120+ px, so small faces must never teach an identity.
 
 The score is 0 for faces that must never create or teach an identity and grows to 1
 for near-frontal, confidently detected faces.
@@ -23,6 +26,7 @@ class FaceQualityConfig:
     min_detection_confidence: float = 0.50
     profile_eye_ratio: float = 0.10   # eye distance / face width at or below -> quality 0
     frontal_eye_ratio: float = 0.18   # at or above -> full yaw score
+    min_learn_face_height_px: float = 0.0  # face box height below this -> quality 0 (0 disables)
 
 
 def eye_ratio(bbox_xyxy: Sequence[float], left_eye_x: Optional[float], right_eye_x: Optional[float]) -> Optional[float]:
@@ -37,8 +41,12 @@ def eye_ratio(bbox_xyxy: Sequence[float], left_eye_x: Optional[float], right_eye
 
 def face_quality(bbox_xyxy: Sequence[float], bbox_confidence: float,
                  left_eye_x: Optional[float], right_eye_x: Optional[float],
-                 config: FaceQualityConfig = FaceQualityConfig()) -> float:
+                 config: FaceQualityConfig = FaceQualityConfig(),
+                 face_height_px: Optional[float] = None) -> float:
     if bbox_confidence < config.min_detection_confidence:
+        return 0.0
+    if (config.min_learn_face_height_px > 0 and face_height_px is not None
+            and face_height_px < config.min_learn_face_height_px):
         return 0.0
     ratio = eye_ratio(bbox_xyxy, left_eye_x, right_eye_x)
     if ratio is None:
@@ -56,4 +64,6 @@ def face_quality_from_msg(msg, config: FaceQualityConfig = FaceQualityConfig()) 
         left_eye = msg.landmarks[LEFT_EYE_INSIDE]
         if right_eye.c > 0 and left_eye.c > 0:
             left, right = left_eye.x, right_eye.x
-    return face_quality((box.xmin, box.ymin, box.xmax, box.ymax), float(msg.bbox_confidence), left, right, config)
+    height_px = (float(box.ymax) - float(box.ymin)) * msg.height if msg.height > 0 else None
+    return face_quality((box.xmin, box.ymin, box.xmax, box.ymax), float(msg.bbox_confidence), left, right, config,
+                        height_px)

@@ -136,3 +136,54 @@ Live-fragment scenes (`tools/evaluate_live_fragments.py`, stored tight-crop gall
 
 **Next:** live RealSense session with a fresh faces DB, recorded, then replayed to calibrate `seed_match_threshold` / `merge_threshold` on aligned crops. Evaluate `dlib_face_recognition_resnet_model_v1` (public domain) on those crops.
 
+
+## Entry 5 — 2026-10-21 — Lab visitors polluted the regular users' galleries
+
+**Symptom:** with a demo group in the lab (TIAGo Pro head camera, 1280×720, Jetson Thor), visitors
+were labeled as the regular users (Pep, Oscar, Juan), and over time every face drifted to the same
+few identities.
+
+**Diagnosis** (live MongoDB gallery + node logs + a 45 s live recording, `database/eval/live_2026-10-21_demo.npz`):
+- Five long-lived identities (U20, U21, U23, U25, U26) were polluted: mean pairwise similarity of
+  their 100 stored samples 0.19–0.23 (p5 negative); only 9–23% of the samples formed a consistent
+  core, and that core scored 0.39–0.47. Clean identities: 0.60–0.75, core 91–100%.
+- In one hour of logs, new tracks were merged into them at pair scores of 0.50–0.52 (U100, U101,
+  U102 all from one track → U21).
+- One person in the recording matched U20 on 457/505 frames. Smaller faces scored *higher* against
+  U20 (best score p50 0.67 at 45–60 px, 0.58 at 120+ px): blurry far faces look alike, and U20 had
+  learned far faces.
+- Why it is self-reinforcing: every accepted match (≥ 0.50) also taught the gallery; the "evict
+  the most redundant sample" policy keeps the foreign outliers and evicts the consistent samples;
+  top-k scoring then finds those outliers for any new face, and they inflate the merge pair score
+  (top 5 of 100×100 cross pairs). New clean samples of the real person cannot wash it out.
+
+**Changes:**
+- `face_quality.py`: `min_learn_face_height_px` (80): a face shorter than this gets quality 0, so it
+  may be labeled but never creates or teaches an identity.
+- `identity_manager.py`: `learn_threshold` (0.65): a matched face is added to the gallery only at
+  this score, above the match bar. A track keeps a confirmed identity only above that identity's
+  match bar (was the young bar, 0.40). Stray absorption needs the learn bar.
+- `face_recognition_params.yaml`: `similarity_threshold` 0.50 → 0.60, `young_identity_threshold`
+  0.40 → 0.50, `match_margin` 0.08 → 0.10, `seed_match_threshold` 0.50 → 0.65, `merge_threshold`
+  0.50 → 0.70, `min_h_size` 30 → 50 (no embedding at all below ~4 m). Code defaults of the new
+  parameters are 0 (off), so the library behaves as before without the YAML.
+- Principle: a wrong match is permanent (it teaches the gallery and spreads), a missed one only
+  costs a new or unknown id that can be named or merged later. So uncertain → unknown.
+
+**Results:**
+- Open-set replay of video_3 (aligned FaceNet; enroll persons 0–2 for 2 loops, restart, then 3 loops
+  with persons 3–4 as visitors): old and new parameters both label 0/2688 visitor faces as a known
+  person; known-person accuracy 0.999 (old) vs 0.986 (new strict). video_3 (60–140 px faces, 5
+  distinct people, 70 s) is too easy to reproduce the lab failure.
+- Unit tests: 22 pass (new: a borderline match labels without teaching; `test_face_quality` covers the size gate).
+- Deployed live with a wiped gallery: all 13 identities tombstoned (`merged_into: wiped_2026-10-21`,
+  embeddings emptied) so U numbers are not handed out again; backup in
+  `EutPerceptionStack/backups/faces_backup_2026-10-21.archive.gz`.
+
+**Open:**
+- The 80 px / 50 px limits are estimates (~2.5 m / ~4 m). Calibrate with labeled recordings, one
+  person at a time at 1–5 m, regulars and strangers (`record_face_dataset.py --min-h-size 10`), and
+  downscale the 1 m crops to simulate far faces.
+- The eviction policy still keeps outliers; consider evicting the sample least consistent with the
+  mean first, so a gallery can recover.
+- U numbers that were never persisted (tentative ids) can be reused after a restart.

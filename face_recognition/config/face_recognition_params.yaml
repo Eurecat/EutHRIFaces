@@ -41,14 +41,21 @@ face_recognition_node:
     profile_eye_ratio: 0.10      # Eye ratio at or below this -> quality 0 (profile)
     frontal_eye_ratio: 0.18      # Eye ratio at or above this -> full quality
     min_learn_quality: 0.50      # Faces below this can match a known identity but never create/teach one
+    # Far faces give blurry embeddings that look alike for everyone (2026-10-21 lab: a 45-60 px
+    # face scored higher against a polluted gallery than the same person at 120+ px).
+    # Below this face-box height (pixels) a face may be labeled but never creates/teaches an identity.
+    min_learn_face_height_px: 80.0   # ~2.5 m on the 1280x720 TIAGo head camera (estimate)
 
     # Identity Management Configuration (rules ported from speech diarization)
-    similarity_threshold: 0.50           # Match bar for confirmed identities
-    young_identity_threshold: 0.40       # Relaxed match bar for tentative identities (noisy mean)
-    match_margin: 0.08                   # Best must beat second-best by this much, else unlabeled
+    # 2026-10-21: raised after lab visitors polluted the galleries of the regular users. A wrong
+    # match is permanent (it teaches the gallery), a missed one only costs a new or unknown id.
+    similarity_threshold: 0.60           # Match bar for confirmed identities (was 0.50)
+    young_identity_threshold: 0.50       # Relaxed match bar for tentative identities (was 0.40)
+    learn_threshold: 0.65                # A matched face is added to the gallery only at this score
+    match_margin: 0.10                   # Best must beat second-best by this much, else unlabeled (was 0.08)
     track_identity_stickiness_margin: 0.20  # Track keeps its identity unless another is this much better
-    merge_threshold: 0.50                # Pair score to merge fragments (keeps lowest U number); vetoed if ever seen together
-    seed_match_threshold: 0.50           # Averaged seed joins an existing identity at this score instead of creating one
+    merge_threshold: 0.70                # (was 0.50) Pair score to merge fragments (keeps lowest U number); vetoed if ever seen together
+    seed_match_threshold: 0.65           # (was 0.50) Averaged seed joins an existing identity at this score instead of creating one
     redundancy_threshold: 0.92           # New sample this close to a stored one is not stored (diverse gallery)
     gallery_top_k: 3                     # Score = 0.5 * gallery mean + 0.5 * mean of the k closest stored samples
     merge_check_interval: 1.0            # Seconds between merge/absorb passes
@@ -102,7 +109,7 @@ face_recognition_node:
     # For example, 50.0 means recognize every other frame, reusing cached results for skipped frames
     recognition_frame_skip_percentage: 0.0  # Default: 0.0 no skipping (process every frame)
   
-    min_h_size: 30  # Minimum height size in pixels for valid face detection (default 40)
+    min_h_size: 50  # Faces shorter than this (pixels, ~4 m) are not embedded at all: always unknown (was 30)
         
 
     # Debug Configuration

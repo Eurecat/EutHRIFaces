@@ -249,6 +249,10 @@ def test_face_quality():
     assert face_quality(box, 0.9, 0.43, 0.435, config) == 0.0                 # profile
     assert face_quality(box, 0.2, 0.42, 0.44, config) == 0.0                  # low detection confidence
     assert face_quality(box, 0.9, None, 0.44, config) == 0.0
+    sized = FaceQualityConfig(min_detection_confidence=0.4, profile_eye_ratio=0.10, frontal_eye_ratio=0.18,
+                              min_learn_face_height_px=80)
+    assert face_quality(box, 0.9, 0.42, 0.44, sized, face_height_px=60) == 0.0    # far face
+    assert face_quality(box, 0.9, 0.42, 0.44, sized, face_height_px=100) == pytest.approx(1.0)
 
 
 def two_looks(rng, base, similarity=0.6):
@@ -357,3 +361,17 @@ def test_new_identities_never_reuse_stored_numbers(rng, people):
     manager = make(clock, store=store)
     feed(manager, clock, [{'face_0': sample(rng, people[0])} for _ in range(4)])
     assert list(manager.identity_clusters) == ['U14']
+
+
+def test_match_below_learn_threshold_labels_but_does_not_teach(rng, people):
+    clock = Clock()
+    manager = make(clock, min_confirm_seconds=1.0)
+    feed(manager, clock, [{'face_0': sample(rng, people[0])} for _ in range(20)])
+    identity = manager.identity_clusters['U1']
+    assert identity.confirmed
+    stored, learned = len(identity.all_embeddings), identity.good_samples
+    manager.learn_threshold = 0.99  # every match is now borderline
+    result = feed(manager, clock, [{'face_0': sample(rng, people[0], noise=0.6)} for _ in range(10)])
+    assert result['face_0'].unique_id == 'U1'
+    assert len(identity.all_embeddings) == stored
+    assert identity.good_samples == learned
