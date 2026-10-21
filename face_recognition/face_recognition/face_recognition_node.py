@@ -408,6 +408,7 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('match_margin', 0.08)
         self.declare_parameter('track_identity_stickiness_margin', 0.20)
         self.declare_parameter('merge_threshold', 0.50)
+        self.declare_parameter('co_occurrence_override', 0.0)
         self.declare_parameter('seed_match_threshold', 0.50)
         self.declare_parameter('redundancy_threshold', 0.92)
         self.declare_parameter('gallery_top_k', 3)
@@ -642,6 +643,7 @@ class FaceRecognitionNode(Node):
                 match_margin=float(gp('match_margin')),
                 stickiness_margin=float(gp('track_identity_stickiness_margin')),
                 merge_threshold=float(gp('merge_threshold')),
+                co_occurrence_override=float(gp('co_occurrence_override')),
                 seed_match_threshold=float(gp('seed_match_threshold')),
                 redundancy_threshold=float(gp('redundancy_threshold')),
                 gallery_top_k=int(gp('gallery_top_k')),

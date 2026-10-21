@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from face_recognition.face_quality import FaceQualityConfig, face_quality  # noqa: E402
 from face_recognition.identity_manager import (  # noqa: E402
-    STATUS_CONFIRMED, STATUS_TENTATIVE, STATUS_UNKNOWN, FaceIdentityManager)
+    STATUS_CONFIRMED, STATUS_TENTATIVE, STATUS_UNKNOWN, FaceIdentityManager, normalize_embedding)
 
 DIM = 64
 
@@ -375,3 +375,27 @@ def test_match_below_learn_threshold_labels_but_does_not_teach(rng, people):
     assert result['face_0'].unique_id == 'U1'
     assert len(identity.all_embeddings) == stored
     assert identity.good_samples == learned
+
+
+def test_near_identical_identities_merge_despite_one_shared_frame(rng, people):
+    # Pep and his face on a screen were seen in the same frames: the co-occurrence veto must
+    # not keep two near-identical galleries of one person apart forever.
+    clock = Clock()
+    manager = make(clock, min_confirm_seconds=1.0, merge_threshold=0.70, co_occurrence_override=0.85)
+    feed(manager, clock, [{'face_0': sample(rng, people[0]), 'face_1': sample(rng, people[1])} for _ in range(20)])
+    twin = manager.identity_clusters['U2']
+    assert 'U1' in twin.co_occurring
+    twin.all_embeddings = [sample(rng, people[0]) for _ in range(10)]  # it was Pep all along
+    twin.gallery_matrix = None
+    twin.mean_embedding = normalize_embedding(np.mean(twin.all_embeddings, axis=0))
+    manager._merge_similar_identities()
+    assert list(manager.identity_clusters) == ['U1']
+    assert manager.identity_clusters['U1'].co_occurring == set()
+
+
+def test_co_occurrence_still_vetoes_different_people(rng, people):
+    clock = Clock()
+    manager = make(clock, min_confirm_seconds=1.0, merge_threshold=-1.0, co_occurrence_override=0.85)
+    feed(manager, clock, [{'face_0': sample(rng, people[0]), 'face_1': sample(rng, people[1])} for _ in range(20)])
+    manager._merge_similar_identities()
+    assert len(manager.identity_clusters) == 2

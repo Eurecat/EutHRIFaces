@@ -180,6 +180,16 @@ few identities.
   embeddings emptied) so U numbers are not handed out again; backup in
   `EutPerceptionStack/backups/faces_backup_2026-10-21.archive.gz`.
 
+**Follow-up, same day: the team was only recognized very close.** A 60 s recording with Pep, Oscar
+and Juan in the scene (`database/eval/live_2026-10-21_team.npz`, faces 62–123 px) showed that the
+new thresholds were not the problem: Oscar 90% and Juan 93% of frames labeled (96%/97% with the old
+bars). Pep was labeled 1%: score 0.83 but margin 0.02, because a second identity of Pep (U109,
+centroid 0.893 with U107) competed with the first. The two never merged because they were marked
+`co_occurring` (seen in one frame on two faces: a double detection or Pep's face on a screen), and
+one such frame vetoes the merge forever. Fix: `co_occurrence_override` (0.85) ignores the veto
+when the mean embeddings are that close; different people stay below ~0.6 (the next live pair was
+0.54). Unit tests: 24 pass.
+
 **Open:**
 - The 80 px / 50 px limits are estimates (~2.5 m / ~4 m). Calibrate with labeled recordings, one
   person at a time at 1–5 m, regulars and strangers (`record_face_dataset.py --min-h-size 10`), and
