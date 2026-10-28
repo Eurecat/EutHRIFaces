@@ -206,9 +206,9 @@ class VisualSpeechActivityNode(Node):
         # Speaking detector selection and lip_motion parameters
         self.declare_parameter('vsad_method', 'vsdlm')  # "vsdlm" | "lip_motion"
         self.declare_parameter('lip_motion_window_s', 1.0)  # window of lip-opening samples
-        self.declare_parameter('lip_motion_min_samples', 5)  # samples before reporting confidence
-        self.declare_parameter('lip_motion_min_std', 0.02)  # lip-opening std at/below which confidence is 0
-        self.declare_parameter('lip_motion_full_std', 0.08)  # std at/above which confidence is 1
+        self.declare_parameter('lip_motion_min_samples', 4)  # samples before reporting confidence
+        self.declare_parameter('lip_motion_min_std', 0.015)  # lip-opening std at/below which confidence is 0
+        self.declare_parameter('lip_motion_full_std', 0.041)  # std at/above which confidence is 1
         self.declare_parameter('lip_motion_speaking_threshold', 0.5)  # confidence reported as speaking
         
         # Image input parameters (same as face_recognition)
@@ -770,7 +770,8 @@ class VisualSpeechActivityNode(Node):
                 cv_image,
                 landmarks_list,
                 face_bbox,
-                face_id=recognition.recognized_face_id or recognition.face_id
+                face_id=recognition.recognized_face_id or recognition.face_id,
+                timestamp=landmarks_timestamp
             )
             
             if self.enable_debug_output:
@@ -854,7 +855,8 @@ class VisualSpeechActivityNode(Node):
                     cv_image,
                     landmarks_coords,
                     face_bbox,
-                    face_id=face_id
+                    face_id=face_id,
+                    timestamp=landmarks_timestamp
                 )
                 
                 if self.enable_debug_output:
@@ -932,7 +934,8 @@ class VisualSpeechActivityNode(Node):
                 cv_image,
                 landmarks_coords,
                 face_bbox,
-                face_id=face_id
+                face_id=face_id,
+                timestamp=landmarks_timestamp
             )
             
             if self.enable_debug_output:

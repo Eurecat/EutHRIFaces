@@ -136,3 +136,87 @@ Live-fragment scenes (`tools/evaluate_live_fragments.py`, stored tight-crop gall
 
 **Next:** live RealSense session with a fresh faces DB, recorded, then replayed to calibrate `seed_match_threshold` / `merge_threshold` on aligned crops. Evaluate `dlib_face_recognition_resnet_model_v1` (public domain) on those crops.
 
+
+## Entry 5 — 2026-10-21 — Lab visitors polluted the regular users' galleries
+
+**Symptom:** with a demo group in the lab (TIAGo Pro head camera, 1280×720, Jetson Thor), visitors
+were labeled as the regular users (Pep, Oscar, Juan), and over time every face drifted to the same
+few identities.
+
+**Diagnosis** (live MongoDB gallery + node logs + a 45 s live recording, `database/eval/live_2026-10-21_demo.npz`):
+- Five long-lived identities (U20, U21, U23, U25, U26) were polluted: mean pairwise similarity of
+  their 100 stored samples 0.19–0.23 (p5 negative); only 9–23% of the samples formed a consistent
+  core, and that core scored 0.39–0.47. Clean identities: 0.60–0.75, core 91–100%.
+- In one hour of logs, new tracks were merged into them at pair scores of 0.50–0.52 (U100, U101,
+  U102 all from one track → U21).
+- One person in the recording matched U20 on 457/505 frames. Smaller faces scored *higher* against
+  U20 (best score p50 0.67 at 45–60 px, 0.58 at 120+ px): blurry far faces look alike, and U20 had
+  learned far faces.
+- Why it is self-reinforcing: every accepted match (≥ 0.50) also taught the gallery; the "evict
+  the most redundant sample" policy keeps the foreign outliers and evicts the consistent samples;
+  top-k scoring then finds those outliers for any new face, and they inflate the merge pair score
+  (top 5 of 100×100 cross pairs). New clean samples of the real person cannot wash it out.
+
+**Changes:**
+- `face_quality.py`: `min_learn_face_height_px` (80): a face shorter than this gets quality 0, so it
+  may be labeled but never creates or teaches an identity.
+- `identity_manager.py`: `learn_threshold` (0.65): a matched face is added to the gallery only at
+  this score, above the match bar. A track keeps a confirmed identity only above that identity's
+  match bar (was the young bar, 0.40). Stray absorption needs the learn bar.
+- `face_recognition_params.yaml`: `similarity_threshold` 0.50 → 0.60, `young_identity_threshold`
+  0.40 → 0.50, `match_margin` 0.08 → 0.10, `seed_match_threshold` 0.50 → 0.65, `merge_threshold`
+  0.50 → 0.70, `min_h_size` 30 → 50 (no embedding at all below ~4 m). Code defaults of the new
+  parameters are 0 (off), so the library behaves as before without the YAML.
+- Principle: a wrong match is permanent (it teaches the gallery and spreads), a missed one only
+  costs a new or unknown id that can be named or merged later. So uncertain → unknown.
+
+**Results:**
+- Open-set replay of video_3 (aligned FaceNet; enroll persons 0–2 for 2 loops, restart, then 3 loops
+  with persons 3–4 as visitors): old and new parameters both label 0/2688 visitor faces as a known
+  person; known-person accuracy 0.999 (old) vs 0.986 (new strict). video_3 (60–140 px faces, 5
+  distinct people, 70 s) is too easy to reproduce the lab failure.
+- Unit tests: 22 pass (new: a borderline match labels without teaching; `test_face_quality` covers the size gate).
+- Deployed live with a wiped gallery: all 13 identities tombstoned (`merged_into: wiped_2026-10-21`,
+  embeddings emptied) so U numbers are not handed out again; backup in
+  `EutPerceptionStack/backups/faces_backup_2026-10-21.archive.gz`.
+
+**Follow-up, same day: the team was only recognized very close.** A 60 s recording with Pep, Oscar
+and Juan in the scene (`database/eval/live_2026-10-21_team.npz`, faces 62–123 px) showed that the
+new thresholds were not the problem: Oscar 90% and Juan 93% of frames labeled (96%/97% with the old
+bars). Pep was labeled 1%: score 0.83 but margin 0.02, because a second identity of Pep (U109,
+centroid 0.893 with U107) competed with the first. The two never merged because they were marked
+`co_occurring` (seen in one frame on two faces: a double detection or Pep's face on a screen), and
+one such frame vetoes the merge forever. Fix: `co_occurrence_override` (0.85) ignores the veto
+when the mean embeddings are that close; different people stay below ~0.6 (the next live pair was
+0.54). Unit tests: 24 pass.
+
+**Calibration on the team, same day.** `live_2026-10-21_team2.npz`: 90 s, Pep, Oscar and Juan only
+(4210 faces, 55–108 px). Tracks labeled by hand on the saved crops; the tracker reused `face_850`
+for Juan from 81.5 s, so it is split there. `tools/evaluate_team_session.py` replays team + team2
+on an empty gallery, then team2 again after a restart, and counts only CONFIRMED assignments (what
+PersonManager sees).
+
+| Setting | one confirmed id per person (of 6) | frames on own id, mean (worst) | frames on another of the three |
+|---|---|---|---|
+| entry 5 as deployed: sim 0.60, learn 0.65, 80 px | 4 | 0.70 (0.46) | 1 |
+| **sim 0.55 / young 0.45, learn 0.65, 80 px** | **6** | 0.73 (0.54) | 5 |
+| sim 0.50 / young 0.40, learn 0.60, 80 px | 6 | 0.80 (0.70) | 23 |
+| old YAML (sim 0.50, no learn gates) | 1 (duplicates) | 0.86 (0.69) | 2 |
+
+After the restart, sim 0.55 gives Pep 0.93, Oscar 0.91, Juan 0.75 (Juan sat mostly in side view);
+correct by face height: <60 px 75%, 60–80 px 87%, 80–100 px 93%. 0.60 left 0.50–0.60 frames
+unlabeled, so their tracks re-seeded and some became second confirmed ids. Deployed: sim 0.55,
+young 0.45. `match_margin`, `merge_threshold`, `seed_match_threshold` and `min_h_size` changed
+nothing on this data; `min_learn_face_height_px` 80 vs 0 costs ~0.1 of coverage but is what keeps
+duplicates and far-face pollution out.
+
+**Open:**
+- Strangers: the colleagues at the end of the session were not captured (the recording stopped
+  first). Record a session with other people only and replay it against the team gallery before
+  lowering the match bar any further.
+- The 80 px / 50 px limits are estimates (~2.5 m / ~4 m). Calibrate with labeled recordings, one
+  person at a time at 1–5 m, regulars and strangers (`record_face_dataset.py --min-h-size 10`), and
+  downscale the 1 m crops to simulate far faces.
+- The eviction policy still keeps outliers; consider evicting the sample least consistent with the
+  mean first, so a gallery can recover.
+- U numbers that were never persisted (tentative ids) can be reused after a restart.

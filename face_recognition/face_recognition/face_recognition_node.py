@@ -399,6 +399,8 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('profile_eye_ratio', 0.10)
         self.declare_parameter('frontal_eye_ratio', 0.18)
         self.declare_parameter('min_learn_quality', 0.50)
+        self.declare_parameter('min_learn_face_height_px', 0.0)
+        self.declare_parameter('learn_threshold', 0.0)
 
         # Identity management parameters (see identity_manager.py)
         self.declare_parameter('similarity_threshold', 0.50)
@@ -406,6 +408,7 @@ class FaceRecognitionNode(Node):
         self.declare_parameter('match_margin', 0.08)
         self.declare_parameter('track_identity_stickiness_margin', 0.20)
         self.declare_parameter('merge_threshold', 0.50)
+        self.declare_parameter('co_occurrence_override', 0.0)
         self.declare_parameter('seed_match_threshold', 0.50)
         self.declare_parameter('redundancy_threshold', 0.92)
         self.declare_parameter('gallery_top_k', 3)
@@ -602,6 +605,7 @@ class FaceRecognitionNode(Node):
             min_detection_confidence=float(gp('min_detection_confidence')),
             profile_eye_ratio=float(gp('profile_eye_ratio')),
             frontal_eye_ratio=float(gp('frontal_eye_ratio')),
+            min_learn_face_height_px=float(gp('min_learn_face_height_px')),
         )
         store = None
         if bool(gp('use_mongodb')):
@@ -639,11 +643,13 @@ class FaceRecognitionNode(Node):
                 match_margin=float(gp('match_margin')),
                 stickiness_margin=float(gp('track_identity_stickiness_margin')),
                 merge_threshold=float(gp('merge_threshold')),
+                co_occurrence_override=float(gp('co_occurrence_override')),
                 seed_match_threshold=float(gp('seed_match_threshold')),
                 redundancy_threshold=float(gp('redundancy_threshold')),
                 gallery_top_k=int(gp('gallery_top_k')),
                 merge_check_interval=float(gp('merge_check_interval')),
                 min_learn_quality=float(gp('min_learn_quality')),
+                learn_threshold=float(gp('learn_threshold')),
                 min_seed_samples=int(gp('min_seed_samples')),
                 seed_consistency=float(gp('seed_consistency')),
                 seed_pairwise_consistency=float(gp('seed_pairwise_consistency')),

@@ -585,7 +585,8 @@ class VSDLMDetector:
         image: np.ndarray,
         landmarks: List[Tuple[float, float]],
         face_bbox: Optional[Tuple[float, float, float, float]] = None,
-        face_id: Optional[str] = None
+        face_id: Optional[str] = None,
+        timestamp: Optional[float] = None  # frame time; unused here, kept for the shared detector interface
     ) -> Tuple[bool, float, Optional[Tuple[int, int, int, int]]]:
         """
         Detect speaking activity from image and facial landmarks.

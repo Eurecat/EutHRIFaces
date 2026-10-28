@@ -15,14 +15,20 @@ The rules are ported from the speech diarization identity layer
 * assignment inside a frame is exclusive, so two faces never share an identity;
 * a track keeps its identity unless another one is clearly better, but never below
   the young threshold;
-* only good-quality faces (near-frontal, confidently detected) teach an identity;
+* only good-quality faces (near-frontal, confidently detected, close enough) teach an
+  identity, and only when they match it clearly (``learn_threshold``, above the match bar):
+  a borderline match may be labeled but never pollutes the gallery, so one look-alike
+  visitor cannot slowly turn a known person's gallery into "everyone";
   poor faces may be matched to a known identity but otherwise stay unlabeled;
 * each identity keeps a *diverse* gallery (near-duplicate frames are skipped and the most
   redundant sample is evicted), so it remembers every look instead of the last seconds;
 * scores combine the gallery mean with the closest gallery samples;
 * a seed that clearly matches an existing identity joins it instead of creating a new one;
 * fragments are merged, and young strays are absorbed, unless the two identities were
-  ever seen at the same time on different faces (then they are different people);
+  ever seen at the same time on different faces (then they are different people) - except
+  when their mean embeddings are nearly identical (``co_occurrence_override``): two real
+  people never get that close, so the shared frame was a duplicate detection or the same
+  face on a screen, and one such frame must not split a person in two forever;
 * confirmed identities are written to MongoDB incrementally and throttled, not only at
   shutdown, and a database outage never stops recognition.
 """
@@ -274,8 +280,10 @@ class FaceIdentityManager:
         match_margin: float = 0.08,
         stickiness_margin: float = 0.20,
         merge_threshold: float = 0.50,
+        co_occurrence_override: float = 0.0,
         seed_match_threshold: float = 0.50,
         min_learn_quality: float = 0.50,
+        learn_threshold: float = 0.0,
         min_seed_samples: int = 4,
         seed_consistency: float = 0.55,
         seed_pairwise_consistency: float = 0.40,
@@ -299,8 +307,12 @@ class FaceIdentityManager:
         self.match_margin = match_margin
         self.stickiness_margin = stickiness_margin
         self.merge_threshold = merge_threshold
+        # Mean-embedding similarity at which a co-occurrence veto is ignored (0 = never)
+        self.co_occurrence_override = co_occurrence_override
         self.seed_match_threshold = seed_match_threshold
         self.min_learn_quality = min_learn_quality
+        # Score a matched face needs to be added to the gallery; never below the match bar
+        self.learn_threshold = learn_threshold
         self.min_seed_samples = max(1, min_seed_samples)
         self.seed_consistency = seed_consistency
         self.seed_pairwise_consistency = seed_pairwise_consistency
@@ -406,8 +418,7 @@ class FaceIdentityManager:
             identity.current_track_id = track_id
             identity.last_seen_timestamp = now
             identity.total_detections += 1
-            bar = self.similarity_threshold if identity.confirmed else self.young_identity_threshold
-            if good and score >= bar:
+            if good and score >= max(self._required_score(identity), self.learn_threshold):
                 self._add_embedding(identity, vectors[track_id], now)
             results[track_id] = FaceAssignment(
                 unique_id, max(0.0, score), STATUS_CONFIRMED if identity.confirmed else STATUS_TENTATIVE)
@@ -472,8 +483,10 @@ class FaceIdentityManager:
                 previous_index = identity_ids.index(previous)
                 if previous_index not in claimed:
                     previous_score = float(scores[previous_index])
-                    if (previous_score >= self.young_identity_threshold
-                            and previous_score >= best_score - self.stickiness_margin):
+                    # Same floor as a fresh match: a confirmed identity is not kept on a track
+                    # whose face no longer reaches its bar (e.g. a tracker id swap).
+                    floor = self._required_score(self.identity_clusters[previous])
+                    if previous_score >= floor and previous_score >= best_score - self.stickiness_margin:
                         chosen, best_score = previous_index, previous_score
 
             if chosen is None:
@@ -621,7 +634,7 @@ class FaceIdentityManager:
         pairs = []
         for first, second in combinations(candidates, 2):
             a, b = self.identity_clusters[first], self.identity_clusters[second]
-            if second in a.co_occurring:
+            if second in a.co_occurring and not self._same_face_despite_co_occurrence(a, b):
                 continue
             score = self._pair_score(a, b)
             if score >= self.merge_threshold:
@@ -641,16 +654,24 @@ class FaceIdentityManager:
         young = [uid for uid, c in self.identity_clusters.items() if not c.confirmed and c.mean_embedding is not None]
         for uid in young:
             stray = self.identity_clusters.get(uid)
-            options = [m for m in mature if m in self.identity_clusters and m not in stray.co_occurring]
-            if stray is None or not options:
+            if stray is None:
+                continue
+            options = [m for m in mature if m in self.identity_clusters
+                       and (m not in stray.co_occurring
+                            or self._same_face_despite_co_occurrence(stray, self.identity_clusters[m]))]
+            if not options:
                 continue
             scores = sorted(((self._pair_score(stray, self.identity_clusters[m]), m) for m in options), reverse=True)
             best, keep = scores[0]
             second = scores[1][0] if len(scores) > 1 else -1.0
-            if best < self.similarity_threshold or best - second < self.match_margin:
+            if best < max(self.similarity_threshold, self.learn_threshold) or best - second < self.match_margin:
                 continue
             if self.merge_identities(keep, uid):
                 self._logger.info(f"Absorbed stray face identity {uid} into {keep} (score {best:.3f})")
+
+    def _same_face_despite_co_occurrence(self, first: FaceIdentityCluster, second: FaceIdentityCluster) -> bool:
+        return (self.co_occurrence_override > 0
+                and float(first.mean_embedding @ second.mean_embedding) >= self.co_occurrence_override)
 
     def merge_identities(self, keep_id: str, drop_id: str) -> bool:
         if keep_id == drop_id or keep_id not in self.identity_clusters or drop_id not in self.identity_clusters:
@@ -669,8 +690,9 @@ class FaceIdentityManager:
         keep.confirmed = keep.confirmed or drop.confirmed
         keep.custom_name = keep.custom_name or drop.custom_name
         keep.co_occurring |= drop.co_occurring - {keep_id}
+        keep.co_occurring.discard(drop_id)
         for other in self.identity_clusters.values():
-            if drop_id in other.co_occurring:
+            if other is not keep and drop_id in other.co_occurring:
                 other.co_occurring.discard(drop_id)
                 other.co_occurring.add(keep_id)
         keep.unsaved_updates += 1
