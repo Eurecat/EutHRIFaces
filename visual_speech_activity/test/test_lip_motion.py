@@ -49,3 +49,16 @@ def test_needs_min_samples_and_forgets_old_faces():
     with mock.patch.object(lip_motion_detector.time, "monotonic", return_value=100.0):
         detector.cleanup_old_identities([])
     assert "f" not in detector._history
+
+
+def test_uses_frame_timestamps_so_5hz_and_bursts_work():
+    """Frames stamped 0.2 s apart count as 5 Hz even when they all arrive at once."""
+    detector = LipMotionDetector()
+    result = None
+    for k in range(8):
+        opening = 8 + 8 * math.sin(k * 1.9)
+        result = detector.detect_speaking(None, _landmarks(opening), None, "f", timestamp=k * 0.2)
+    assert result[0] and result[1] > 0.5
+    # the same frame delivered twice (recognition and landmarks arrive separately) adds one sample
+    detector.detect_speaking(None, _landmarks(8), None, "f", timestamp=7 * 0.2)
+    assert len(detector._history["f"]) <= 6

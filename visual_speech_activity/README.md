@@ -208,6 +208,21 @@ min_frames_for_detection: 3    # Quick startup
 temporal_smoothing: false      # Disable smoothing (faster but noisier)
 ```
 
+## Evaluating on a ground-truth bag
+
+```bash
+# record: the script tells the person when to SPEAK / stay SILENT, at several distances
+python3 /workspace/src/visual_speech_activity/tools/record_vsad_session.py --out /workspace/log/vsad/<bag_id>
+# score every candidate method, also simulated at 10 and 5 Hz
+python3 /workspace/src/visual_speech_activity/tools/evaluate_vsad.py /workspace/log/vsad/<bag_id> --rates 0 10 5 --cache --detail
+```
+
+Method, naming and OneDrive: `test/rosbag_dataset/README.md` in EutPerceptionStack. Candidates live in `tools/vsad_methods.py`.
+
+Measured defaults (`lip_motion_*` in the params file, tuned on one bag): a face is speaking when the
+std of the inner-lip ratio over 1 s is >= 0.028 (min_std 0.015, full_std 0.041, 4 samples). F1 0.94
+at 0.7-3 m from 30 down to 5 Hz; smile/chew/yawn/head turn still count as speech 11-13 % of the time.
+
 ## Testing
 
 ### Visualize Speaking Detection

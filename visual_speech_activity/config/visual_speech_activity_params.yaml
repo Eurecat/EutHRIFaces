@@ -30,9 +30,9 @@ visual_speech_activity_node:
     # lip_motion_window_s (stable across landmark backends, no model); "vsdlm" = mouth-crop classifier
     vsad_method: "lip_motion"
     lip_motion_window_s: 1.0
-    lip_motion_min_samples: 5
-    lip_motion_min_std: 0.02            # landmark jitter level: confidence 0
-    lip_motion_full_std: 0.08           # confidence 1 (calibrate live with someone talking)
+    lip_motion_min_samples: 4
+    lip_motion_min_std: 0.015           # landmark jitter level: confidence 0
+    lip_motion_full_std: 0.041          # confidence 1; 0.5 (= speaking) at std 0.028. Tuned on bag 20261028_vsad_distance-sweep_lab_t01 (0.7-3 m, F1 0.94 at 5-30 Hz)
     lip_motion_speaking_threshold: 0.5
     
     # Directory containing VSDLM weights (relative to package source)

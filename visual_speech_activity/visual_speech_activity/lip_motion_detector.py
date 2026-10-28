@@ -37,8 +37,8 @@ class LipMotionDetector:
         track_timeout_s: Forget a face not seen for this long.
     """
 
-    def __init__(self, window_s: float = 1.0, min_samples: int = 5, min_std: float = 0.02,
-                 full_std: float = 0.08, speaking_threshold: float = 0.5, track_timeout_s: float = 2.0,
+    def __init__(self, window_s: float = 1.0, min_samples: int = 4, min_std: float = 0.015,
+                 full_std: float = 0.041, speaking_threshold: float = 0.5, track_timeout_s: float = 2.0,
                  logger=None):
         self.window_s = window_s
         self.min_samples = min_samples
@@ -63,22 +63,30 @@ class LipMotionDetector:
         return float(np.linalg.norm(point(_INNER_BOTTOM) - point(_INNER_TOP)) / width)
 
     def detect_speaking(self, image, landmarks: List[Tuple[float, ...]], face_bbox=None,
-                        face_id: Optional[str] = None) -> Tuple[bool, float, Optional[Tuple[int, int, int, int]]]:
-        """(is_speaking, confidence, mouth bbox in pixels). The image is not used."""
+                        face_id: Optional[str] = None,
+                        timestamp: Optional[float] = None) -> Tuple[bool, float, Optional[Tuple[int, int, int, int]]]:
+        """(is_speaking, confidence, mouth bbox in pixels). The image is not used.
+
+        timestamp is the frame time in seconds (header stamp, or bag time when replaying);
+        without it the arrival time is used, which bunches up when the node falls behind.
+        """
         mar = self.mouth_aspect_ratio(landmarks)
         if mar is None:
             return False, 0.0, None
-        now = time.monotonic()
+        now = time.monotonic() if timestamp is None else timestamp
         key = face_id or "_single"
         history = self._history.setdefault(key, deque())
-        history.append((now, mar))
+        if not history or history[-1][0] != now:  # same frame seen twice (recognition and landmarks arrive separately)
+            history.append((now, mar))
         while history and now - history[0][0] > self.window_s:
             history.popleft()
 
         xs = [landmarks[i][0] for i in _MOUTH]
         ys = [landmarks[i][1] for i in _MOUTH]
         mouth_bbox = (int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys)))
-        if len(history) < self.min_samples:
+        # Enough samples AND enough of the window covered: at 5 Hz a 1 s window holds only 4-6
+        # samples, so a bare count would flip between "no data" and "data" with frame timing
+        if len(history) < self.min_samples or history[-1][0] - history[0][0] < 0.5 * self.window_s:
             return False, 0.0, mouth_bbox
         std = float(np.std([m for _, m in history]))
         confidence = float(np.clip((std - self.min_std) / (self.full_std - self.min_std), 0.0, 1.0))
