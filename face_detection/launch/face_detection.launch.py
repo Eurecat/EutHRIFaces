@@ -50,6 +50,7 @@ def _setup_face_detection(context, *args, **kwargs):
         'device',
         'use_tensorrt',
         'landmark_backend',
+        'enable_mediapipe_landmarks',  # false: no face mesh (speaker match by sound direction needs no lips)
         'model_path',
         'confidence_threshold',
         'iou_threshold',
@@ -122,6 +123,7 @@ def generate_launch_description():
         'device',
         'use_tensorrt',
         'landmark_backend',
+        'enable_mediapipe_landmarks',  # false: no face mesh (speaker match by sound direction needs no lips)
         'model_path',
         'confidence_threshold',
         'iou_threshold',
